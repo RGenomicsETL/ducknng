@@ -142,7 +142,7 @@ static void ducknng_servers_bind(duckdb_bind_info info) {
             bind->rows[i].listen = svc && ducknng_service_resolved_listen(svc) ? ducknng_strdup(ducknng_service_resolved_listen(svc)) : NULL;
             bind->rows[i].contexts = svc ? svc->ncontexts : 0;
             bind->rows[i].running = svc ? (bool)svc->running : false;
-            bind->rows[i].execution_model = svc ? ducknng_strdup("shared_serialized_connection") : NULL;
+            bind->rows[i].execution_model = svc ? ducknng_strdup(ducknng_service_execution_model(svc)) : NULL;
             bind->rows[i].sessions = svc ? (uint64_t)atomic_load_explicit(&svc->session_count_visible, memory_order_acquire) : 0;
             bind->rows[i].active_pipes = svc ? (uint64_t)ducknng_service_active_pipe_count(svc) : 0;
             bind->rows[i].max_open_sessions = svc ? ducknng_service_max_open_sessions(svc) : 0;

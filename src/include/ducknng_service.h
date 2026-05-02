@@ -12,6 +12,7 @@
 typedef struct ducknng_runtime ducknng_runtime;
 typedef struct ducknng_service ducknng_service;
 typedef struct ducknng_rep_ctx ducknng_rep_ctx;
+typedef struct ducknng_manifest_security ducknng_manifest_security;
 
 typedef struct ducknng_ip_allow_rule {
     int family;
@@ -181,6 +182,9 @@ uint64_t ducknng_service_max_open_sessions(const ducknng_service *svc);
 uint64_t ducknng_service_max_active_pipes(const ducknng_service *svc);
 uint64_t ducknng_service_max_inflight_requests(const ducknng_service *svc);
 uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *svc);
+const char *ducknng_service_execution_model(const ducknng_service *svc);
+const char *ducknng_service_peer_identity_format(const ducknng_service *svc);
+void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security);
 size_t ducknng_service_active_pipe_count(const ducknng_service *svc);
 size_t ducknng_service_inflight_request_count(const ducknng_service *svc);
 int ducknng_service_begin_request(ducknng_service *svc, char **errmsg);

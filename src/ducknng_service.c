@@ -1540,6 +1540,36 @@ uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *s
     return svc->max_sessions_per_peer_identity;
 }
 
+const char *ducknng_service_execution_model(const ducknng_service *svc) {
+    (void)svc;
+    return DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
+}
+
+const char *ducknng_service_peer_identity_format(const ducknng_service *svc) {
+    (void)svc;
+    return DUCKNNG_PEER_IDENTITY_FORMAT_TLS;
+}
+
+void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security) {
+    if (!security) return;
+    memset(security, 0, sizeof(*security));
+    if (!svc) return;
+    security->tls_enabled = svc->tls_enabled;
+    security->tls_auth_mode = svc->tls_opts.auth_mode;
+    security->peer_identity_required = ducknng_service_requires_peer_identity(svc);
+    security->peer_allowlist_active = ducknng_service_peer_allowlist_active(svc);
+    security->peer_allowlist_count = (uint64_t)ducknng_service_peer_allowlist_count(svc);
+    security->ip_allowlist_active = ducknng_service_ip_allowlist_active(svc);
+    security->ip_allowlist_count = (uint64_t)ducknng_service_ip_allowlist_count(svc);
+    security->sql_authorizer_active = ducknng_service_authorizer_active(svc);
+    security->sessions_bind_peer_identity_when_present = 1;
+    security->session_idle_timeout_ms = svc->session_idle_ms;
+    security->max_open_sessions = ducknng_service_max_open_sessions(svc);
+    security->max_sessions_per_peer_identity = ducknng_service_max_sessions_per_peer_identity(svc);
+    security->peer_identity_format = ducknng_service_peer_identity_format(svc);
+    security->execution_model = ducknng_service_execution_model(svc);
+}
+
 size_t ducknng_service_active_pipe_count(const ducknng_service *svc) {
     if (!svc) return 0;
     return atomic_load_explicit(&svc->pipe_state_count_visible, memory_order_acquire);

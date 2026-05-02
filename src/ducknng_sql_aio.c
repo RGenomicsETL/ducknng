@@ -97,6 +97,37 @@ static void ducknng_destroy_logical_types(duckdb_logical_type *types, idx_t coun
     for (i = 0; i < count; i++) duckdb_destroy_logical_type(&types[i]);
 }
 
+static int ducknng_register_struct_row_scalar_named(duckdb_connection con,
+    ducknng_sql_context *ctx, const char *name, idx_t nparams, const duckdb_type *param_type_ids,
+    duckdb_scalar_function_t fn, idx_t nfields, const duckdb_type *field_type_ids,
+    const char **field_names) {
+    duckdb_logical_type *param_types = NULL;
+    duckdb_logical_type *fields = NULL;
+    duckdb_logical_type return_type;
+    idx_t i;
+    int ok;
+    if (!ctx || !ctx->rt || !name || !fn || (!param_type_ids && nparams > 0) ||
+        (!field_type_ids && nfields > 0) || (!field_names && nfields > 0)) return 0;
+    param_types = nparams ? (duckdb_logical_type *)duckdb_malloc(sizeof(*param_types) * nparams) : NULL;
+    fields = nfields ? (duckdb_logical_type *)duckdb_malloc(sizeof(*fields) * nfields) : NULL;
+    if ((nparams > 0 && !param_types) || (nfields > 0 && !fields)) {
+        if (param_types) duckdb_free(param_types);
+        if (fields) duckdb_free(fields);
+        return 0;
+    }
+    for (i = 0; i < nparams; i++) param_types[i] = duckdb_create_logical_type(param_type_ids[i]);
+    for (i = 0; i < nfields; i++) fields[i] = duckdb_create_logical_type(field_type_ids[i]);
+    return_type = duckdb_create_struct_type(fields, field_names, nfields);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, nparams, fn, ctx,
+        param_types, return_type);
+    ducknng_destroy_logical_types(param_types, nparams);
+    ducknng_destroy_logical_types(fields, nfields);
+    if (param_types) duckdb_free(param_types);
+    if (fields) duckdb_free(fields);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
+}
+
 static int ducknng_lookup_tls_config_copy(ducknng_sql_context *ctx, uint64_t tls_config_id,
     uint64_t *out_id, char **out_source, ducknng_tls_opts *out_opts, char **errmsg) {
     size_t i;
@@ -1725,82 +1756,39 @@ static int register_aio_wait_any_scalar_named(duckdb_connection con, ducknng_sql
 }
 
 static int register_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_logical_type param_types[2];
-    duckdb_logical_type fields[4];
+    static const duckdb_type param_type_ids[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_INTEGER};
+    static const duckdb_type field_type_ids[4] = {
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB
+    };
     const char *field_names[4] = {"aio_id", "ok", "error", "frame"};
-    duckdb_logical_type return_type;
-    int ok;
-    if (!ctx || !ctx->rt) return 0;
-    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    param_types[1] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[3] = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    return_type = duckdb_create_struct_type(fields, field_names, 4);
-    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
-        ducknng_aio_collect_row_scalar, ctx, param_types, return_type);
-    ducknng_destroy_logical_types(param_types, 2);
-    ducknng_destroy_logical_types(fields, 4);
-    duckdb_destroy_logical_type(&return_type);
-    return ok;
+    return ducknng_register_struct_row_scalar_named(con, ctx, name, 2, param_type_ids,
+        ducknng_aio_collect_row_scalar, 4, field_type_ids, field_names);
 }
 
 static int register_ncurl_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_logical_type param_types[2];
-    duckdb_logical_type fields[7];
+    static const duckdb_type param_type_ids[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_INTEGER};
+    static const duckdb_type field_type_ids[7] = {
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_VARCHAR
+    };
     const char *field_names[7] = {"aio_id", "ok", "status", "error", "headers_json", "body", "body_text"};
-    duckdb_logical_type return_type;
-    int ok;
-    if (!ctx || !ctx->rt) return 0;
-    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    param_types[1] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    fields[3] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[4] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[5] = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    fields[6] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    return_type = duckdb_create_struct_type(fields, field_names, 7);
-    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
-        ducknng_ncurl_aio_collect_row_scalar, ctx, param_types, return_type);
-    ducknng_destroy_logical_types(param_types, 2);
-    ducknng_destroy_logical_types(fields, 7);
-    duckdb_destroy_logical_type(&return_type);
-    return ok;
+    return ducknng_register_struct_row_scalar_named(con, ctx, name, 2, param_type_ids,
+        ducknng_ncurl_aio_collect_row_scalar, 7, field_type_ids, field_names);
 }
 
 static int register_aio_status_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_logical_type param_types[1];
-    duckdb_logical_type fields[12];
+    static const duckdb_type param_type_ids[1] = {DUCKDB_TYPE_UBIGINT};
+    static const duckdb_type field_type_ids[12] = {
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN,
+        DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR
+    };
     const char *field_names[12] = {
         "aio_id", "exists", "kind", "state", "phase", "terminal",
         "send_done", "send_ok", "recv_done", "recv_ok", "has_reply_frame", "error"
     };
-    duckdb_logical_type return_type;
-    int ok;
-    if (!ctx || !ctx->rt) return 0;
-    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[3] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[4] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    fields[5] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[6] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[7] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[8] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[9] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[10] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    fields[11] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    return_type = duckdb_create_struct_type(fields, field_names, 12);
-    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 1,
-        ducknng_aio_status_scalar, ctx, param_types, return_type);
-    ducknng_destroy_logical_types(param_types, 1);
-    ducknng_destroy_logical_types(fields, 12);
-    duckdb_destroy_logical_type(&return_type);
-    return ok;
+    return ducknng_register_struct_row_scalar_named(con, ctx, name, 1, param_type_ids,
+        ducknng_aio_status_scalar, 12, field_type_ids, field_names);
 }
 
 static int register_aio_status_macro(duckdb_connection con) {

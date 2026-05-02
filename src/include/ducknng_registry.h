@@ -90,6 +90,9 @@ typedef struct ducknng_method_registry {
     size_t method_cap;
 } ducknng_method_registry;
 
+#define DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION "shared_serialized_connection"
+#define DUCKNNG_PEER_IDENTITY_FORMAT_TLS "tls:san:<value>|tls:cn:<common-name>"
+
 typedef struct ducknng_manifest_security {
     int tls_enabled;
     int tls_auth_mode;

@@ -32,21 +32,7 @@ static int ducknng_method_manifest_handler(ducknng_service *svc,
     }
     {
         ducknng_manifest_security security;
-        memset(&security, 0, sizeof(security));
-        security.tls_enabled = svc->tls_enabled;
-        security.tls_auth_mode = svc->tls_opts.auth_mode;
-        security.peer_identity_required = ducknng_service_requires_peer_identity(svc);
-        security.peer_allowlist_active = ducknng_service_peer_allowlist_active(svc);
-        security.peer_allowlist_count = (uint64_t)ducknng_service_peer_allowlist_count(svc);
-        security.ip_allowlist_active = ducknng_service_ip_allowlist_active(svc);
-        security.ip_allowlist_count = (uint64_t)ducknng_service_ip_allowlist_count(svc);
-        security.sql_authorizer_active = ducknng_service_authorizer_active(svc);
-        security.sessions_bind_peer_identity_when_present = 1;
-        security.session_idle_timeout_ms = svc->session_idle_ms;
-        security.max_open_sessions = ducknng_service_max_open_sessions(svc);
-        security.max_sessions_per_peer_identity = ducknng_service_max_sessions_per_peer_identity(svc);
-        security.peer_identity_format = "tls:san:<value>|tls:cn:<common-name>";
-        security.execution_model = "shared_serialized_connection";
+        ducknng_service_manifest_security(svc, &security);
         ducknng_mutex_lock(&svc->rt->mu);
         json = ducknng_method_registry_manifest_json(&svc->rt->registry, "ducknng", "0.1.0",
             DUCKNNG_WIRE_VERSION, &security, &errmsg);
