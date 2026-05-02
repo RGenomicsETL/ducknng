@@ -86,6 +86,21 @@ ducknng_http_request_body()
 
 These helpers are transport-local service tooling, not manifest-derived RPC methods. A route handler is one SQL query that returns exactly one response row, with optional `status`, `headers_json`, `content_type`, `body`, and `body_text` columns. Request context comes from `ducknng_http_request()` and `ducknng_http_request_body()` while that handler runs.
 
+When a route needs per-request dynamic backend session control, use the raw synchronous session helpers:
+
+- `ducknng_open_query_raw(...)`
+- `ducknng_fetch_query_raw(...)`
+- `ducknng_close_query_raw(...)`
+- `ducknng_cancel_query_raw(...)`
+
+and inspect the returned frames with:
+
+- `ducknng_frame_payload(...)`
+- `ducknng_frame_payload_text(...)`
+- `ducknng_frame_error_text(...)`
+
+The structured table helpers remain the ergonomic client-facing surface. The raw scalar helpers are the correct route-layer surface when parameters come from request-body columns or continuation-token columns.
+
 The important boundary stays the same:
 
 - the framed RPC mount still lives exactly at the path encoded in the service listen URL
@@ -107,6 +122,10 @@ That means URLs like `http://127.0.0.1:8080/_ducknng` and `https://127.0.0.1:844
 - `ducknng_get_rpc_manifest_raw(...)`
 - `ducknng_run_rpc(...)`
 - `ducknng_run_rpc_raw(...)`
+- `ducknng_open_query_raw(...)`
+- `ducknng_fetch_query_raw(...)`
+- `ducknng_close_query_raw(...)`
+- `ducknng_cancel_query_raw(...)`
 - `ducknng_query_rpc(...)`
 - `ducknng_open_query(...)`
 - `ducknng_fetch_query(...)`

@@ -952,6 +952,166 @@ static void ducknng_run_rpc_raw_scalar(duckdb_function_info info, duckdb_data_ch
     }
 }
 
+static int ducknng_assign_method_roundtrip_blob(duckdb_vector output, idx_t row,
+    ducknng_sql_context *ctx, const char *url, const char *method_name,
+    const void *payload, size_t payload_len, uint64_t tls_config_id) {
+    const ducknng_tls_opts *tls_opts = NULL;
+    nng_msg *resp_msg = NULL;
+    char *errmsg = NULL;
+    if (!ctx || !ctx->rt || !url || !method_name ||
+        ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
+        if (errmsg) duckdb_free(errmsg);
+        set_null(output, row);
+        return -1;
+    }
+    resp_msg = ducknng_client_method_roundtrip_tls(url, method_name, payload, payload_len,
+        5000, tls_opts, &errmsg);
+    if (!resp_msg) {
+        if (errmsg) duckdb_free(errmsg);
+        set_null(output, row);
+        return -1;
+    }
+    assign_blob(output, row, (const uint8_t *)nng_msg_body(resp_msg), (idx_t)nng_msg_len(resp_msg));
+    nng_msg_free(resp_msg);
+    if (errmsg) duckdb_free(errmsg);
+    return 0;
+}
+
+static void ducknng_open_query_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    for (row = 0; row < count; row++) {
+        char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *sql = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        uint64_t batch_rows = arg_u64(duckdb_data_chunk_get_vector(input, 2), row, 0);
+        uint64_t batch_bytes = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
+        uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 0);
+        uint8_t *payload = NULL;
+        size_t payload_len = 0;
+        char *errmsg = NULL;
+        if (!ctx || !ctx->rt || !url || !sql || !url[0] || !sql[0]) {
+            if (url) duckdb_free(url);
+            if (sql) duckdb_free(sql);
+            set_null(output, row);
+            continue;
+        }
+        if (ducknng_query_open_request_to_ipc(sql, batch_rows, batch_bytes, &payload, &payload_len, &errmsg) != 0) {
+            duckdb_free(url);
+            duckdb_free(sql);
+            if (payload) duckdb_free(payload);
+            if (errmsg) duckdb_free(errmsg);
+            set_null(output, row);
+            continue;
+        }
+        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "query_open",
+            payload, payload_len, tls_config_id);
+        duckdb_free(url);
+        duckdb_free(sql);
+        duckdb_free(payload);
+        if (errmsg) duckdb_free(errmsg);
+    }
+}
+
+static void ducknng_fetch_query_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    for (row = 0; row < count; row++) {
+        char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        uint64_t session_id = arg_u64(duckdb_data_chunk_get_vector(input, 1), row, 0);
+        char *session_token = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        uint64_t batch_rows = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
+        uint64_t batch_bytes = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 0);
+        uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 5), row, 0);
+        char *payload = NULL;
+        if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
+            if (url) duckdb_free(url);
+            if (session_token) duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        payload = ducknng_session_request_json(session_id, session_token, batch_rows, batch_bytes);
+        if (!payload) {
+            duckdb_free(url);
+            duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "fetch",
+            payload, strlen(payload), tls_config_id);
+        duckdb_free(url);
+        duckdb_free(session_token);
+        duckdb_free(payload);
+    }
+}
+
+static void ducknng_close_query_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    for (row = 0; row < count; row++) {
+        char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        uint64_t session_id = arg_u64(duckdb_data_chunk_get_vector(input, 1), row, 0);
+        char *session_token = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
+        char *payload = NULL;
+        if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
+            if (url) duckdb_free(url);
+            if (session_token) duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        payload = ducknng_session_request_json(session_id, session_token, 0, 0);
+        if (!payload) {
+            duckdb_free(url);
+            duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "close",
+            payload, strlen(payload), tls_config_id);
+        duckdb_free(url);
+        duckdb_free(session_token);
+        duckdb_free(payload);
+    }
+}
+
+static void ducknng_cancel_query_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    for (row = 0; row < count; row++) {
+        char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        uint64_t session_id = arg_u64(duckdb_data_chunk_get_vector(input, 1), row, 0);
+        char *session_token = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
+        char *payload = NULL;
+        if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
+            if (url) duckdb_free(url);
+            if (session_token) duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        payload = ducknng_session_request_json(session_id, session_token, 0, 0);
+        if (!payload) {
+            duckdb_free(url);
+            duckdb_free(session_token);
+            set_null(output, row);
+            continue;
+        }
+        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "cancel",
+            payload, strlen(payload), tls_config_id);
+        duckdb_free(url);
+        duckdb_free(session_token);
+        duckdb_free(payload);
+    }
+}
+
 static int ducknng_socket_is_active(const ducknng_client_socket *sock) {
     return sock && sock->open && (sock->connected || sock->has_listener);
 }
@@ -1751,6 +1911,12 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     duckdb_type service_allowlist_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     duckdb_type rpc_exec_raw_types[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     duckdb_type rpc_manifest_raw_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
+    duckdb_type open_query_raw_types[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT,
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
+    duckdb_type fetch_query_raw_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
+    duckdb_type session_control_raw_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     duckdb_type request_tls_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
     duckdb_type request_socket_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER};
     if (!ctx) return 0;
@@ -1761,6 +1927,10 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_set_service_ip_allowlist", 2, ducknng_set_service_ip_allowlist_scalar, ctx, service_allowlist_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_run_rpc_raw", 3, ducknng_run_rpc_raw_scalar, ctx, rpc_exec_raw_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_get_rpc_manifest_raw", 2, ducknng_get_rpc_manifest_raw_scalar, ctx, rpc_manifest_raw_types, DUCKDB_TYPE_BLOB)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_open_query_raw", 5, ducknng_open_query_raw_scalar, ctx, open_query_raw_types, DUCKDB_TYPE_BLOB)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_fetch_query_raw", 6, ducknng_fetch_query_raw_scalar, ctx, fetch_query_raw_types, DUCKDB_TYPE_BLOB)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_close_query_raw", 4, ducknng_close_query_raw_scalar, ctx, session_control_raw_types, DUCKDB_TYPE_BLOB)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_cancel_query_raw", 4, ducknng_cancel_query_raw_scalar, ctx, session_control_raw_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_request_raw", 4, ducknng_request_raw_scalar, ctx, request_tls_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(connection, "ducknng_request_socket_raw", 3, ducknng_request_socket_scalar, ctx, request_socket_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!register_remote_table_named(connection, ctx, "ducknng_query_rpc")) return 0;

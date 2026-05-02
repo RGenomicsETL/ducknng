@@ -46,6 +46,9 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_request_raw` | scalar | `url, payload, timeout_ms, tls_config_id` | `BLOB` | Perform a one-shot raw request and return the raw reply frame bytes. |
 | `ducknng_request_socket_raw` | scalar | `socket_id, payload, timeout_ms` | `BLOB` | Perform a raw request through a dialed socket handle and return the raw reply frame bytes. |
 | `ducknng_decode_frame` | table | `frame` | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns. |
+| `ducknng_frame_payload` | scalar | `frame` | `BLOB` | Extract the payload bytes from one raw ducknng frame. |
+| `ducknng_frame_payload_text` | scalar | `frame` | `VARCHAR` | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload. |
+| `ducknng_frame_error_text` | scalar | `frame` | `VARCHAR` | Extract the protocol-level error text from a raw ducknng error frame. |
 
 ## Transport Security
 
@@ -130,3 +133,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_fetch_query_table` | table | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(dynamic from Arrow IPC batch)` | Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table. |
 | `ducknng_close_query` | table | `url, session_id, session_token, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)` | Close a server-side query session and return the JSON control metadata as a structured row. |
 | `ducknng_cancel_query` | table | `url, session_id, session_token, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)` | Request cancellation for a server-side query session and return the JSON control metadata as a structured row. |
+| `ducknng_open_query_raw` | scalar | `url, sql, batch_rows, batch_bytes, tls_config_id` | `BLOB` | Open a server-side query session and return the raw reply frame as BLOB. |
+| `ducknng_fetch_query_raw` | scalar | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `BLOB` | Fetch the next session reply and return the raw reply frame as BLOB. |
+| `ducknng_close_query_raw` | scalar | `url, session_id, session_token, tls_config_id` | `BLOB` | Close a server-side query session and return the raw reply frame as BLOB. |
+| `ducknng_cancel_query_raw` | scalar | `url, session_id, session_token, tls_config_id` | `BLOB` | Cancel a server-side query session and return the raw reply frame as BLOB. |

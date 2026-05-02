@@ -546,7 +546,7 @@ SELECT ducknng_stop_server('http_route_demo');
 
 These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
 
-A MotherDuck-style public gateway is still a good fit for this layer, but it should use a separate backend DuckDB process or runtime boundary. That multi-process sketch lives in `docs/motherduck_style_demo.md` instead of this README because keeping it honest requires a second live `ducknng` backend, and the README examples are kept runnable in one rendered session.
+A MotherDuck-style public gateway is still a good fit for this layer, but it should use separate backend DuckDB processes or runtime boundaries. That multi-process sketch lives in `docs/motherduck_style_demo.md` instead of this README because keeping it honest requires live private backends, and the README examples are kept runnable in one rendered session. The repo also ships a runnable continuation-token gateway demo at `demo/motherduck_gateway.py`; from the repo root, `make motherduck_demo` walks multi-batch queries through a public HTTP gateway and two dedicated private subscriber backends.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 
@@ -990,6 +990,68 @@ FROM ducknng_close_query(
 
 -- Stop the demo listener after the session is closed.
 SELECT ducknng_stop_server('sql_session_demo');
+```
+
+### Drive the same session lifecycle through raw frames
+
+```{sql eval=TRUE, collapse=FALSE, comment=""}
+-- Start a listener for the raw session helper demo.
+SELECT ducknng_start_server(
+  'sql_session_raw_demo',
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  1,
+  134217728,
+  300000,
+  0
+);
+
+-- Open a session and keep the raw reply frame.
+SET VARIABLE raw_session_open_frame = ducknng_open_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  'SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id',
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+);
+
+SELECT ducknng_frame_error_text(getvariable('raw_session_open_frame')::BLOB) AS open_error,
+       position('"session_id":' IN ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)) > 0 AS has_session_id;
+
+SET VARIABLE raw_session_id = (
+  SELECT json_extract(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_id')::UBIGINT
+);
+
+SET VARIABLE raw_session_token = (
+  SELECT json_extract_string(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_token')
+);
+
+-- Fetch a row batch as a raw frame, then decode the Arrow payload explicitly.
+SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+);
+
+SELECT *
+FROM ducknng_parse_body(
+  ducknng_frame_payload(getvariable('raw_session_fetch_frame')::BLOB),
+  'application/vnd.apache.arrow.stream'
+);
+
+-- Close the raw session explicitly and inspect the control payload.
+SET VARIABLE raw_session_close_frame = ducknng_close_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT
+);
+
+SELECT position('"state":"closed"' IN ducknng_frame_payload_text(getvariable('raw_session_close_frame')::BLOB)) > 0 AS is_closed;
+
+SELECT ducknng_stop_server('sql_session_raw_demo');
 ```
 
 ### Launch the session lifecycle asynchronously and collect raw frames

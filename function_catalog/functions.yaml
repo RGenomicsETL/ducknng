@@ -1310,6 +1310,78 @@
       ]
     },
     {
+      "name": "ducknng_open_query_raw",
+      "kind": "scalar",
+      "category": "RPC Session",
+      "signature": "ducknng_open_query_raw(url, sql, batch_rows, batch_bytes, tls_config_id)",
+      "returns": "BLOB",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Open a server-side query session and return the raw reply frame as BLOB.",
+      "notes": [
+        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "This is the raw synchronous companion to ducknng_open_query().",
+        "Use ducknng_frame_payload_text() to read the JSON control payload and extract session_id/session_token in dynamic SQL such as HTTP route handlers."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_payload_text(ducknng_open_query_raw('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_fetch_query_raw",
+      "kind": "scalar",
+      "category": "RPC Session",
+      "signature": "ducknng_fetch_query_raw(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)",
+      "returns": "BLOB",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Fetch the next session reply and return the raw reply frame as BLOB.",
+      "notes": [
+        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "This is the raw synchronous companion to ducknng_fetch_query().",
+        "Use ducknng_frame_payload() for Arrow IPC row batches, ducknng_frame_payload_text() for JSON control replies, and ducknng_frame_error_text() for error frames."
+      ],
+      "examples": [
+        "SELECT octet_length(ducknng_frame_payload(ducknng_fetch_query_raw('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)));"
+      ]
+    },
+    {
+      "name": "ducknng_close_query_raw",
+      "kind": "scalar",
+      "category": "RPC Session",
+      "signature": "ducknng_close_query_raw(url, session_id, session_token, tls_config_id)",
+      "returns": "BLOB",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Close a server-side query session and return the raw reply frame as BLOB.",
+      "notes": [
+        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "This is the raw synchronous companion to ducknng_close_query().",
+        "Use ducknng_frame_payload_text() to inspect the JSON control reply."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_payload_text(ducknng_close_query_raw('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_cancel_query_raw",
+      "kind": "scalar",
+      "category": "RPC Session",
+      "signature": "ducknng_cancel_query_raw(url, session_id, session_token, tls_config_id)",
+      "returns": "BLOB",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Cancel a server-side query session and return the raw reply frame as BLOB.",
+      "notes": [
+        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "This is the raw synchronous companion to ducknng_cancel_query().",
+        "Use ducknng_frame_payload_text() to inspect the JSON control reply and ducknng_frame_error_text() on failure."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_payload_text(ducknng_cancel_query_raw('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT));"
+      ]
+    },
+    {
       "name": "ducknng_request_raw",
       "kind": "scalar",
       "category": "Primitive Transport",
@@ -1359,6 +1431,57 @@
       ],
       "examples": [
         "SELECT ok, version, type_name, name, payload_text FROM ducknng_decode_frame(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_payload",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_payload(frame)",
+      "returns": "BLOB",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the payload bytes from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames and for frames without a payload.",
+        "Use this with ducknng_fetch_query_raw() when the reply carries an Arrow IPC row batch."
+      ],
+      "examples": [
+        "SELECT octet_length(ducknng_frame_payload(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT)));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_payload_text",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_payload_text(frame)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.",
+      "notes": [
+        "Returns NULL for invalid frames, non-textual payloads, and frames without a payload.",
+        "This is useful for JSON control replies such as query_open, close, cancel, and exhausted fetch replies."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_payload_text(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_error_text",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_error_text(frame)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the protocol-level error text from a raw ducknng error frame.",
+      "notes": [
+        "Returns NULL for invalid frames and for non-error replies.",
+        "This is useful in route SQL and other dynamic call sites where you need to distinguish remote error frames from result frames without bind-time table decoding."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_error_text(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('00'), 1000, 0::UBIGINT));"
       ]
     }
   ]

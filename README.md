@@ -198,6 +198,9 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_request_raw`        | scalar | `url, payload, timeout_ms, tls_config_id`       | `BLOB`                                                                                                                                                          | Perform a one-shot raw request and return the raw reply frame bytes.                                |
 | `ducknng_request_socket_raw` | scalar | `socket_id, payload, timeout_ms`                | `BLOB`                                                                                                                                                          | Perform a raw request through a dialed socket handle and return the raw reply frame bytes.          |
 | `ducknng_decode_frame`       | table  | `frame`                                         | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)`        | Decode a raw ducknng frame into envelope fields and extracted payload columns.                      |
+| `ducknng_frame_payload`      | scalar | `frame`                                         | `BLOB`                                                                                                                                                          | Extract the payload bytes from one raw ducknng frame.                                               |
+| `ducknng_frame_payload_text` | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.               |
+| `ducknng_frame_error_text`   | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the protocol-level error text from a raw ducknng error frame.                               |
 
 ## Transport Security
 
@@ -275,13 +278,17 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## RPC Session
 
-| name                        | kind  | arguments                                                                | returns                                                                                                                                                                                               | description                                                                                                    |
-|-----------------------------|-------|--------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| `ducknng_open_query`        | table | `url, sql, batch_rows, batch_bytes, tls_config_id`                       | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Open a server-side query session and return the JSON control metadata as a structured row.                     |
-| `ducknng_fetch_query`       | table | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT, payload BLOB, end_of_stream BOOLEAN)` | Fetch the next session reply and return either JSON control metadata or an Arrow IPC batch payload.            |
-| `ducknng_fetch_query_table` | table | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(dynamic from Arrow IPC batch)`                                                                                                                                                                 | Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table.            |
-| `ducknng_close_query`       | table | `url, session_id, session_token, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Close a server-side query session and return the JSON control metadata as a structured row.                    |
-| `ducknng_cancel_query`      | table | `url, session_id, session_token, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Request cancellation for a server-side query session and return the JSON control metadata as a structured row. |
+| name                        | kind   | arguments                                                                | returns                                                                                                                                                                                               | description                                                                                                    |
+|-----------------------------|--------|--------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| `ducknng_open_query`        | table  | `url, sql, batch_rows, batch_bytes, tls_config_id`                       | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Open a server-side query session and return the JSON control metadata as a structured row.                     |
+| `ducknng_fetch_query`       | table  | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT, payload BLOB, end_of_stream BOOLEAN)` | Fetch the next session reply and return either JSON control metadata or an Arrow IPC batch payload.            |
+| `ducknng_fetch_query_table` | table  | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(dynamic from Arrow IPC batch)`                                                                                                                                                                 | Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table.            |
+| `ducknng_close_query`       | table  | `url, session_id, session_token, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Close a server-side query session and return the JSON control metadata as a structured row.                    |
+| `ducknng_cancel_query`      | table  | `url, session_id, session_token, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)`                                      | Request cancellation for a server-side query session and return the JSON control metadata as a structured row. |
+| `ducknng_open_query_raw`    | scalar | `url, sql, batch_rows, batch_bytes, tls_config_id`                       | `BLOB`                                                                                                                                                                                                | Open a server-side query session and return the raw reply frame as BLOB.                                       |
+| `ducknng_fetch_query_raw`   | scalar | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `BLOB`                                                                                                                                                                                                | Fetch the next session reply and return the raw reply frame as BLOB.                                           |
+| `ducknng_close_query_raw`   | scalar | `url, session_id, session_token, tls_config_id`                          | `BLOB`                                                                                                                                                                                                | Close a server-side query session and return the raw reply frame as BLOB.                                      |
+| `ducknng_cancel_query_raw`  | scalar | `url, session_id, session_token, tls_config_id`                          | `BLOB`                                                                                                                                                                                                | Cancel a server-side query session and return the raw reply frame as BLOB.                                     |
 
 </details>
 
@@ -931,11 +938,14 @@ same runtime when that backend also needs the shared serialized
 execution lane.
 
 A MotherDuck-style public gateway is still a good fit for this layer,
-but it should use a separate backend DuckDB process or runtime boundary.
-That multi-process sketch lives in `docs/motherduck_style_demo.md`
-instead of this README because keeping it honest requires a second live
-`ducknng` backend, and the README examples are kept runnable in one
-rendered session.
+but it should use separate backend DuckDB processes or runtime
+boundaries. That multi-process sketch lives in
+`docs/motherduck_style_demo.md` instead of this README because keeping
+it honest requires live private backends, and the README examples are
+kept runnable in one rendered session. The repo also ships a runnable
+continuation-token gateway demo at `demo/motherduck_gateway.py`; from
+the repo root, `make motherduck_demo` walks multi-batch queries through
+a public HTTP gateway and two dedicated private subscriber backends.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 
@@ -1551,6 +1561,96 @@ SELECT ducknng_stop_server('sql_session_demo');
     +-----------------------------------------+
     | true                                    |
     +-----------------------------------------+
+
+### Drive the same session lifecycle through raw frames
+
+``` sql
+LOAD 'build/release/ducknng.duckdb_extension';
+-- Start a listener for the raw session helper demo.
+SELECT ducknng_start_server(
+  'sql_session_raw_demo',
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  1,
+  134217728,
+  300000,
+  0
+);
+
+-- Open a session and keep the raw reply frame.
+SET VARIABLE raw_session_open_frame = ducknng_open_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  'SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id',
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+);
+
+SELECT ducknng_frame_error_text(getvariable('raw_session_open_frame')::BLOB) AS open_error,
+       position('"session_id":' IN ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)) > 0 AS has_session_id;
+
+SET VARIABLE raw_session_id = (
+  SELECT json_extract(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_id')::UBIGINT
+);
+
+SET VARIABLE raw_session_token = (
+  SELECT json_extract_string(ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)::JSON, '$.session_token')
+);
+
+-- Fetch a row batch as a raw frame, then decode the Arrow payload explicitly.
+SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+);
+
+SELECT *
+FROM ducknng_parse_body(
+  ducknng_frame_payload(getvariable('raw_session_fetch_frame')::BLOB),
+  'application/vnd.apache.arrow.stream'
+);
+
+-- Close the raw session explicitly and inspect the control payload.
+SET VARIABLE raw_session_close_frame = ducknng_close_query_raw(
+  'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
+  getvariable('raw_session_id')::UBIGINT,
+  getvariable('raw_session_token')::VARCHAR,
+  0::UBIGINT
+);
+
+SELECT position('"state":"closed"' IN ducknng_frame_payload_text(getvariable('raw_session_close_frame')::BLOB)) > 0 AS is_closed;
+
+SELECT ducknng_stop_server('sql_session_raw_demo');
+```
+
+    +----------------------------------------------------------------------------------------------------------------------+
+    | ducknng_start_server('sql_session_raw_demo', 'ipc:///tmp/ducknng_sql_session_raw_demo.ipc', 1, 134217728, 300000, 0) |
+    +----------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                                 |
+    +----------------------------------------------------------------------------------------------------------------------+
+    +------------+----------------+
+    | open_error | has_session_id |
+    +------------+----------------+
+    | NULL       | true           |
+    +------------+----------------+
+    +----+
+    | id |
+    +----+
+    | 1  |
+    | 2  |
+    +----+
+    +-----------+
+    | is_closed |
+    +-----------+
+    | true      |
+    +-----------+
+    +---------------------------------------------+
+    | ducknng_stop_server('sql_session_raw_demo') |
+    +---------------------------------------------+
+    | true                                        |
+    +---------------------------------------------+
 
 ### Launch the session lifecycle asynchronously and collect raw frames
 
