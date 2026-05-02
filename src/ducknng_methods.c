@@ -124,6 +124,45 @@ static int ducknng_json_reply(ducknng_method_reply *reply, const char *method_na
         flags | DUCKNNG_RPC_FLAG_PAYLOAD_JSON, payload, payload_len) ? 0 : -1;
 }
 
+typedef struct ducknng_session_control_request {
+    uint64_t session_id;
+    char *session_token;
+} ducknng_session_control_request;
+
+static void ducknng_session_control_request_reset(ducknng_session_control_request *request) {
+    if (!request) return;
+    if (request->session_token) duckdb_free(request->session_token);
+    memset(request, 0, sizeof(*request));
+}
+
+static int ducknng_parse_session_control_request(const ducknng_request_context *req,
+    const char *method_name, ducknng_session_control_request *request,
+    ducknng_method_reply *reply) {
+    char *json;
+    char errmsg[160];
+    if (!request) return -1;
+    ducknng_session_control_request_reset(request);
+    if (!req || !reply || !method_name) return -1;
+    json = ducknng_copy_payload_json(req);
+    if (!json || ducknng_json_extract_u64(json, "session_id", &request->session_id) != 0) {
+        if (json) duckdb_free(json);
+        snprintf(errmsg, sizeof(errmsg),
+            "ducknng: %s requires JSON payload with session_id and session_token", method_name);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, errmsg);
+        return -1;
+    }
+    request->session_token = ducknng_json_extract_string_dup(json, "session_token");
+    duckdb_free(json);
+    if (!request->session_token || !request->session_token[0]) {
+        snprintf(errmsg, sizeof(errmsg),
+            "ducknng: %s requires JSON payload with session_id and session_token", method_name);
+        ducknng_session_control_request_reset(request);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, errmsg);
+        return -1;
+    }
+    return 0;
+}
+
 static const char *ducknng_session_auth_error_message(int auth) {
     return auth == DUCKNNG_SESSION_AUTH_IDENTITY_MISMATCH ?
         "ducknng: session owner identity mismatch" :
@@ -207,8 +246,7 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
-    char *json = NULL;
-    char *owner_token = NULL;
+    ducknng_session_control_request control_req;
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
@@ -222,22 +260,14 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing fetch context");
         return -1;
     }
-    json = ducknng_copy_payload_json(req);
-    if (!json || ducknng_json_extract_u64(json, "session_id", &session_id) != 0) {
-        if (json) duckdb_free(json);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: fetch requires JSON payload with session_id and session_token");
+    memset(&control_req, 0, sizeof(control_req));
+    if (ducknng_parse_session_control_request(req, "fetch", &control_req, reply) != 0) {
         return -1;
     }
-    owner_token = ducknng_json_extract_string_dup(json, "session_token");
-    duckdb_free(json);
-    if (!owner_token || !owner_token[0]) {
-        if (owner_token) duckdb_free(owner_token);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: fetch requires JSON payload with session_id and session_token");
-        return -1;
-    }
-    session = ducknng_service_acquire_session(svc, session_id, owner_token,
+    session_id = control_req.session_id;
+    session = ducknng_service_acquire_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    duckdb_free(owner_token);
+    ducknng_session_control_request_reset(&control_req);
     if (!session) {
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
@@ -288,7 +318,8 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     session->eos = 1;
     ducknng_mutex_unlock(&session->mu);
     ducknng_session_release(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"exhausted\"}", (unsigned long long)session_id);
+    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"exhausted\"}",
+        (unsigned long long)session_id);
     return ducknng_json_reply(reply, "fetch", DUCKNNG_RPC_FLAG_END_OF_STREAM, control);
 }
 
@@ -296,35 +327,28 @@ static int ducknng_method_close_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
-    char *json = ducknng_copy_payload_json(req);
-    char *owner_token = NULL;
+    ducknng_session_control_request control_req;
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
     char control[256];
     (void)method;
-    if (!json || ducknng_json_extract_u64(json, "session_id", &session_id) != 0) {
-        if (json) duckdb_free(json);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: close requires JSON payload with session_id and session_token");
+    memset(&control_req, 0, sizeof(control_req));
+    if (ducknng_parse_session_control_request(req, "close", &control_req, reply) != 0) {
         return -1;
     }
-    owner_token = ducknng_json_extract_string_dup(json, "session_token");
-    duckdb_free(json);
-    if (!owner_token || !owner_token[0]) {
-        if (owner_token) duckdb_free(owner_token);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: close requires JSON payload with session_id and session_token");
-        return -1;
-    }
-    session = ducknng_service_remove_session(svc, session_id, owner_token,
+    session_id = control_req.session_id;
+    session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    duckdb_free(owner_token);
+    ducknng_session_control_request_reset(&control_req);
     if (!session) {
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
         return -1;
     }
     ducknng_session_destroy(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"closed\"}", (unsigned long long)session_id);
+    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"closed\"}",
+        (unsigned long long)session_id);
     return ducknng_json_reply(reply, "close", DUCKNNG_RPC_FLAG_SESSION_CLOSED, control);
 }
 
@@ -332,28 +356,20 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
-    char *json = ducknng_copy_payload_json(req);
-    char *owner_token = NULL;
+    ducknng_session_control_request control_req;
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
     char control[256];
     (void)method;
-    if (!json || ducknng_json_extract_u64(json, "session_id", &session_id) != 0) {
-        if (json) duckdb_free(json);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: cancel requires JSON payload with session_id and session_token");
+    memset(&control_req, 0, sizeof(control_req));
+    if (ducknng_parse_session_control_request(req, "cancel", &control_req, reply) != 0) {
         return -1;
     }
-    owner_token = ducknng_json_extract_string_dup(json, "session_token");
-    duckdb_free(json);
-    if (!owner_token || !owner_token[0]) {
-        if (owner_token) duckdb_free(owner_token);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: cancel requires JSON payload with session_id and session_token");
-        return -1;
-    }
-    session = ducknng_service_remove_session(svc, session_id, owner_token,
+    session_id = control_req.session_id;
+    session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    duckdb_free(owner_token);
+    ducknng_session_control_request_reset(&control_req);
     if (!session) {
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
@@ -365,7 +381,8 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
         ducknng_mutex_unlock(&session->mu);
     }
     ducknng_session_destroy(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"cancelled\"}", (unsigned long long)session_id);
+    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"cancelled\"}",
+        (unsigned long long)session_id);
     return ducknng_json_reply(reply, "cancel", DUCKNNG_RPC_FLAG_CANCELLED | DUCKNNG_RPC_FLAG_SESSION_CLOSED, control);
 }
 

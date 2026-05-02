@@ -110,6 +110,32 @@ typedef struct ducknng_manifest_security {
     const char *execution_model;
 } ducknng_manifest_security;
 
+typedef struct ducknng_method_projection {
+    const char *name;
+    const char *family;
+    const char *summary;
+    const char *transport_pattern;
+    const char *request_payload_format;
+    const char *response_payload_format;
+    const char *response_mode;
+    const char *session_behavior;
+    const char *request_schema_json;
+    const char *response_schema_json;
+    int requires_auth;
+    int requires_session;
+    int opens_session;
+    int closes_session;
+    int mutates_state;
+    int idempotent;
+    int deprecated;
+    int disabled;
+    uint32_t accepted_request_flags;
+    uint32_t emitted_reply_flags;
+    size_t max_request_bytes;
+    size_t max_reply_bytes;
+    int version_introduced;
+} ducknng_method_projection;
+
 int ducknng_method_registry_init(ducknng_method_registry *registry);
 void ducknng_method_registry_destroy(ducknng_method_registry *registry);
 int ducknng_method_registry_register(ducknng_method_registry *registry,
@@ -125,6 +151,8 @@ const ducknng_method_descriptor *ducknng_method_registry_find(
 char *ducknng_method_registry_manifest_json(const ducknng_method_registry *registry,
     const char *server_name, const char *server_version, int protocol_version,
     const ducknng_manifest_security *security, char **errmsg);
+void ducknng_method_descriptor_project(
+    const ducknng_method_descriptor *method, ducknng_method_projection *projection);
 void ducknng_method_reply_init(ducknng_method_reply *reply);
 void ducknng_method_reply_reset(ducknng_method_reply *reply);
 int ducknng_method_reply_set_payload(ducknng_method_reply *reply, uint8_t type, uint32_t flags,

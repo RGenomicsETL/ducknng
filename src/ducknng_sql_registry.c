@@ -255,17 +255,19 @@ static void ducknng_methods_bind(duckdb_bind_info info) {
         memset(bind->rows, 0, sizeof(*bind->rows) * (size_t)bind->row_count);
         for (i = 0; i < (size_t)bind->row_count; i++) {
             const ducknng_method_descriptor *m = ctx->rt->registry.methods[i];
-            bind->rows[i].name = m && m->name ? ducknng_strdup(m->name) : NULL;
-            bind->rows[i].family = m && m->family ? ducknng_strdup(m->family) : NULL;
-            bind->rows[i].summary = m && m->summary ? ducknng_strdup(m->summary) : NULL;
-            bind->rows[i].transport_pattern = m ? ducknng_strdup(ducknng_transport_pattern_name(m->transport_pattern)) : NULL;
-            bind->rows[i].request_payload_format = m ? ducknng_strdup(ducknng_payload_format_name(m->request_payload_format)) : NULL;
-            bind->rows[i].response_payload_format = m ? ducknng_strdup(ducknng_payload_format_name(m->response_payload_format)) : NULL;
-            bind->rows[i].response_mode = m ? ducknng_strdup(ducknng_response_mode_name(m->response_mode)) : NULL;
-            bind->rows[i].requires_auth = m ? (bool)m->requires_auth : false;
-            bind->rows[i].disabled = m ? (bool)m->disabled : false;
-            bind->rows[i].request_schema_json = m && m->request_schema_json ? ducknng_strdup(m->request_schema_json) : NULL;
-            bind->rows[i].response_schema_json = m && m->response_schema_json ? ducknng_strdup(m->response_schema_json) : NULL;
+            ducknng_method_projection view;
+            ducknng_method_descriptor_project(m, &view);
+            bind->rows[i].name = ducknng_strdup(view.name);
+            bind->rows[i].family = ducknng_strdup(view.family);
+            bind->rows[i].summary = ducknng_strdup(view.summary);
+            bind->rows[i].transport_pattern = ducknng_strdup(view.transport_pattern);
+            bind->rows[i].request_payload_format = ducknng_strdup(view.request_payload_format);
+            bind->rows[i].response_payload_format = ducknng_strdup(view.response_payload_format);
+            bind->rows[i].response_mode = ducknng_strdup(view.response_mode);
+            bind->rows[i].requires_auth = view.requires_auth ? true : false;
+            bind->rows[i].disabled = view.disabled ? true : false;
+            bind->rows[i].request_schema_json = view.request_schema_json ? ducknng_strdup(view.request_schema_json) : NULL;
+            bind->rows[i].response_schema_json = view.response_schema_json ? ducknng_strdup(view.response_schema_json) : NULL;
         }
     }
     ducknng_mutex_unlock(&ctx->rt->mu);

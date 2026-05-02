@@ -288,6 +288,36 @@ const char *ducknng_session_behavior_name(ducknng_session_behavior value) {
     }
 }
 
+void ducknng_method_descriptor_project(
+    const ducknng_method_descriptor *method, ducknng_method_projection *projection) {
+    if (!projection) return;
+    memset(projection, 0, sizeof(*projection));
+    if (!method) return;
+    projection->name = method->name ? method->name : "";
+    projection->family = method->family ? method->family : "";
+    projection->summary = method->summary ? method->summary : "";
+    projection->transport_pattern = ducknng_transport_pattern_name(method->transport_pattern);
+    projection->request_payload_format = ducknng_payload_format_name(method->request_payload_format);
+    projection->response_payload_format = ducknng_payload_format_name(method->response_payload_format);
+    projection->response_mode = ducknng_response_mode_name(method->response_mode);
+    projection->session_behavior = ducknng_session_behavior_name(method->session_behavior);
+    projection->request_schema_json = method->request_schema_json;
+    projection->response_schema_json = method->response_schema_json;
+    projection->requires_auth = method->requires_auth;
+    projection->requires_session = method->requires_session;
+    projection->opens_session = method->opens_session;
+    projection->closes_session = method->closes_session;
+    projection->mutates_state = method->mutates_state;
+    projection->idempotent = method->idempotent;
+    projection->deprecated = method->deprecated;
+    projection->disabled = method->disabled;
+    projection->accepted_request_flags = method->accepted_request_flags;
+    projection->emitted_reply_flags = method->emitted_reply_flags;
+    projection->max_request_bytes = method->max_request_bytes;
+    projection->max_reply_bytes = method->max_reply_bytes;
+    projection->version_introduced = method->version_introduced;
+}
+
 static int append_text(char **buf, size_t *len, size_t *cap, const char *text) {
     size_t add = text ? strlen(text) : 0;
     char *next;
@@ -391,63 +421,65 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
     if (!append_text(&buf, &len, &cap, "},\"methods\":[")) goto oom;
     for (i = 0; i < registry->method_count; i++) {
         const ducknng_method_descriptor *m = registry->methods[i];
+        ducknng_method_projection view;
         if (!m) continue;
+        ducknng_method_descriptor_project(m, &view);
         if (i > 0 && !append_text(&buf, &len, &cap, ",")) goto oom;
         if (!append_text(&buf, &len, &cap, "{")) goto oom;
         if (!append_text(&buf, &len, &cap, "\"name\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, m->name)) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.name)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"family\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, m->family ? m->family : "")) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.family)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"summary\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, m->summary ? m->summary : "")) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.summary)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"transport_pattern\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, ducknng_transport_pattern_name(m->transport_pattern))) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.transport_pattern)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"request_payload_format\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, ducknng_payload_format_name(m->request_payload_format))) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.request_payload_format)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"response_payload_format\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, ducknng_payload_format_name(m->response_payload_format))) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.response_payload_format)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"response_mode\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, ducknng_response_mode_name(m->response_mode))) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.response_mode)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"session_behavior\":")) goto oom;
-        if (!append_json_string(&buf, &len, &cap, ducknng_session_behavior_name(m->session_behavior))) goto oom;
+        if (!append_json_string(&buf, &len, &cap, view.session_behavior)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"requires_auth\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->requires_auth ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.requires_auth ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"requires_session\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->requires_session ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.requires_session ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"opens_session\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->opens_session ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.opens_session ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"closes_session\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->closes_session ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.closes_session ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"mutates_state\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->mutates_state ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.mutates_state ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"idempotent\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->idempotent ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.idempotent ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"deprecated\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->deprecated ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.deprecated ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"disabled\":")) goto oom;
-        if (!append_text(&buf, &len, &cap, m->disabled ? "true" : "false")) goto oom;
+        if (!append_text(&buf, &len, &cap, view.disabled ? "true" : "false")) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"accepted_request_flags\":%u",
-            (unsigned int)m->accepted_request_flags);
+            (unsigned int)view.accepted_request_flags);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"emitted_reply_flags\":%u",
-            (unsigned int)m->emitted_reply_flags);
+            (unsigned int)view.emitted_reply_flags);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"max_request_bytes\":%lu",
-            (unsigned long)m->max_request_bytes);
+            (unsigned long)view.max_request_bytes);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"max_reply_bytes\":%lu",
-            (unsigned long)m->max_reply_bytes);
+            (unsigned long)view.max_reply_bytes);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"version_introduced\":%d",
-            m->version_introduced);
+            view.version_introduced);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"request_schema\":")) goto oom;
-        if (m->request_schema_json) {
-            if (!append_text(&buf, &len, &cap, m->request_schema_json)) goto oom;
+        if (view.request_schema_json) {
+            if (!append_text(&buf, &len, &cap, view.request_schema_json)) goto oom;
         } else if (!append_text(&buf, &len, &cap, "null")) goto oom;
         if (!append_text(&buf, &len, &cap, ",\"response_schema\":")) goto oom;
-        if (m->response_schema_json) {
-            if (!append_text(&buf, &len, &cap, m->response_schema_json)) goto oom;
+        if (view.response_schema_json) {
+            if (!append_text(&buf, &len, &cap, view.response_schema_json)) goto oom;
         } else if (!append_text(&buf, &len, &cap, "null")) goto oom;
         if (!append_text(&buf, &len, &cap, "}")) goto oom;
     }
