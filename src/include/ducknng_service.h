@@ -187,6 +187,11 @@ const char *ducknng_service_peer_identity_format(const ducknng_service *svc);
 void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security);
 size_t ducknng_service_active_pipe_count(const ducknng_service *svc);
 size_t ducknng_service_inflight_request_count(const ducknng_service *svc);
+void ducknng_service_enter_request_sql(ducknng_service *svc);
+void ducknng_service_leave_request_sql(ducknng_service *svc);
+void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
+    const ducknng_authorizer_context *auth_ctx);
+void ducknng_service_leave_authorizer_sql(ducknng_service *svc);
 int ducknng_service_begin_request(ducknng_service *svc, char **errmsg);
 void ducknng_service_end_request(ducknng_service *svc);
 int ducknng_service_pipe_monitor_stats(ducknng_service *svc,

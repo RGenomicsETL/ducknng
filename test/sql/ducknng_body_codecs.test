@@ -66,15 +66,20 @@ SELECT CASE WHEN ducknng_stop_server('codec_rpc') THEN 1 ELSE 0 END
 
 query I
 SELECT CASE
-  WHEN ducknng_start_server('codec_http', 'http://127.0.0.1:45464/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  WHEN ducknng_start_server('codec_http', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
   THEN 1 ELSE 0 END
 ----
 1
 
+statement ok
+SET VARIABLE codec_http_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'codec_http'
+)
+
 query IT
 SELECT ok, type_name
 FROM ducknng_ncurl_table(
-  'http://127.0.0.1:45464/_ducknng',
+  getvariable('codec_http_url')::VARCHAR,
   'POST',
   '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
   from_hex('01000000000000000000000000000000000000000000'),
@@ -87,7 +92,7 @@ FROM ducknng_ncurl_table(
 query IT
 SELECT ok, type_name
 FROM ducknng_ncurl_table(
-  'http://127.0.0.1:45464/_ducknng',
+  getvariable('codec_http_url')::VARCHAR,
   'POST',
   '[{"name":"Content-Type","value":"Application/Vnd.Ducknng.Frame; charset=binary"}]',
   from_hex('01000000000000000000000000000000000000000000'),

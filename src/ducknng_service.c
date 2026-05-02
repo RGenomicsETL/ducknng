@@ -32,6 +32,30 @@ static void ducknng_service_clear_authorizer(ducknng_service *svc) {
     svc->authorizer_active = 0;
 }
 
+void ducknng_service_enter_request_sql(ducknng_service *svc) {
+    if (!svc || !svc->rt) return;
+    ducknng_runtime_init_con_lock(svc->rt);
+    ducknng_runtime_current_request_service_set(svc->rt, svc);
+}
+
+void ducknng_service_leave_request_sql(ducknng_service *svc) {
+    if (!svc || !svc->rt) return;
+    ducknng_runtime_init_con_unlock(svc->rt);
+}
+
+void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
+    const ducknng_authorizer_context *auth_ctx) {
+    if (!svc || !svc->rt) return;
+    ducknng_service_enter_request_sql(svc);
+    ducknng_runtime_current_authorizer_context_set(svc->rt, auth_ctx);
+}
+
+void ducknng_service_leave_authorizer_sql(ducknng_service *svc) {
+    if (!svc || !svc->rt) return;
+    ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
+    ducknng_service_leave_request_sql(svc);
+}
+
 static void ducknng_pipe_event_reset(ducknng_pipe_event *event) {
     if (!event) return;
     if (event->event) duckdb_free(event->event);
@@ -700,9 +724,7 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
         return -1;
     }
     memset(&result, 0, sizeof(result));
-    ducknng_runtime_init_con_lock(svc->rt);
-    ducknng_runtime_current_request_service_set(svc->rt, svc);
-    ducknng_runtime_current_authorizer_context_set(svc->rt, auth_ctx);
+    ducknng_service_enter_authorizer_sql(svc, auth_ctx);
     if (duckdb_query(svc->rt->init_con, authorizer_sql, &result) == DuckDBError) {
         const char *detail = duckdb_result_error(&result);
         char *msg = NULL;
@@ -718,13 +740,11 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
         decision->reason = ducknng_strdup(msg);
         if (errmsg) *errmsg = msg;
         else if (msg) duckdb_free(msg);
-        ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
-        ducknng_runtime_init_con_unlock(svc->rt);
+        ducknng_service_leave_authorizer_sql(svc);
         duckdb_destroy_result(&result);
         return -1;
     }
-    ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
-    ducknng_runtime_init_con_unlock(svc->rt);
+    ducknng_service_leave_authorizer_sql(svc);
     rc = ducknng_parse_authorizer_result(&result, decision, &parse_err);
     duckdb_destroy_result(&result);
     if (rc != 0 && errmsg) *errmsg = parse_err ? parse_err : ducknng_strdup(decision->reason ? decision->reason : "ducknng: SQL authorizer denied request");

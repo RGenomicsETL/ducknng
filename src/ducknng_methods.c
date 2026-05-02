@@ -124,6 +124,15 @@ static int ducknng_json_reply(ducknng_method_reply *reply, const char *method_na
         flags | DUCKNNG_RPC_FLAG_PAYLOAD_JSON, payload, payload_len) ? 0 : -1;
 }
 
+static int ducknng_session_state_reply(ducknng_method_reply *reply, const char *method_name,
+    uint32_t flags, uint64_t session_id, const char *state) {
+    char control[256];
+    if (!reply || !method_name || !state) return -1;
+    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"%s\"}",
+        (unsigned long long)session_id, state);
+    return ducknng_json_reply(reply, method_name, flags, control);
+}
+
 typedef struct ducknng_session_control_request {
     uint64_t session_id;
     char *session_token;
@@ -192,11 +201,10 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         return -1;
     }
     ducknng_mutex_lock(&svc->mu);
-    ducknng_runtime_init_con_lock(svc->rt);
-    ducknng_runtime_current_request_service_set(svc->rt, svc);
+    ducknng_service_enter_request_sql(svc);
     if (duckdb_query(svc->rt->init_con, open_req.sql, &result) == DuckDBError) {
         char *detail = ducknng_strdup(duckdb_result_error(&result));
-        ducknng_runtime_init_con_unlock(svc->rt);
+        ducknng_service_leave_request_sql(svc);
         duckdb_destroy_result(&result);
         ducknng_mutex_unlock(&svc->mu);
         ducknng_query_open_request_destroy(&open_req);
@@ -205,7 +213,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         if (detail) duckdb_free(detail);
         return -1;
     }
-    ducknng_runtime_init_con_unlock(svc->rt);
+    ducknng_service_leave_request_sql(svc);
     if (duckdb_result_return_type(result) != DUCKDB_RESULT_TYPE_QUERY_RESULT) {
         duckdb_destroy_result(&result);
         ducknng_mutex_unlock(&svc->mu);
@@ -254,7 +262,6 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     size_t payload_len = 0;
     int has_batch = 0;
     char *errmsg = NULL;
-    char control[256];
     (void)method;
     if (!svc || !req || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing fetch context");
@@ -318,9 +325,8 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     session->eos = 1;
     ducknng_mutex_unlock(&session->mu);
     ducknng_session_release(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"exhausted\"}",
-        (unsigned long long)session_id);
-    return ducknng_json_reply(reply, "fetch", DUCKNNG_RPC_FLAG_END_OF_STREAM, control);
+    return ducknng_session_state_reply(reply, "fetch", DUCKNNG_RPC_FLAG_END_OF_STREAM,
+        session_id, "exhausted");
 }
 
 static int ducknng_method_close_handler(ducknng_service *svc,
@@ -331,7 +337,6 @@ static int ducknng_method_close_handler(ducknng_service *svc,
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
-    char control[256];
     (void)method;
     memset(&control_req, 0, sizeof(control_req));
     if (ducknng_parse_session_control_request(req, "close", &control_req, reply) != 0) {
@@ -347,9 +352,8 @@ static int ducknng_method_close_handler(ducknng_service *svc,
         return -1;
     }
     ducknng_session_destroy(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"closed\"}",
-        (unsigned long long)session_id);
-    return ducknng_json_reply(reply, "close", DUCKNNG_RPC_FLAG_SESSION_CLOSED, control);
+    return ducknng_session_state_reply(reply, "close", DUCKNNG_RPC_FLAG_SESSION_CLOSED,
+        session_id, "closed");
 }
 
 static int ducknng_method_cancel_handler(ducknng_service *svc,
@@ -360,7 +364,6 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
-    char control[256];
     (void)method;
     memset(&control_req, 0, sizeof(control_req));
     if (ducknng_parse_session_control_request(req, "cancel", &control_req, reply) != 0) {
@@ -381,9 +384,9 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
         ducknng_mutex_unlock(&session->mu);
     }
     ducknng_session_destroy(session);
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"cancelled\"}",
-        (unsigned long long)session_id);
-    return ducknng_json_reply(reply, "cancel", DUCKNNG_RPC_FLAG_CANCELLED | DUCKNNG_RPC_FLAG_SESSION_CLOSED, control);
+    return ducknng_session_state_reply(reply, "cancel",
+        DUCKNNG_RPC_FLAG_CANCELLED | DUCKNNG_RPC_FLAG_SESSION_CLOSED,
+        session_id, "cancelled");
 }
 
 static int ducknng_method_exec_handler(ducknng_service *svc,
@@ -417,10 +420,9 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
 
     if (exec_req.want_result) {
         ducknng_mutex_lock(&svc->mu);
-        ducknng_runtime_init_con_lock(svc->rt);
-        ducknng_runtime_current_request_service_set(svc->rt, svc);
+        ducknng_service_enter_request_sql(svc);
         if (ducknng_query_to_ipc_stream(svc->rt->init_con, exec_req.sql, &payload, &payload_len, &errmsg) != 0) {
-            ducknng_runtime_init_con_unlock(svc->rt);
+            ducknng_service_leave_request_sql(svc);
             ducknng_mutex_unlock(&svc->mu);
             ducknng_exec_request_destroy(&exec_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
@@ -428,7 +430,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
             if (errmsg) duckdb_free(errmsg);
             return -1;
         }
-        ducknng_runtime_init_con_unlock(svc->rt);
+        ducknng_service_leave_request_sql(svc);
         ducknng_mutex_unlock(&svc->mu);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
@@ -436,11 +438,10 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
         payload = NULL;
     } else {
         ducknng_mutex_lock(&svc->mu);
-        ducknng_runtime_init_con_lock(svc->rt);
-        ducknng_runtime_current_request_service_set(svc->rt, svc);
+        ducknng_service_enter_request_sql(svc);
         if (duckdb_query(svc->rt->init_con, exec_req.sql, &result) == DuckDBError) {
             char *exec_err = ducknng_strdup(duckdb_result_error(&result));
-            ducknng_runtime_init_con_unlock(svc->rt);
+            ducknng_service_leave_request_sql(svc);
             duckdb_destroy_result(&result);
             ducknng_mutex_unlock(&svc->mu);
             ducknng_exec_request_destroy(&exec_req);
@@ -449,7 +450,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
             if (exec_err) duckdb_free(exec_err);
             return -1;
         }
-        ducknng_runtime_init_con_unlock(svc->rt);
+        ducknng_service_leave_request_sql(svc);
 
         stmt_type = duckdb_result_statement_type(result);
         result_type = duckdb_result_return_type(result);
