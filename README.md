@@ -1103,16 +1103,17 @@ SET VARIABLE bus_close_a = ducknng_close_socket(getvariable('bus_a')::UBIGINT);
 
 ### Launch raw requests asynchronously and collect the reply frames later
 
-The stable async contract is raw-result-first. NNG/RPC aio helpers
-collect raw frames through `ducknng_aio_collect(...)`, HTTP aio helpers
-collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and
-callers explicitly decode frames or bodies afterward. URL-launched NNG
-request aio helpers also keep the initial dial in NNG’s background retry
-path, so launch returns a handle even if the listener is not up yet and
-the eventual terminal result still reflects the ordinary request
-operation. Structured async wrappers may be added later as conveniences,
-but they remain additive; aio handles represent one pending operation,
-not a background job or streaming protocol.
+The stable async contract is raw-result-first. Framed RPC aio helpers
+collect raw reply frames through `ducknng_aio_collect(...)`, low-level
+HTTP aio helpers collect HTTP-shaped rows through
+`ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames
+or bodies afterward. URL-launched request aio helpers keep the same
+operation-oriented routing as the synchronous helpers: NNG URLs use
+NNG’s background dial path, HTTP/HTTPS URLs use NNG’s asynchronous HTTP
+client path, and both still terminate as one collected reply frame or
+one terminal error. Structured async wrappers may be added later as
+conveniences, but they remain additive; aio handles represent one
+pending operation, not a background job or streaming protocol.
 
 ``` sql
 LOAD 'build/release/ducknng.duckdb_extension';
@@ -2082,7 +2083,7 @@ Transport-specific deployment notes:
 |--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|------------------------------------|
 | `ducknng_start_server(...)`                                                                                  | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, `https://` | `tls+tcp://`, `wss://`, `https://` |
 | synchronous RPC/session helpers                                                                              | NNG schemes plus `http://`, `https://`                                                  | `tls+tcp://`, `wss://`, `https://` |
-| raw RPC AIO helpers                                                                                          | NNG schemes only                                                                        | `tls+tcp://`, `wss://`             |
+| raw RPC AIO helpers                                                                                          | NNG schemes plus `http://`, `https://`                                                  | `tls+tcp://`, `wss://`, `https://` |
 | generic socket APIs                                                                                          | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`                        | `tls+tcp://`, `wss://`             |
 | `ducknng_start_http_server(...)`, `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, `ducknng_ncurl_table(...)` | `http://`, `https://`                                                                   | `https://`                         |
 

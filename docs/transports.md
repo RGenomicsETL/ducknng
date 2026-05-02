@@ -13,7 +13,7 @@ The stable scheme matrix is:
 | `ducknng_start_server(...)` | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, `https://` | `tls+tcp://`, `wss://`, `https://` | unknown schemes; TLS handles on non-TLS schemes |
 | generic socket API (`ducknng_dial_socket`, `ducknng_listen_socket`) | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://` | `tls+tcp://`, `wss://` | `http://`, `https://` |
 | synchronous RPC/session helpers (`ducknng_request`, `ducknng_get_rpc_manifest`, `ducknng_run_rpc`, `ducknng_query_rpc`, `ducknng_open_query`, `ducknng_fetch_query`, `ducknng_close_query`, `ducknng_cancel_query`) | NNG schemes plus `http://`, `https://` | `tls+tcp://`, `wss://`, `https://` | unknown schemes; TLS handles on non-TLS schemes |
-| raw RPC AIO helpers (`ducknng_request_raw_aio`, `ducknng_get_rpc_manifest_raw_aio`, `ducknng_run_rpc_raw_aio`) | NNG schemes only | `tls+tcp://`, `wss://` | `http://`, `https://`, unknown schemes, TLS handles on non-TLS schemes |
+| raw RPC AIO helpers (`ducknng_request_raw_aio`, `ducknng_get_rpc_manifest_raw_aio`, `ducknng_run_rpc_raw_aio`) | NNG schemes plus `http://`, `https://` | `tls+tcp://`, `wss://`, `https://` | unknown schemes; TLS handles on non-TLS schemes |
 | `ducknng_start_http_server(...)` | `http://`, `https://` | `https://` | NNG schemes |
 | HTTP client helpers (`ducknng_ncurl`, `ducknng_ncurl_aio`, `ducknng_ncurl_table`) | `http://`, `https://` | `https://` | NNG schemes, unknown schemes, TLS handles on `http://` |
 

@@ -2175,17 +2175,17 @@ one raw message through a three-peer <code>bus</code> mesh</h3>
 +------+-------------+</code></pre>
 <h3 id="launch-raw-requests-asynchronously-and-collect-the-reply-frames-later">Launch
 raw requests asynchronously and collect the reply frames later</h3>
-<p>The stable async contract is raw-result-first. NNG/RPC aio helpers
-collect raw frames through <code>ducknng_aio_collect(...)</code>, HTTP
-aio helpers collect HTTP-shaped rows through
+<p>The stable async contract is raw-result-first. Framed RPC aio helpers
+collect raw reply frames through <code>ducknng_aio_collect(...)</code>,
+low-level HTTP aio helpers collect HTTP-shaped rows through
 <code>ducknng_ncurl_aio_collect(...)</code>, and callers explicitly
-decode frames or bodies afterward. URL-launched NNG request aio helpers
-also keep the initial dial in NNG’s background retry path, so launch
-returns a handle even if the listener is not up yet and the eventual
-terminal result still reflects the ordinary request operation.
-Structured async wrappers may be added later as conveniences, but they
-remain additive; aio handles represent one pending operation, not a
-background job or streaming protocol.</p>
+decode frames or bodies afterward. URL-launched request aio helpers keep
+the same operation-oriented routing as the synchronous helpers: NNG URLs
+use NNG’s background dial path, HTTP/HTTPS URLs use NNG’s asynchronous
+HTTP client path, and both still terminate as one collected reply frame
+or one terminal error. Structured async wrappers may be added later as
+conveniences, but they remain additive; aio handles represent one
+pending operation, not a background job or streaming protocol.</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="co">-- Start a local listener that the aio requests will target.</span></span>
 <span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
@@ -3133,8 +3133,9 @@ active deny-all.</p>
 </tr>
 <tr class="odd">
 <td>raw RPC AIO helpers</td>
-<td>NNG schemes only</td>
-<td><code>tls+tcp://</code>, <code>wss://</code></td>
+<td>NNG schemes plus <code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>,
+<code>https://</code></td>
 </tr>
 <tr class="even">
 <td>generic socket APIs</td>

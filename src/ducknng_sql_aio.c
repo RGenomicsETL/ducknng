@@ -406,6 +406,41 @@ static void ducknng_client_aio_clear_http_handles(ducknng_client_aio *slot) {
     }
 }
 
+static int ducknng_client_aio_copy_http_reply_msg(ducknng_client_aio *slot, char **errmsg) {
+    uint16_t status = 0;
+    uint8_t *body = NULL;
+    size_t body_len = 0;
+    nng_msg *reply_msg = NULL;
+    int rv;
+    if (errmsg) *errmsg = NULL;
+    if (!slot || !slot->http_res) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP response state");
+        return -1;
+    }
+    if (ducknng_http_response_copy(slot->http_res, &status, NULL, &body, &body_len, errmsg) != 0) return -1;
+    slot->http_status = status;
+    if (status != 200) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_http_status_error_message(status, body, body_len);
+        if (body) duckdb_free(body);
+        return -1;
+    }
+    if (!body && body_len > 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: HTTP transport returned an invalid empty body");
+        return -1;
+    }
+    rv = nng_msg_alloc(&reply_msg, body_len);
+    if (rv != 0) {
+        if (body) duckdb_free(body);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+        return -1;
+    }
+    if (body_len > 0) memcpy(nng_msg_body(reply_msg), body, body_len);
+    if (body) duckdb_free(body);
+    if (slot->reply_msg) nng_msg_free(slot->reply_msg);
+    slot->reply_msg = reply_msg;
+    return 0;
+}
+
 static void ducknng_client_aio_cb(void *arg) {
     ducknng_client_aio *slot = (ducknng_client_aio *)arg;
     ducknng_runtime *rt;
@@ -417,7 +452,7 @@ static void ducknng_client_aio_cb(void *arg) {
         ducknng_mutex_unlock(&rt->mu);
         return;
     }
-    if (slot->kind == DUCKNNG_CLIENT_AIO_KIND_NCURL) {
+    if (slot->phase == DUCKNNG_CLIENT_AIO_PHASE_HTTP) {
         slot->send_done = 1;
         slot->recv_done = 1;
         slot->send_result = rv;
@@ -443,40 +478,59 @@ static void ducknng_client_aio_cb(void *arg) {
             ducknng_runtime_release_client_socket(slot->socket_ref);
             slot->socket_ref = NULL;
         }
-        if (slot->kind == DUCKNNG_CLIENT_AIO_KIND_NCURL) ducknng_client_aio_clear_http_handles(slot);
+        if (slot->phase == DUCKNNG_CLIENT_AIO_PHASE_HTTP) ducknng_client_aio_clear_http_handles(slot);
         ducknng_cond_broadcast(&rt->aio_cv);
         ducknng_mutex_unlock(&rt->mu);
         return;
     }
-    if (slot->kind == DUCKNNG_CLIENT_AIO_KIND_NCURL) {
-        uint16_t status = 0;
-        char *headers_json = NULL;
-        uint8_t *body = NULL;
-        size_t body_len = 0;
-        char *errmsg = NULL;
-        if (ducknng_http_response_copy(slot->http_res, &status, &headers_json, &body, &body_len, &errmsg) != 0) {
-            if (slot->error) duckdb_free(slot->error);
-            slot->error = errmsg ? errmsg : ducknng_strdup("ducknng: failed to copy HTTP response");
-            slot->state = DUCKNNG_CLIENT_AIO_ERROR;
-        } else {
-            slot->http_status = status;
-            slot->http_headers_json = headers_json;
-            slot->http_body = body;
-            slot->http_body_len = body_len;
-            if (body && body_len > 0 && ducknng_bytes_look_text(body, body_len)) {
-                slot->http_body_text = ducknng_dup_bytes(body, body_len);
-                if (!slot->http_body_text) {
-                    slot->error = ducknng_strdup("ducknng: out of memory copying HTTP response text");
-                    slot->state = DUCKNNG_CLIENT_AIO_ERROR;
+    if (slot->phase == DUCKNNG_CLIENT_AIO_PHASE_HTTP) {
+        if (slot->kind == DUCKNNG_CLIENT_AIO_KIND_NCURL) {
+            uint16_t status = 0;
+            char *headers_json = NULL;
+            uint8_t *body = NULL;
+            size_t body_len = 0;
+            char *errmsg = NULL;
+            if (ducknng_http_response_copy(slot->http_res, &status, &headers_json, &body, &body_len, &errmsg) != 0) {
+                if (slot->error) duckdb_free(slot->error);
+                slot->error = errmsg ? errmsg : ducknng_strdup("ducknng: failed to copy HTTP response");
+                slot->state = DUCKNNG_CLIENT_AIO_ERROR;
+            } else {
+                slot->http_status = status;
+                slot->http_headers_json = headers_json;
+                slot->http_body = body;
+                slot->http_body_len = body_len;
+                if (body && body_len > 0 && ducknng_bytes_look_text(body, body_len)) {
+                    slot->http_body_text = ducknng_dup_bytes(body, body_len);
+                    if (!slot->http_body_text) {
+                        slot->error = ducknng_strdup("ducknng: out of memory copying HTTP response text");
+                        slot->state = DUCKNNG_CLIENT_AIO_ERROR;
+                    } else {
+                        slot->state = DUCKNNG_CLIENT_AIO_READY;
+                    }
                 } else {
                     slot->state = DUCKNNG_CLIENT_AIO_READY;
                 }
+            }
+        } else if (slot->kind == DUCKNNG_CLIENT_AIO_KIND_REQUEST) {
+            char *errmsg = NULL;
+            if (ducknng_client_aio_copy_http_reply_msg(slot, &errmsg) != 0) {
+                if (slot->error) duckdb_free(slot->error);
+                slot->error = errmsg ? errmsg : ducknng_strdup("ducknng: failed to copy HTTP frame response");
+                slot->state = DUCKNNG_CLIENT_AIO_ERROR;
             } else {
                 slot->state = DUCKNNG_CLIENT_AIO_READY;
             }
+        } else {
+            if (slot->error) duckdb_free(slot->error);
+            slot->error = ducknng_strdup("ducknng: unsupported HTTP aio kind");
+            slot->state = DUCKNNG_CLIENT_AIO_ERROR;
         }
         ducknng_client_aio_clear_http_handles(slot);
         slot->finished_ms = ducknng_now_ms();
+        if (slot->socket_ref) {
+            ducknng_runtime_release_client_socket(slot->socket_ref);
+            slot->socket_ref = NULL;
+        }
         ducknng_cond_broadcast(&rt->aio_cv);
         ducknng_mutex_unlock(&rt->mu);
         return;
@@ -657,6 +711,7 @@ static int ducknng_client_launch_socket_recv_aio(ducknng_runtime *rt, ducknng_cl
 static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const char *url,
     int32_t timeout_ms, uint64_t tls_config_id, nng_msg *req, uint64_t *out_aio_id, char **errmsg) {
     const ducknng_tls_opts *tls_opts = NULL;
+    ducknng_transport_url parsed;
     ducknng_client_aio *slot = NULL;
     if (out_aio_id) *out_aio_id = 0;
     if (!ctx || !ctx->rt || !url || !req) {
@@ -664,9 +719,36 @@ static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing async RPC request state");
         return -1;
     }
+    if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) {
+        nng_msg_free(req);
+        return -1;
+    }
     if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, errmsg) != 0) {
         nng_msg_free(req);
         return -1;
+    }
+    if (ducknng_transport_url_is_http(&parsed)) {
+        slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
+        if (!slot) {
+            nng_msg_free(req);
+            return -1;
+        }
+        slot->kind = DUCKNNG_CLIENT_AIO_KIND_REQUEST;
+        slot->phase = DUCKNNG_CLIENT_AIO_PHASE_HTTP;
+        if (ducknng_http_frame_transact_aio_prepare(url, (const uint8_t *)nng_msg_body(req), nng_msg_len(req),
+                tls_opts, &slot->http_url, &slot->http_client, &slot->http_req, &slot->http_res, errmsg) != 0) {
+            nng_msg_free(req);
+            ducknng_client_aio_destroy(slot);
+            return -1;
+        }
+        nng_msg_free(req);
+        if (ducknng_runtime_add_client_aio(ctx->rt, slot, errmsg) != 0) {
+            ducknng_client_aio_destroy(slot);
+            return -1;
+        }
+        nng_http_client_transact(slot->http_client, slot->http_req, slot->http_res, slot->aio);
+        if (out_aio_id) *out_aio_id = slot->aio_id;
+        return 0;
     }
     slot = ducknng_client_prepare_url_aio(ctx->rt, url, timeout_ms, tls_opts, errmsg);
     if (!slot) {

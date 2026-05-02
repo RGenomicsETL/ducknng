@@ -153,6 +153,82 @@ FROM ducknng_get_rpc_manifest('http://127.0.0.1:45458/_ducknng', 0::UBIGINT)
 ----
 1	1
 
+statement ok
+CREATE TEMP TABLE http_rpc_aio_launch AS
+SELECT
+  ducknng_request_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    from_hex('01000000000000000000000000000000000000000000'),
+    2000,
+    0::UBIGINT
+  ) AS raw_aio,
+  ducknng_get_rpc_manifest_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    2000,
+    0::UBIGINT
+  ) AS manifest_aio,
+  ducknng_run_rpc_raw_aio(
+    'http://127.0.0.1:45458/_ducknng',
+    'CREATE TABLE IF NOT EXISTS http_rpc_aio_exec(i INTEGER)',
+    2000,
+    0::UBIGINT
+  ) AS exec_aio
+
+query II
+SELECT kind = 'request', phase = 'http'
+FROM http_rpc_aio_launch, ducknng_aio_status(raw_aio)
+----
+1	1
+
+statement ok
+CREATE TEMP TABLE http_rpc_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(raw_aio, manifest_aio, exec_aio) FROM http_rpc_aio_launch), 2000)
+
+query I
+SELECT COUNT(*)
+FROM http_rpc_aio_collect
+----
+3
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_get_rpc_manifest_raw('http://127.0.0.1:45458/_ducknng', 0::UBIGINT))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT raw_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query II
+SELECT ok, hex(frame) = hex(ducknng_get_rpc_manifest_raw('http://127.0.0.1:45458/_ducknng', 0::UBIGINT))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT manifest_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query II
+SELECT ok,
+       hex(frame) = hex(ducknng_run_rpc_raw(
+         'http://127.0.0.1:45458/_ducknng',
+         'CREATE TABLE IF NOT EXISTS http_rpc_aio_exec(i INTEGER)',
+         0::UBIGINT
+       ))
+FROM http_rpc_aio_collect
+WHERE aio_id = (SELECT exec_aio FROM http_rpc_aio_launch)
+----
+1	1
+
+query I
+SELECT ducknng_aio_drop(raw_aio) AND ducknng_aio_drop(manifest_aio) AND ducknng_aio_drop(exec_aio)
+FROM http_rpc_aio_launch
+----
+1
+
+statement ok
+DROP TABLE http_rpc_aio_collect
+
+statement ok
+DROP TABLE http_rpc_aio_launch
+
 query I
 SELECT *
 FROM ducknng_query_rpc(

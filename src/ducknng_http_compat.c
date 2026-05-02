@@ -599,6 +599,14 @@ fail:
     return -1;
 }
 
+int ducknng_http_frame_transact_aio_prepare(const char *url, const uint8_t *frame, size_t frame_len,
+    const ducknng_tls_opts *tls_opts, nng_url **out_url, nng_http_client **out_client,
+    nng_http_req **out_req, nng_http_res **out_res, char **errmsg) {
+    return ducknng_http_transact_aio_prepare(url, "POST",
+        "[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]",
+        frame, frame_len, tls_opts, out_url, out_client, out_req, out_res, errmsg);
+}
+
 int ducknng_http_transact(const char *url, const char *method, const char *headers_json,
     const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
     uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
@@ -976,7 +984,7 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
     ducknng_http_finish_response(aio, res, rv);
 }
 
-static char *ducknng_http_status_error_message(uint16_t status, const uint8_t *body, size_t body_len) {
+char *ducknng_http_status_error_message(uint16_t status, const uint8_t *body, size_t body_len) {
     char *text = NULL;
     char *msg = NULL;
     size_t need;

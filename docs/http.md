@@ -8,7 +8,7 @@ The governing rule is the same one stated in `docs/protocol.md` and `docs/transp
 
 The initial HTTP adapter is deliberately narrow. It is a carrier for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. Anything broader than framed RPC carriage belongs to later work and must be justified separately. `docs/http_server_framework.md` sketches a possible future route framework while keeping this framed RPC endpoint separate.
 
-The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, plus the transport-local server helper `ducknng_start_http_server(...)`, while the existing synchronous request, RPC, and session helpers route by URL scheme on top of that adapter.
+The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, plus the transport-local server helper `ducknng_start_http_server(...)`, while the existing request, RPC, and session helpers route by URL scheme on top of that adapter.
 
 ## Current SQL surface
 
@@ -89,7 +89,9 @@ That means URLs like `http://127.0.0.1:8080/_ducknng` and `https://127.0.0.1:844
 - `ducknng_fetch_query(...)`
 - `ducknng_close_query(...)`
 - `ducknng_cancel_query(...)`
-- later, the corresponding AIO request helpers
+- `ducknng_request_raw_aio(...)`
+- `ducknng_get_rpc_manifest_raw_aio(...)`
+- `ducknng_run_rpc_raw_aio(...)`
 
 In other words, `ducknng_ncurl(...)` is the generic HTTP primitive, while the higher-level `ducknng` RPC and session helpers keep their current names and use the HTTP carrier automatically when the URL scheme is `http` or `https`.
 
