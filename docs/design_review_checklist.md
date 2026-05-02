@@ -106,13 +106,15 @@ This checklist tracks the implementation status of the main architecture, transp
   - Current state:
     - server-side `query_open` / `fetch` / `close` / `cancel` methods are registered
     - SQL-visible wrappers now exist as `ducknng_open_query()`, `ducknng_fetch_query()`, `ducknng_close_query()`, and `ducknng_cancel_query()`
+    - `ducknng_fetch_query_table()` now exposes one fetched Arrow IPC batch directly as a DuckDB table
+    - `ducknng_query_rpc()` now runs on top of the session family and closes the session automatically after end-of-stream
+    - raw async session launchers now exist as `ducknng_open_query_raw_aio()`, `ducknng_fetch_query_raw_aio()`, `ducknng_close_query_raw_aio()`, and `ducknng_cancel_query_raw_aio()`
     - query sessions now carry a generated `session_token` bearer capability; `fetch`, `close`, and `cancel` reject token mismatches instead of accepting bare `session_id`
     - mTLS-authenticated transports now attach verified peer identity to requests and bind sessions to that identity when present
   - Remaining work:
     - keep envelope-level RPC authentication as an optional future additive layer rather than a blocker for the current session contract
     - document the current single serialized DuckDB execution lane as an intentional deployment mode, and add isolated per-session or per-request DuckDB execution resources only for deployments that need hard state isolation
-    - decide whether a dedicated `ducknng_fetch_query_table(...)` convenience wrapper is still worth adding now that fetched Arrow IPC payloads are decodable with `ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream')`
-    - decide whether `ducknng_query_rpc()` should later be rebuilt as a convenience wrapper over the session family
+    - decide later whether any higher-level structured async session wrappers are worth adding on top of the raw-frame aio contract
 - [~] Add the codec framework for body and Arrow extension serde.
   - Current state:
     - `ducknng_list_codecs()` lists built-in content-type driven providers and registered user hooks side by side, with a `kind` column and a `function_name` column for user codecs
@@ -134,7 +136,7 @@ This checklist tracks the implementation status of the main architecture, transp
 ## Current blockers to report upstream
 
 1. **Current DuckDB-facing Arrow work stays on manual nanoarrow mappings.** The implementation no longer compiles unstable or deprecated DuckDB Arrow entrypoints, so any future Arrow re-plumb must wait for a non-deprecated seam or be abandoned in favor of maintaining the explicit mappings.
-2. **Session-family ownership is sealed around token plus optional mTLS identity.** Query sessions now have an explicit `session_token` bearer capability and optional mTLS owner-identity binding, so the bare-`session_id` ownership hole is closed. Remaining work is optional ergonomics and isolation: deciding whether a dedicated fetch-table wrapper is useful beyond `ducknng_parse_body(...)`, whether `ducknng_query_rpc()` should be rebuilt on sessions, and whether some deployments need isolated DuckDB execution state per session/request.
+2. **Session-family ownership is sealed around token plus optional mTLS identity.** Query sessions now have an explicit `session_token` bearer capability and optional mTLS owner-identity binding, so the bare-`session_id` ownership hole is closed. The higher-level row ergonomics are also in place: `ducknng_fetch_query_table(...)` gives the one-fetch table path, `ducknng_query_rpc()` now sits on the session family, and raw session aio launchers collect through the same raw-frame async contract as the rest of RPC. Remaining work is optional isolation and any future structured async wrappers.
 3. **HTTP / HTTPS transport adapters are landed, including the raw async client slice.** The transport-family boundary is explicit in docs and code, `ducknng_start_server(...)` covers HTTP and HTTPS listeners, synchronous request/RPC/session helpers and raw RPC AIO helpers route over HTTP and HTTPS, and `ducknng_ncurl_aio(...)` / `ducknng_ncurl_aio_collect(...)` cover the raw asynchronous HTTP client contract. Remaining HTTP work is about any future web-route framework, not the framed RPC carrier.
 4. **Codec work should not be built on undocumented mapping behavior.** If the project continues using the current manual nanoarrow route, codec decisions should sit on top of explicit tested mappings rather than implicit assumptions about a future Arrow helper path.
 5. **Generic client socket TLS dialing and the supported transport matrix are documented.** Listener-side TLS, one-shot req/rep TLS, and socket-handle dialing share the same TLS-config handle model, including `wss://`; non-TLS URL schemes reject supplied TLS configuration; and `docs/transports.md` plus the README summarize which surfaces accept NNG schemes, HTTP schemes, and TLS handles.

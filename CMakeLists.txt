@@ -68,6 +68,7 @@ set(EXTENSION_SOURCES
     src/ducknng_sql_registry.c
     src/ducknng_sql_session.c
     src/ducknng_sql_body.c
+    src/ducknng_sql_arrow.c
     src/ducknng_sql_rpc.c
     src/ducknng_runtime.c
     src/ducknng_service.c

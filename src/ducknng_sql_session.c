@@ -1,8 +1,10 @@
 #include "ducknng_sql_shared.h"
 #include "ducknng_http_compat.h"
+#include "ducknng_ipc_in.h"
 #include "ducknng_ipc_out.h"
 #include "ducknng_nng_compat.h"
 #include "ducknng_runtime.h"
+#include "ducknng_sql_arrow.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include "ducknng_wire.h"
@@ -39,6 +41,42 @@ typedef struct {
 typedef struct {
     idx_t emitted;
 } ducknng_single_row_init_data;
+
+typedef struct {
+    ducknng_sql_context *ctx;
+    char *url;
+    uint64_t session_id;
+    char *session_token;
+    uint64_t batch_rows;
+    uint64_t batch_bytes;
+    uint64_t tls_config_id;
+    struct ArrowSchema schema;
+    struct ArrowArray array;
+    idx_t row_count;
+    uint64_t rebind_cache_generation;
+} ducknng_fetch_query_table_bind_data;
+
+typedef struct {
+    ducknng_fetch_query_table_bind_data *bind;
+    idx_t offset;
+} ducknng_fetch_query_table_init_data;
+
+typedef struct {
+    uint64_t generation;
+    char *url;
+    uint64_t session_id;
+    char *session_token;
+    uint64_t batch_rows;
+    uint64_t batch_bytes;
+    uint64_t tls_config_id;
+    uint8_t *payload;
+    idx_t payload_len;
+    bool end_of_stream;
+    uint64_t expires_at_ms;
+} ducknng_fetch_query_table_rebind_cache;
+
+static _Thread_local ducknng_fetch_query_table_rebind_cache ducknng_fetch_query_table_cache;
+static _Thread_local uint64_t ducknng_fetch_query_table_cache_generation;
 
 static int arg_is_null(duckdb_vector vec, idx_t row) {
     uint64_t *validity = duckdb_vector_get_validity(vec);
@@ -89,8 +127,7 @@ static int ducknng_set_table_sql_context(duckdb_table_function tf, const ducknng
     return 1;
 }
 
-static void destroy_session_result_bind_data(void *ptr) {
-    ducknng_session_result_bind_data *data = (ducknng_session_result_bind_data *)ptr;
+static void ducknng_session_result_bind_data_reset(ducknng_session_result_bind_data *data) {
     if (!data) return;
     if (data->url) duckdb_free(data->url);
     if (data->sql) duckdb_free(data->sql);
@@ -101,9 +138,149 @@ static void destroy_session_result_bind_data(void *ptr) {
     if (data->next_method) duckdb_free(data->next_method);
     if (data->control_json) duckdb_free(data->control_json);
     if (data->payload) duckdb_free(data->payload);
+    memset(data, 0, sizeof(*data));
+}
+
+static void destroy_session_result_bind_data(void *ptr) {
+    ducknng_session_result_bind_data *data = (ducknng_session_result_bind_data *)ptr;
+    if (!data) return;
+    ducknng_session_result_bind_data_reset(data);
     duckdb_free(data);
 }
 
+static void destroy_fetch_query_table_bind_data(void *ptr) {
+    ducknng_fetch_query_table_bind_data *data = (ducknng_fetch_query_table_bind_data *)ptr;
+    if (!data) return;
+    if (data->url) duckdb_free(data->url);
+    if (data->session_token) duckdb_free(data->session_token);
+    if (data->array.release) ArrowArrayRelease(&data->array);
+    if (data->schema.release) ArrowSchemaRelease(&data->schema);
+    duckdb_free(data);
+}
+
+static void destroy_fetch_query_table_init_data(void *ptr) {
+    ducknng_fetch_query_table_init_data *data = (ducknng_fetch_query_table_init_data *)ptr;
+    if (data) duckdb_free(data);
+}
+
+static void ducknng_fetch_query_table_cache_reset(void) {
+    if (ducknng_fetch_query_table_cache.url) duckdb_free(ducknng_fetch_query_table_cache.url);
+    if (ducknng_fetch_query_table_cache.session_token) duckdb_free(ducknng_fetch_query_table_cache.session_token);
+    if (ducknng_fetch_query_table_cache.payload) duckdb_free(ducknng_fetch_query_table_cache.payload);
+    memset(&ducknng_fetch_query_table_cache, 0, sizeof(ducknng_fetch_query_table_cache));
+}
+
+static int ducknng_fetch_query_table_cache_matches(
+    const ducknng_fetch_query_table_bind_data *bind) {
+    if (!bind || ducknng_fetch_query_table_cache.generation == 0 ||
+        !ducknng_fetch_query_table_cache.url ||
+        !ducknng_fetch_query_table_cache.session_token ||
+        !ducknng_fetch_query_table_cache.payload) {
+        return 0;
+    }
+    if (ducknng_fetch_query_table_cache.expires_at_ms != 0 &&
+        ducknng_now_ms() > ducknng_fetch_query_table_cache.expires_at_ms) {
+        ducknng_fetch_query_table_cache_reset();
+        return 0;
+    }
+    return ducknng_fetch_query_table_cache.session_id == bind->session_id &&
+        ducknng_fetch_query_table_cache.batch_rows == bind->batch_rows &&
+        ducknng_fetch_query_table_cache.batch_bytes == bind->batch_bytes &&
+        ducknng_fetch_query_table_cache.tls_config_id == bind->tls_config_id &&
+        strcmp(ducknng_fetch_query_table_cache.url, bind->url) == 0 &&
+        strcmp(ducknng_fetch_query_table_cache.session_token, bind->session_token) == 0;
+}
+
+static int ducknng_fetch_query_table_cache_store(
+    ducknng_fetch_query_table_bind_data *bind,
+    const ducknng_session_result_bind_data *resp) {
+    uint8_t *payload_copy = NULL;
+    char *url_copy = NULL;
+    char *token_copy = NULL;
+    if (!bind || !resp || !resp->payload) return -1;
+    if (resp->payload_len > 0) {
+        payload_copy = (uint8_t *)duckdb_malloc((size_t)resp->payload_len);
+        if (!payload_copy) return -1;
+        memcpy(payload_copy, resp->payload, (size_t)resp->payload_len);
+    }
+    url_copy = ducknng_strdup(bind->url);
+    token_copy = ducknng_strdup(bind->session_token);
+    if (!url_copy || !token_copy) {
+        if (payload_copy) duckdb_free(payload_copy);
+        if (url_copy) duckdb_free(url_copy);
+        if (token_copy) duckdb_free(token_copy);
+        return -1;
+    }
+    ducknng_fetch_query_table_cache_reset();
+    ducknng_fetch_query_table_cache_generation++;
+    if (ducknng_fetch_query_table_cache_generation == 0) ducknng_fetch_query_table_cache_generation++;
+    ducknng_fetch_query_table_cache.generation = ducknng_fetch_query_table_cache_generation;
+    ducknng_fetch_query_table_cache.url = url_copy;
+    ducknng_fetch_query_table_cache.session_id = bind->session_id;
+    ducknng_fetch_query_table_cache.session_token = token_copy;
+    ducknng_fetch_query_table_cache.batch_rows = bind->batch_rows;
+    ducknng_fetch_query_table_cache.batch_bytes = bind->batch_bytes;
+    ducknng_fetch_query_table_cache.tls_config_id = bind->tls_config_id;
+    ducknng_fetch_query_table_cache.payload = payload_copy;
+    ducknng_fetch_query_table_cache.payload_len = resp->payload_len;
+    ducknng_fetch_query_table_cache.end_of_stream = resp->end_of_stream;
+    ducknng_fetch_query_table_cache.expires_at_ms = ducknng_now_ms() + 250;
+    bind->rebind_cache_generation = ducknng_fetch_query_table_cache.generation;
+    return 0;
+}
+
+static int ducknng_fetch_query_table_cache_copy_response(
+    ducknng_fetch_query_table_bind_data *bind,
+    ducknng_session_result_bind_data *resp) {
+    uint8_t *payload_copy = NULL;
+    if (!bind || !resp || !ducknng_fetch_query_table_cache_matches(bind)) return -1;
+    if (ducknng_fetch_query_table_cache.payload_len > 0) {
+        payload_copy = (uint8_t *)duckdb_malloc((size_t)ducknng_fetch_query_table_cache.payload_len);
+        if (!payload_copy) return -1;
+        memcpy(payload_copy, ducknng_fetch_query_table_cache.payload,
+            (size_t)ducknng_fetch_query_table_cache.payload_len);
+    }
+    memset(resp, 0, sizeof(*resp));
+    resp->ok = true;
+    resp->session_id = bind->session_id;
+    resp->payload = payload_copy;
+    resp->payload_len = ducknng_fetch_query_table_cache.payload_len;
+    resp->end_of_stream = ducknng_fetch_query_table_cache.end_of_stream;
+    bind->rebind_cache_generation = ducknng_fetch_query_table_cache.generation;
+    return 0;
+}
+
+static int ducknng_fetch_query_table_result_set(ducknng_fetch_query_table_bind_data *bind,
+    ducknng_session_result_bind_data *resp, duckdb_bind_info info) {
+    char *errmsg = NULL;
+    if (!bind || !resp) return -1;
+    if (!resp->ok) {
+        duckdb_bind_set_error(info, resp->error ? resp->error : "ducknng: fetch_query_table request failed");
+        return -1;
+    }
+    if (!resp->payload) {
+        duckdb_bind_set_error(info,
+            "ducknng: fetch_query_table expected an Arrow row payload; use ducknng_fetch_query(...) for control-only session replies");
+        return -1;
+    }
+    if (ducknng_decode_ipc_table_payload(resp->payload, (size_t)resp->payload_len,
+            &bind->schema, &bind->array, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode fetch_query_table Arrow payload");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    bind->row_count = (idx_t)bind->array.length;
+    if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+        duckdb_bind_set_error(info, "ducknng: invalid fetch_query_table Arrow schema");
+        return -1;
+    }
+    if (ducknng_sql_arrow_bind_result_columns(info, &bind->schema, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported fetch_query_table Arrow type");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    return 0;
+}
 
 static char *ducknng_frame_error_detail(const ducknng_frame *frame, const char *fallback) {
     char *detail;
@@ -155,27 +332,6 @@ static char *ducknng_json_extract_string_dup(const char *json, const char *key) 
     if (len) memcpy(out, p, len);
     out[len] = '\0';
     return out;
-}
-
-static char *ducknng_session_json_request(uint64_t session_id, const char *session_token,
-    uint64_t batch_rows, uint64_t batch_bytes) {
-    char buf[320];
-    int n;
-    if (!session_token || !session_token[0]) return NULL;
-    n = snprintf(buf, sizeof(buf), "{\"session_id\":%llu,\"session_token\":\"%s\"",
-        (unsigned long long)session_id, session_token);
-    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
-    if (batch_rows > 0) {
-        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_rows\":%llu", (unsigned long long)batch_rows);
-        if ((size_t)n >= sizeof(buf)) return NULL;
-    }
-    if (batch_bytes > 0) {
-        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_bytes\":%llu", (unsigned long long)batch_bytes);
-        if ((size_t)n >= sizeof(buf)) return NULL;
-    }
-    n += snprintf(buf + n, sizeof(buf) - (size_t)n, "}");
-    if ((size_t)n >= sizeof(buf)) return NULL;
-    return ducknng_strdup(buf);
 }
 
 static nng_msg *ducknng_client_method_request(const char *method_name, const void *payload,
@@ -694,7 +850,7 @@ static void ducknng_session_result_init(duckdb_init_info info) {
                 }
             }
         } else {
-            json = ducknng_session_json_request(bind->session_id, bind->session_token, bind->batch_rows, bind->batch_bytes);
+            json = ducknng_session_request_json(bind->session_id, bind->session_token, bind->batch_rows, bind->batch_bytes);
             if (!json) {
                 bind->error = ducknng_strdup("ducknng: failed to build session request payload");
             } else {
@@ -780,6 +936,118 @@ static void ducknng_fetch_query_scan(duckdb_function_info info, duckdb_data_chun
     end_of_stream[0] = bind->end_of_stream;
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;
+}
+
+static void ducknng_fetch_query_table_bind(duckdb_bind_info info) {
+    ducknng_fetch_query_table_bind_data *bind;
+    ducknng_session_result_bind_data resp;
+    char *json = NULL;
+    duckdb_value url_val;
+    duckdb_value session_val;
+    duckdb_value token_val;
+    duckdb_value batch_rows_val;
+    duckdb_value batch_bytes_val;
+    duckdb_value tls_val;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
+    bind = (ducknng_fetch_query_table_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bind, 0, sizeof(*bind));
+    memset(&resp, 0, sizeof(resp));
+    bind->ctx = ctx;
+    url_val = duckdb_bind_get_parameter(info, 0);
+    session_val = duckdb_bind_get_parameter(info, 1);
+    token_val = duckdb_bind_get_parameter(info, 2);
+    batch_rows_val = duckdb_bind_get_parameter(info, 3);
+    batch_bytes_val = duckdb_bind_get_parameter(info, 4);
+    tls_val = duckdb_bind_get_parameter(info, 5);
+    bind->url = duckdb_get_varchar(url_val);
+    bind->session_id = (uint64_t)duckdb_get_uint64(session_val);
+    bind->session_token = duckdb_get_varchar(token_val);
+    bind->batch_rows = (uint64_t)duckdb_get_uint64(batch_rows_val);
+    bind->batch_bytes = (uint64_t)duckdb_get_uint64(batch_bytes_val);
+    bind->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    duckdb_destroy_value(&url_val);
+    duckdb_destroy_value(&session_val);
+    duckdb_destroy_value(&token_val);
+    duckdb_destroy_value(&batch_rows_val);
+    duckdb_destroy_value(&batch_bytes_val);
+    duckdb_destroy_value(&tls_val);
+    if (!bind->url || !bind->url[0] || bind->session_id == 0 ||
+        !bind->session_token || !bind->session_token[0]) {
+        destroy_fetch_query_table_bind_data(bind);
+        duckdb_bind_set_error(info, "ducknng: fetch_query_table requires non-empty url, session_id, and session_token");
+        return;
+    }
+    json = ducknng_session_request_json(bind->session_id, bind->session_token,
+        bind->batch_rows, bind->batch_bytes);
+    if (!json) {
+        destroy_fetch_query_table_bind_data(bind);
+        duckdb_bind_set_error(info, "ducknng: failed to build fetch_query_table request payload");
+        return;
+    }
+    if (ducknng_fetch_query_table_cache_copy_response(bind, &resp) != 0) {
+        ducknng_session_bind_common(&resp, bind->ctx, bind->url, "fetch",
+            (const uint8_t *)json, strlen(json), bind->tls_config_id, bind->session_id, 0);
+        if (resp.ok && resp.payload &&
+            ducknng_fetch_query_table_cache_store(bind, &resp) != 0) {
+            resp.ok = false;
+            if (!resp.error) resp.error = ducknng_strdup("ducknng: out of memory caching fetch_query_table payload");
+        }
+    }
+    duckdb_free(json);
+    json = NULL;
+    if (ducknng_fetch_query_table_result_set(bind, &resp, info) != 0) {
+        ducknng_session_result_bind_data_reset(&resp);
+        destroy_fetch_query_table_bind_data(bind);
+        return;
+    }
+    ducknng_session_result_bind_data_reset(&resp);
+    duckdb_bind_set_bind_data(info, bind, destroy_fetch_query_table_bind_data);
+    duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+static void ducknng_fetch_query_table_init(duckdb_init_info info) {
+    ducknng_fetch_query_table_bind_data *bind =
+        (ducknng_fetch_query_table_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_fetch_query_table_init_data *init =
+        (ducknng_fetch_query_table_init_data *)duckdb_malloc(sizeof(*init));
+    if (!bind) {
+        duckdb_init_set_error(info, "ducknng: missing fetch_query_table bind data");
+        return;
+    }
+    if (!init) {
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    if (bind->rebind_cache_generation != 0 &&
+        ducknng_fetch_query_table_cache.generation == bind->rebind_cache_generation) {
+        ducknng_fetch_query_table_cache_reset();
+    }
+    init->bind = bind;
+    init->offset = 0;
+    duckdb_init_set_max_threads(info, 1);
+    duckdb_init_set_init_data(info, init, destroy_fetch_query_table_init_data);
+}
+
+static void ducknng_fetch_query_table_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_fetch_query_table_init_data *init =
+        (ducknng_fetch_query_table_init_data *)duckdb_function_get_init_data(info);
+    ducknng_fetch_query_table_bind_data *bind;
+    char *errmsg = NULL;
+    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    bind = init->bind;
+    if (ducknng_sql_arrow_scan_table(output, &bind->schema, &bind->array,
+            bind->row_count, &init->offset, &errmsg) != 0) {
+        duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode fetch_query_table Arrow payload");
+        if (errmsg) duckdb_free(errmsg);
+    }
 }
 
 
@@ -871,11 +1139,42 @@ static int register_fetch_query_table_named(duckdb_connection con, ducknng_sql_c
     return 1;
 }
 
+static int register_fetch_query_table_rows_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
+    duckdb_table_function tf;
+    duckdb_logical_type type_varchar;
+    duckdb_logical_type type_u64;
+    if (!ctx || !ctx->rt) return 0;
+    tf = duckdb_create_table_function();
+    if (!tf) return 0;
+    duckdb_table_function_set_name(tf, name);
+    type_varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    type_u64 = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_table_function_add_parameter(tf, type_varchar);
+    duckdb_table_function_add_parameter(tf, type_u64);
+    duckdb_table_function_add_parameter(tf, type_varchar);
+    duckdb_table_function_add_parameter(tf, type_u64);
+    duckdb_table_function_add_parameter(tf, type_u64);
+    duckdb_table_function_add_parameter(tf, type_u64);
+    duckdb_destroy_logical_type(&type_varchar);
+    duckdb_destroy_logical_type(&type_u64);
+    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
+    duckdb_table_function_set_bind(tf, ducknng_fetch_query_table_bind);
+    duckdb_table_function_set_init(tf, ducknng_fetch_query_table_init);
+    duckdb_table_function_set_function(tf, ducknng_fetch_query_table_scan);
+    if (duckdb_register_table_function(con, tf) == DuckDBError) {
+        duckdb_destroy_table_function(&tf);
+        return 0;
+    }
+    duckdb_destroy_table_function(&tf);
+    return 1;
+}
+
 
 
 int ducknng_register_sql_session(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!register_open_query_table_named(con, ctx, "ducknng_open_query")) return 0;
     if (!register_fetch_query_table_named(con, ctx, "ducknng_fetch_query")) return 0;
+    if (!register_fetch_query_table_rows_named(con, ctx, "ducknng_fetch_query_table")) return 0;
     if (!register_session_control_table_named(con, ctx, "ducknng_close_query", ducknng_close_query_bind)) return 0;
     if (!register_session_control_table_named(con, ctx, "ducknng_cancel_query", ducknng_cancel_query_bind)) return 0;
     return 1;

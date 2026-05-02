@@ -885,10 +885,9 @@ SELECT getvariable('session_id') AS opened_session_id,
        idle_timeout_ms AS effective_idle_timeout_ms
 FROM session_open;
 
--- The first fetch returns one Arrow IPC batch in payload.
-CREATE TEMP TABLE session_fetch AS
+-- Use the table helper when you want one fetch batch decoded directly as rows.
 SELECT *
-FROM ducknng_fetch_query(
+FROM ducknng_fetch_query_table(
   'ipc:///tmp/ducknng_sql_session_demo.ipc', -- url
   getvariable('session_id')::UBIGINT,        -- session_id returned by open_query
   getvariable('session_token')::VARCHAR,     -- session_token returned by open_query
@@ -897,23 +896,9 @@ FROM ducknng_fetch_query(
   0::UBIGINT                                 -- tls_config_id
 );
 
-SELECT ok, session_id, state IS NULL AS state_is_null, octet_length(payload) > 0 AS has_payload, end_of_stream
-FROM session_fetch;
-
--- Decode that Arrow IPC fetch payload through the body codec table path.
--- DuckDB table-function arguments cannot contain subqueries, so keep the
--- payload in a variable before passing it to ducknng_parse_body().
-SET VARIABLE session_fetch_payload = (SELECT payload FROM session_fetch);
-
-SELECT *
-FROM ducknng_parse_body(
-  getvariable('session_fetch_payload')::BLOB,
-  'application/vnd.apache.arrow.stream'
-);
-
-DROP TABLE session_fetch;
-
--- The second fetch returns JSON control metadata saying the session is exhausted.
+-- The raw fetch helper still exposes control_json, payload, and end_of_stream
+-- explicitly. After the table helper consumes the first batch, the next fetch
+-- is already the exhausted control reply.
 SELECT ok, session_id, state, payload IS NULL AS no_payload, end_of_stream
 FROM ducknng_fetch_query(
   'ipc:///tmp/ducknng_sql_session_demo.ipc', -- url
@@ -935,6 +920,146 @@ FROM ducknng_close_query(
 
 -- Stop the demo listener after the session is closed.
 SELECT ducknng_stop_server('sql_session_demo');
+```
+
+### Launch the session lifecycle asynchronously and collect raw frames
+
+```{sql eval=TRUE, collapse=FALSE, comment=""}
+-- Start a listener for the async session lifecycle demo.
+SELECT ducknng_start_server(
+  'sql_session_aio_demo',
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  1,
+  134217728,
+  300000,
+  0
+);
+
+-- Launch query_open asynchronously and collect the raw reply frame.
+SET VARIABLE session_open_aio = ducknng_open_query_raw_aio(
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  'SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id',
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+);
+
+CREATE TEMP TABLE session_open_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect(list_value(getvariable('session_open_aio')::UBIGINT), 1000);
+
+SET VARIABLE session_open_frame = (
+  SELECT frame FROM session_open_aio_collect
+);
+
+SELECT ok, type_name, name, position('"session_id":' IN payload_text) > 0 AS has_session_id
+FROM ducknng_decode_frame(getvariable('session_open_frame')::BLOB);
+
+SET VARIABLE session_aio_id = (
+  SELECT json_extract(payload_text::JSON, '$.session_id')::UBIGINT
+  FROM ducknng_decode_frame(getvariable('session_open_frame')::BLOB)
+);
+
+SET VARIABLE session_aio_token = (
+  SELECT json_extract_string(payload_text::JSON, '$.session_token')
+  FROM ducknng_decode_frame(getvariable('session_open_frame')::BLOB)
+);
+
+SELECT ducknng_aio_drop(getvariable('session_open_aio')::UBIGINT) AS dropped_open_aio;
+DROP TABLE session_open_aio_collect;
+
+-- Launch fetch asynchronously and decode the collected raw frame explicitly.
+SET VARIABLE session_fetch_aio = ducknng_fetch_query_raw_aio(
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  getvariable('session_aio_id')::UBIGINT,
+  getvariable('session_aio_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+);
+
+CREATE TEMP TABLE session_fetch_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect(list_value(getvariable('session_fetch_aio')::UBIGINT), 1000);
+
+SET VARIABLE session_fetch_frame = (
+  SELECT frame FROM session_fetch_aio_collect
+);
+
+SELECT ok, type_name, name, octet_length(payload) > 0 AS has_payload
+FROM ducknng_decode_frame(getvariable('session_fetch_frame')::BLOB);
+
+SELECT ducknng_aio_drop(getvariable('session_fetch_aio')::UBIGINT) AS dropped_fetch_aio;
+DROP TABLE session_fetch_aio_collect;
+
+-- Launch close asynchronously and decode the control reply frame.
+SET VARIABLE session_close_aio = ducknng_close_query_raw_aio(
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  getvariable('session_aio_id')::UBIGINT,
+  getvariable('session_aio_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+);
+
+CREATE TEMP TABLE session_close_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect(list_value(getvariable('session_close_aio')::UBIGINT), 1000);
+
+SET VARIABLE session_close_frame = (
+  SELECT frame FROM session_close_aio_collect
+);
+
+SELECT ok, type_name, name, position('"state":"closed"' IN payload_text) > 0 AS is_closed
+FROM ducknng_decode_frame(getvariable('session_close_frame')::BLOB);
+
+SELECT ducknng_aio_drop(getvariable('session_close_aio')::UBIGINT) AS dropped_close_aio;
+DROP TABLE session_close_aio_collect;
+
+-- Open another session so the cancel aio helper has a live target.
+CREATE TEMP TABLE session_cancel_open AS
+SELECT *
+FROM ducknng_open_query(
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  'SELECT 99 AS id',
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+);
+
+SET VARIABLE session_cancel_id = (
+  SELECT session_id FROM session_cancel_open
+);
+
+SET VARIABLE session_cancel_token = (
+  SELECT session_token FROM session_cancel_open
+);
+
+SET VARIABLE session_cancel_aio = ducknng_cancel_query_raw_aio(
+  'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
+  getvariable('session_cancel_id')::UBIGINT,
+  getvariable('session_cancel_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+);
+
+CREATE TEMP TABLE session_cancel_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect(list_value(getvariable('session_cancel_aio')::UBIGINT), 1000);
+
+SET VARIABLE session_cancel_frame = (
+  SELECT frame FROM session_cancel_aio_collect
+);
+
+SELECT ok, type_name, name, position('"state":"cancelled"' IN payload_text) > 0 AS is_cancelled
+FROM ducknng_decode_frame(getvariable('session_cancel_frame')::BLOB);
+
+SELECT ducknng_aio_drop(getvariable('session_cancel_aio')::UBIGINT) AS dropped_cancel_aio;
+DROP TABLE session_cancel_open;
+DROP TABLE session_cancel_aio_collect;
+
+SELECT ducknng_stop_server('sql_session_aio_demo');
 ```
 
 ### `tls+tcp://` with a self-signed development TLS config

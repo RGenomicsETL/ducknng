@@ -5,6 +5,7 @@
 #include "ducknng_manifest.h"
 #include "ducknng_nng_compat.h"
 #include "ducknng_runtime.h"
+#include "ducknng_sql_arrow.h"
 #include "ducknng_transport.h"
 #include "ducknng_service.h"
 #include "ducknng_sql_shared.h"
@@ -26,6 +27,14 @@ static int ducknng_lookup_tls_config_copy(ducknng_sql_context *ctx, uint64_t tls
     uint64_t *out_id, char **out_source, ducknng_tls_opts *out_opts, char **errmsg);
 
 typedef struct {
+    ducknng_sql_context *ctx;
+    char *url;
+    uint64_t tls_config_id;
+    uint64_t session_id;
+    char *session_token;
+    int session_open;
+    int close_attempted;
+    int end_of_stream;
     struct ArrowSchema schema;
     struct ArrowArray array;
     idx_t row_count;
@@ -248,11 +257,57 @@ static char *ducknng_normalize_media_type(const char *content_type) {
     return out;
 }
 
+static const char *ducknng_json_find_key(const char *json, const char *key) {
+    char needle[128];
+    const char *p;
+    if (!json || !key) return NULL;
+    if (snprintf(needle, sizeof(needle), "\"%s\"", key) >= (int)sizeof(needle)) return NULL;
+    p = strstr(json, needle);
+    if (!p) return NULL;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return NULL;
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+static int ducknng_json_extract_u64_value(const char *json, const char *key, uint64_t *out) {
+    const char *p = ducknng_json_find_key(json, key);
+    char *end = NULL;
+    if (out) *out = 0;
+    if (!p || !out) return -1;
+    if (*p == '"') p++;
+    *out = (uint64_t)strtoull(p, &end, 10);
+    return end == p ? -1 : 0;
+}
+
+static char *ducknng_json_extract_string_dup(const char *json, const char *key) {
+    const char *p = ducknng_json_find_key(json, key);
+    const char *end;
+    char *out;
+    size_t len;
+    if (!p || *p != '"') return NULL;
+    p++;
+    end = strchr(p, '"');
+    if (!end) return NULL;
+    len = (size_t)(end - p);
+    out = (char *)duckdb_malloc(len + 1);
+    if (!out) return NULL;
+    if (len) memcpy(out, p, len);
+    out[len] = '\0';
+    return out;
+}
+
+static void ducknng_query_rpc_reset_result(ducknng_query_rpc_bind_data *bind);
+static int ducknng_query_rpc_close_session(ducknng_query_rpc_bind_data *bind);
+
 static void destroy_query_rpc_bind_data(void *ptr) {
     ducknng_query_rpc_bind_data *data = (ducknng_query_rpc_bind_data *)ptr;
     if (!data) return;
-    if (data->array.release) ArrowArrayRelease(&data->array);
-    if (data->schema.release) ArrowSchemaRelease(&data->schema);
+    (void)ducknng_query_rpc_close_session(data);
+    ducknng_query_rpc_reset_result(data);
+    if (data->url) duckdb_free(data->url);
+    if (data->session_token) duckdb_free(data->session_token);
     duckdb_free(data);
 }
 
@@ -765,6 +820,176 @@ static int ducknng_lookup_tls_opts(ducknng_sql_context *ctx, uint64_t tls_config
     return 0;
 }
 
+static nng_msg *ducknng_client_method_request(const char *method_name, const void *payload,
+    size_t payload_len, char **errmsg) {
+    nng_msg *msg = ducknng_build_reply(DUCKNNG_RPC_CALL, method_name, 0, NULL,
+        payload, (uint64_t)payload_len);
+    if (!msg && errmsg && !*errmsg) {
+        *errmsg = ducknng_strdup("ducknng: failed to allocate RPC request message");
+    }
+    return msg;
+}
+
+static nng_msg *ducknng_client_method_roundtrip_tls(const char *url, const char *method_name,
+    const void *payload, size_t payload_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    char **errmsg) {
+    nng_msg *req = ducknng_client_method_request(method_name, payload, payload_len, errmsg);
+    if (!req) return NULL;
+    return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg);
+}
+
+static void ducknng_query_rpc_reset_result(ducknng_query_rpc_bind_data *bind) {
+    if (!bind) return;
+    if (bind->array.release) ArrowArrayRelease(&bind->array);
+    if (bind->schema.release) ArrowSchemaRelease(&bind->schema);
+    memset(&bind->array, 0, sizeof(bind->array));
+    memset(&bind->schema, 0, sizeof(bind->schema));
+    bind->row_count = 0;
+}
+
+static int ducknng_query_rpc_open_session(ducknng_query_rpc_bind_data *bind, const char *sql,
+    char **errmsg) {
+    const ducknng_tls_opts *tls_opts = NULL;
+    uint8_t *payload = NULL;
+    size_t payload_len = 0;
+    nng_msg *resp_msg = NULL;
+    ducknng_frame frame;
+    char *json = NULL;
+    uint64_t session_id = 0;
+    char *session_token = NULL;
+    int rc = -1;
+    if (!bind || !bind->ctx || !bind->url || !sql || !sql[0]) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: query_rpc requires non-empty url and sql");
+        return -1;
+    }
+    if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, errmsg) != 0) goto cleanup;
+    if (ducknng_query_open_request_to_ipc(sql, 0, 0, &payload, &payload_len, errmsg) != 0) goto cleanup;
+    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "query_open", payload, payload_len,
+        5000, tls_opts, errmsg);
+    if (!resp_msg) goto cleanup;
+    if (ducknng_decode_request(resp_msg, &frame) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid query_open response envelope");
+        goto cleanup;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: query_open failed");
+        goto cleanup;
+    }
+    if (frame.type != DUCKNNG_RPC_RESULT || !(frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_JSON)) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: query_open did not return a JSON control reply");
+        goto cleanup;
+    }
+    json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
+    if (!json) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying query_open reply");
+        goto cleanup;
+    }
+    if (ducknng_json_extract_u64_value(json, "session_id", &session_id) != 0 || session_id == 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: query_open reply did not include session_id");
+        goto cleanup;
+    }
+    session_token = ducknng_json_extract_string_dup(json, "session_token");
+    if (!session_token || !session_token[0]) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: query_open reply did not include session_token");
+        goto cleanup;
+    }
+    if (bind->session_token) duckdb_free(bind->session_token);
+    bind->session_id = session_id;
+    bind->session_token = session_token;
+    bind->session_open = 1;
+    bind->close_attempted = 0;
+    session_token = NULL;
+    rc = 0;
+cleanup:
+    if (session_token) duckdb_free(session_token);
+    if (json) duckdb_free(json);
+    if (resp_msg) nng_msg_free(resp_msg);
+    if (payload) duckdb_free(payload);
+    return rc;
+}
+
+static int ducknng_query_rpc_fetch_batch(ducknng_query_rpc_bind_data *bind, char **errmsg) {
+    const ducknng_tls_opts *tls_opts = NULL;
+    char *json = NULL;
+    nng_msg *resp_msg = NULL;
+    ducknng_frame frame;
+    int rc = -1;
+    if (!bind || !bind->ctx || !bind->url || bind->session_id == 0 ||
+        !bind->session_token || !bind->session_token[0]) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing query_rpc session state");
+        return -1;
+    }
+    if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, errmsg) != 0) goto cleanup;
+    json = ducknng_session_request_json(bind->session_id, bind->session_token, 0, 0);
+    if (!json) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: failed to build fetch request payload");
+        goto cleanup;
+    }
+    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "fetch", json, strlen(json),
+        5000, tls_opts, errmsg);
+    if (!resp_msg) goto cleanup;
+    if (ducknng_decode_request(resp_msg, &frame) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid fetch response envelope");
+        goto cleanup;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: fetch failed");
+        goto cleanup;
+    }
+    ducknng_query_rpc_reset_result(bind);
+    bind->end_of_stream = (frame.flags & DUCKNNG_RPC_FLAG_END_OF_STREAM) != 0;
+    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) &&
+        (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
+        if (ducknng_decode_ipc_table_payload(frame.payload, (size_t)frame.payload_len,
+                &bind->schema, &bind->array, errmsg) != 0) {
+            goto cleanup;
+        }
+        bind->row_count = (idx_t)bind->array.length;
+        if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+            ducknng_query_rpc_reset_result(bind);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid fetch Arrow row schema");
+            goto cleanup;
+        }
+        rc = 0;
+        goto cleanup;
+    }
+    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_JSON) && bind->end_of_stream) {
+        rc = 0;
+        goto cleanup;
+    }
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: fetch returned an unexpected reply shape");
+cleanup:
+    if (resp_msg) nng_msg_free(resp_msg);
+    if (json) duckdb_free(json);
+    return rc;
+}
+
+static int ducknng_query_rpc_close_session(ducknng_query_rpc_bind_data *bind) {
+    const ducknng_tls_opts *tls_opts = NULL;
+    char *errmsg = NULL;
+    char *json = NULL;
+    nng_msg *resp_msg = NULL;
+    if (!bind || bind->close_attempted) return 0;
+    bind->close_attempted = 1;
+    if (!bind->session_open || !bind->ctx || !bind->url || bind->session_id == 0 ||
+        !bind->session_token || !bind->session_token[0]) {
+        bind->session_open = 0;
+        return 0;
+    }
+    if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, &errmsg) == 0) {
+        json = ducknng_session_request_json(bind->session_id, bind->session_token, 0, 0);
+        if (json) {
+            resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "close", json, strlen(json),
+                5000, tls_opts, &errmsg);
+        }
+    }
+    bind->session_open = 0;
+    if (resp_msg) nng_msg_free(resp_msg);
+    if (json) duckdb_free(json);
+    if (errmsg) duckdb_free(errmsg);
+    return 0;
+}
+
 static void ducknng_get_rpc_manifest_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
@@ -936,509 +1161,13 @@ static void ducknng_request_socket_scalar(duckdb_function_info info, duckdb_data
     }
 }
 
-static int ducknng_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
-    duckdb_logical_type *out_type, char **errmsg) {
-    struct ArrowSchemaView schema_view;
-    struct ArrowError error;
-    memset(&schema_view, 0, sizeof(schema_view));
-    memset(&error, 0, sizeof(error));
-    if (!schema || !out_type) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing Arrow schema for remote table binding");
-        return -1;
-    }
-    if (ArrowSchemaViewInit(&schema_view, schema, &error) != NANOARROW_OK) {
-        if (errmsg) *errmsg = ducknng_strdup(error.message);
-        return -1;
-    }
-    switch (schema_view.type) {
-        case NANOARROW_TYPE_BOOL:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-            return 0;
-        case NANOARROW_TYPE_INT8:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TINYINT);
-            return 0;
-        case NANOARROW_TYPE_INT16:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_SMALLINT);
-            return 0;
-        case NANOARROW_TYPE_INT32:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-            return 0;
-        case NANOARROW_TYPE_INT64:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_BIGINT);
-            return 0;
-        case NANOARROW_TYPE_UINT8:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_UTINYINT);
-            return 0;
-        case NANOARROW_TYPE_UINT16:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_USMALLINT);
-            return 0;
-        case NANOARROW_TYPE_UINT32:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
-            return 0;
-        case NANOARROW_TYPE_UINT64:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-            return 0;
-        case NANOARROW_TYPE_FLOAT:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_FLOAT);
-            return 0;
-        case NANOARROW_TYPE_DOUBLE:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_DOUBLE);
-            return 0;
-        case NANOARROW_TYPE_STRING:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-            return 0;
-        case NANOARROW_TYPE_BINARY:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-            return 0;
-        case NANOARROW_TYPE_DATE32:
-        case NANOARROW_TYPE_DATE64:
-            *out_type = duckdb_create_logical_type(DUCKDB_TYPE_DATE);
-            return 0;
-        case NANOARROW_TYPE_TIME32:
-        case NANOARROW_TYPE_TIME64:
-            *out_type = duckdb_create_logical_type(schema_view.time_unit == NANOARROW_TIME_UNIT_NANO ? DUCKDB_TYPE_TIME_NS : DUCKDB_TYPE_TIME);
-            return 0;
-        case NANOARROW_TYPE_TIMESTAMP:
-            if (schema_view.timezone && schema_view.timezone[0]) {
-                /* Arrow timestamps with a timezone are received as DuckDB TIMESTAMP_TZ.
-                 * The micros field maps directly; the contract emits "UTC" but accepts
-                 * any tz string and treats the values as UTC-normalized micros. */
-                *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP_TZ);
-                return *out_type ? 0 : -1;
-            }
-            if (schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND) *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP_S);
-            else if (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI) *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP_MS);
-            else if (schema_view.time_unit == NANOARROW_TIME_UNIT_NANO) *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP_NS);
-            else *out_type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP);
-            return 0;
-        case NANOARROW_TYPE_DECIMAL32:
-        case NANOARROW_TYPE_DECIMAL64:
-        case NANOARROW_TYPE_DECIMAL128:
-            *out_type = duckdb_create_decimal_type((uint8_t)schema_view.decimal_precision, (uint8_t)schema_view.decimal_scale);
-            return *out_type ? 0 : -1;
-        case NANOARROW_TYPE_LIST:
-        case NANOARROW_TYPE_LARGE_LIST: {
-            duckdb_logical_type child_type = NULL;
-            int ok;
-            if (!schema->children || !schema->children[0]) return -1;
-            ok = ducknng_arrow_schema_to_logical_type(schema->children[0], &child_type, errmsg) == 0 && child_type;
-            if (ok) *out_type = duckdb_create_list_type(child_type);
-            if (child_type) duckdb_destroy_logical_type(&child_type);
-            return ok && *out_type ? 0 : -1;
-        }
-        case NANOARROW_TYPE_MAP: {
-            duckdb_logical_type key_type = NULL;
-            duckdb_logical_type value_type = NULL;
-            int ok;
-            if (!schema->children || !schema->children[0] || !schema->children[0]->children ||
-                !schema->children[0]->children[0] || !schema->children[0]->children[1]) return -1;
-            ok = ducknng_arrow_schema_to_logical_type(schema->children[0]->children[0], &key_type, errmsg) == 0 && key_type &&
-                 ducknng_arrow_schema_to_logical_type(schema->children[0]->children[1], &value_type, errmsg) == 0 && value_type;
-            if (ok) *out_type = duckdb_create_map_type(key_type, value_type);
-            if (key_type) duckdb_destroy_logical_type(&key_type);
-            if (value_type) duckdb_destroy_logical_type(&value_type);
-            return ok && *out_type ? 0 : -1;
-        }
-        case NANOARROW_TYPE_STRUCT: {
-            idx_t nchildren = (idx_t)schema->n_children;
-            duckdb_logical_type *child_types = NULL;
-            const char **child_names = NULL;
-            idx_t i;
-            int ok = 1;
-            if (nchildren > 0) {
-                child_types = (duckdb_logical_type *)duckdb_malloc(sizeof(*child_types) * (size_t)nchildren);
-                child_names = (const char **)duckdb_malloc(sizeof(*child_names) * (size_t)nchildren);
-                if (!child_types || !child_names) ok = 0;
-                if (child_types) memset(child_types, 0, sizeof(*child_types) * (size_t)nchildren);
-                if (child_names) memset(child_names, 0, sizeof(*child_names) * (size_t)nchildren);
-            }
-            for (i = 0; ok && i < nchildren; i++) {
-                child_names[i] = schema->children[i] && schema->children[i]->name ? schema->children[i]->name : "";
-                ok = schema->children[i] && ducknng_arrow_schema_to_logical_type(schema->children[i], &child_types[i], errmsg) == 0;
-            }
-            if (ok) *out_type = duckdb_create_struct_type(child_types, child_names, nchildren);
-            ok = ok && *out_type;
-            if (child_types) {
-                for (i = 0; i < nchildren; i++) if (child_types[i]) duckdb_destroy_logical_type(&child_types[i]);
-                duckdb_free(child_types);
-            }
-            if (child_names) duckdb_free(child_names);
-            return ok ? 0 : -1;
-        }
-        default:
-            if (errmsg) *errmsg = ducknng_strdup(
-                "ducknng: remote unary row replies currently support BOOLEAN, numeric/date/time/timestamp/decimal scalars, VARCHAR, BLOB, LIST, MAP, and STRUCT (DENSE_UNION/SPARSE_UNION schemas are emitted but not yet decoded into DuckDB column vectors)");
-            return -1;
-    }
-}
-
-static int64_t ducknng_floor_div_i64(int64_t value, int64_t divisor) {
-    int64_t q = value / divisor;
-    int64_t r = value % divisor;
-    return (r != 0 && ((r < 0) != (divisor < 0))) ? q - 1 : q;
-}
-
-static int ducknng_query_rpc_assign_column_at(duckdb_vector vec, struct ArrowArrayView *col_view,
-    const struct ArrowSchema *col_schema, idx_t src_offset, idx_t dst_offset, idx_t count, char **errmsg);
-
-static int ducknng_query_rpc_set_nested_null(duckdb_vector vec, const struct ArrowSchema *schema, idx_t index) {
-    struct ArrowSchemaView schema_view;
-    struct ArrowError error;
-    idx_t child;
-    memset(&schema_view, 0, sizeof(schema_view));
-    memset(&error, 0, sizeof(error));
-    set_null(vec, index);
-    if (!schema || ArrowSchemaViewInit(&schema_view, schema, &error) != NANOARROW_OK) return 0;
-    if (schema_view.type == NANOARROW_TYPE_STRUCT) {
-        for (child = 0; child < (idx_t)schema->n_children; child++) {
-            duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
-            (void)ducknng_query_rpc_set_nested_null(child_vec, schema->children[child], index);
-        }
-    } else if (schema_view.type == NANOARROW_TYPE_LIST || schema_view.type == NANOARROW_TYPE_LARGE_LIST) {
-        duckdb_list_entry *entries = (duckdb_list_entry *)duckdb_vector_get_data(vec);
-        entries[index].offset = duckdb_list_vector_get_size(vec);
-        entries[index].length = 0;
-    }
-    return 0;
-}
-
-static int ducknng_assign_arrow_decimal(duckdb_vector vec, idx_t dst_index,
-    const struct ArrowSchemaView *schema_view, const struct ArrowArrayView *col_view, int64_t src_index) {
-    duckdb_logical_type logical_type = duckdb_vector_get_column_type(vec);
-    duckdb_type internal_type;
-    struct ArrowDecimal decimal;
-    if (!logical_type) return -1;
-    internal_type = duckdb_decimal_internal_type(logical_type);
-    duckdb_destroy_logical_type(&logical_type);
-    ArrowDecimalInit(&decimal, schema_view->decimal_bitwidth, schema_view->decimal_precision, schema_view->decimal_scale);
-    ArrowArrayViewGetDecimalUnsafe(col_view, src_index, &decimal);
-    switch (internal_type) {
-        case DUCKDB_TYPE_SMALLINT:
-            ((int16_t *)duckdb_vector_get_data(vec))[dst_index] = (int16_t)ArrowDecimalGetIntUnsafe(&decimal);
-            return 0;
-        case DUCKDB_TYPE_INTEGER:
-            ((int32_t *)duckdb_vector_get_data(vec))[dst_index] = (int32_t)ArrowDecimalGetIntUnsafe(&decimal);
-            return 0;
-        case DUCKDB_TYPE_BIGINT:
-            ((int64_t *)duckdb_vector_get_data(vec))[dst_index] = (int64_t)ArrowDecimalGetIntUnsafe(&decimal);
-            return 0;
-        case DUCKDB_TYPE_HUGEINT: {
-            duckdb_hugeint value;
-            value.lower = decimal.words[decimal.low_word_index];
-            value.upper = (int64_t)decimal.words[decimal.high_word_index];
-            ((duckdb_hugeint *)duckdb_vector_get_data(vec))[dst_index] = value;
-            return 0;
-        }
-        default:
-            return -1;
-    }
-}
-
-static int ducknng_query_rpc_assign_column_at(duckdb_vector vec, struct ArrowArrayView *col_view,
-    const struct ArrowSchema *col_schema, idx_t src_offset, idx_t dst_offset, idx_t count, char **errmsg) {
-    struct ArrowSchemaView schema_view;
-    struct ArrowError error;
-    idx_t i;
-    memset(&schema_view, 0, sizeof(schema_view));
-    memset(&error, 0, sizeof(error));
-    if (ArrowSchemaViewInit(&schema_view, col_schema, &error) != NANOARROW_OK) {
-        if (errmsg) *errmsg = ducknng_strdup(error.message);
-        return -1;
-    }
-    switch (schema_view.type) {
-        case NANOARROW_TYPE_BOOL: {
-            bool *out = (bool *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = ArrowArrayViewGetIntUnsafe(col_view, src_offset + i) != 0;
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_INT8: {
-            int8_t *out = (int8_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (int8_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_INT16: {
-            int16_t *out = (int16_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (int16_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_INT32: {
-            int32_t *out = (int32_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (int32_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_INT64: {
-            int64_t *out = (int64_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_UINT8: {
-            uint8_t *out = (uint8_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (uint8_t)ArrowArrayViewGetUIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_UINT16: {
-            uint16_t *out = (uint16_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (uint16_t)ArrowArrayViewGetUIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_UINT32: {
-            uint32_t *out = (uint32_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (uint32_t)ArrowArrayViewGetUIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_UINT64: {
-            uint64_t *out = (uint64_t *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (uint64_t)ArrowArrayViewGetUIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_FLOAT: {
-            float *out = (float *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = (float)ArrowArrayViewGetDoubleUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_DOUBLE: {
-            double *out = (double *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst] = ArrowArrayViewGetDoubleUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_STRING: {
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                struct ArrowStringView value;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else {
-                    value = ArrowArrayViewGetStringUnsafe(col_view, src_offset + i);
-                    duckdb_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
-                }
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_BINARY: {
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                struct ArrowBufferView value;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else {
-                    value = ArrowArrayViewGetBytesUnsafe(col_view, src_offset + i);
-                    assign_blob(vec, dst, value.data.data, (idx_t)value.size_bytes);
-                }
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_DATE32: {
-            duckdb_date *out = (duckdb_date *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst].days = (int32_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_DATE64: {
-            duckdb_date *out = (duckdb_date *)duckdb_vector_get_data(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else out[dst].days = (int32_t)ducknng_floor_div_i64(ArrowArrayViewGetIntUnsafe(col_view, src_offset + i), 86400000LL);
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_TIME32:
-        case NANOARROW_TYPE_TIME64: {
-            if (schema_view.time_unit == NANOARROW_TIME_UNIT_NANO) {
-                duckdb_time_ns *out = (duckdb_time_ns *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].nanos = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-                }
-            } else {
-                duckdb_time *out = (duckdb_time *)duckdb_vector_get_data(vec);
-                int64_t mul = schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND ? 1000000LL :
-                    (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI ? 1000LL : 1LL);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].micros = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i) * mul;
-                }
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_TIMESTAMP: {
-            int64_t mul = schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND ? 1000000LL :
-                (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI ? 1000LL : 1LL);
-            if (schema_view.timezone && schema_view.timezone[0]) {
-                /* TIMESTAMP_TZ stores micros in a duckdb_timestamp; the Arrow tz tag is
-                 * not surfaced in the row buffer beyond schema-level metadata. */
-                duckdb_timestamp *out = (duckdb_timestamp *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].micros = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i) * mul;
-                }
-                return 0;
-            }
-            if (schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND) {
-                duckdb_timestamp_s *out = (duckdb_timestamp_s *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].seconds = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-                }
-            } else if (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI) {
-                duckdb_timestamp_ms *out = (duckdb_timestamp_ms *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].millis = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-                }
-            } else if (schema_view.time_unit == NANOARROW_TIME_UNIT_NANO) {
-                duckdb_timestamp_ns *out = (duckdb_timestamp_ns *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].nanos = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
-                }
-            } else {
-                duckdb_timestamp *out = (duckdb_timestamp *)duckdb_vector_get_data(vec);
-                for (i = 0; i < count; i++) {
-                    idx_t dst = dst_offset + i;
-                    if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                    else out[dst].micros = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i) * mul;
-                }
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_DECIMAL32:
-        case NANOARROW_TYPE_DECIMAL64:
-        case NANOARROW_TYPE_DECIMAL128: {
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) set_null(vec, dst);
-                else if (ducknng_assign_arrow_decimal(vec, dst, &schema_view, col_view, src_offset + i) != 0) return -1;
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_LIST:
-        case NANOARROW_TYPE_LARGE_LIST:
-        case NANOARROW_TYPE_MAP: {
-            /* DuckDB MAP shares the LIST<STRUCT<key,value>> physical layout, so the
-             * same offset/length unrolling works. The Arrow MAP child schema stores
-             * the entries struct at children[0] in both Arrow and the DuckDB map
-             * backing vector. */
-            duckdb_list_entry *entries = (duckdb_list_entry *)duckdb_vector_get_data(vec);
-            duckdb_vector child_vec = duckdb_list_vector_get_child(vec);
-            idx_t child_size = duckdb_list_vector_get_size(vec);
-            for (i = 0; i < count; i++) {
-                idx_t dst = dst_offset + i;
-                int64_t list_index = (int64_t)(src_offset + i) + col_view->offset;
-                int64_t child_start = ArrowArrayViewListChildOffset(col_view, list_index);
-                int64_t child_end = ArrowArrayViewListChildOffset(col_view, list_index + 1);
-                idx_t child_len = child_end >= child_start ? (idx_t)(child_end - child_start) : 0;
-                entries[dst].offset = child_size;
-                entries[dst].length = 0;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) {
-                    set_null(vec, dst);
-                    continue;
-                }
-                if (duckdb_list_vector_reserve(vec, child_size + child_len) == DuckDBError ||
-                    duckdb_list_vector_set_size(vec, child_size + child_len) == DuckDBError) {
-                    if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to reserve DuckDB list/map child vector");
-                    return -1;
-                }
-                entries[dst].offset = child_size;
-                entries[dst].length = child_len;
-                if (child_len > 0 && ducknng_query_rpc_assign_column_at(child_vec, col_view->children[0],
-                        col_schema->children[0], (idx_t)child_start, child_size, child_len, errmsg) != 0) {
-                    return -1;
-                }
-                child_size += child_len;
-            }
-            return 0;
-        }
-        case NANOARROW_TYPE_STRUCT: {
-            idx_t nchildren = (idx_t)col_view->n_children;
-            idx_t child;
-            for (child = 0; child < nchildren; child++) {
-                duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
-                if (ducknng_query_rpc_assign_column_at(child_vec, col_view->children[child], col_schema->children[child],
-                        src_offset, dst_offset, count, errmsg) != 0) return -1;
-            }
-            for (i = 0; i < count; i++) {
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) {
-                    (void)ducknng_query_rpc_set_nested_null(vec, col_schema, dst_offset + i);
-                }
-            }
-            return 0;
-        }
-        default:
-            if (errmsg) *errmsg = ducknng_strdup("ducknng: unsupported Arrow type in remote row reply");
-            return -1;
-    }
-}
-
-static int ducknng_query_rpc_assign_column(duckdb_vector vec, struct ArrowArrayView *col_view,
-    const struct ArrowSchema *col_schema, idx_t src_offset, idx_t count, char **errmsg) {
-    return ducknng_query_rpc_assign_column_at(vec, col_view, col_schema, src_offset, 0, count, errmsg);
-}
-
 static void ducknng_query_rpc_bind(duckdb_bind_info info) {
     ducknng_query_rpc_bind_data *bind;
     duckdb_value url_val;
     duckdb_value sql_val;
     duckdb_value tls_val;
-    char *url;
     char *sql;
     char *errmsg = NULL;
-    nng_msg *resp_msg;
-    ducknng_frame frame;
-    idx_t col;
-    uint64_t tls_config_id;
-    const ducknng_tls_opts *tls_opts = NULL;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
     if (duckdb_bind_get_parameter_count(info) != 3) {
@@ -1448,83 +1177,52 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
     url_val = duckdb_bind_get_parameter(info, 0);
     sql_val = duckdb_bind_get_parameter(info, 1);
     tls_val = duckdb_bind_get_parameter(info, 2);
-    url = duckdb_get_varchar(url_val);
-    sql = duckdb_get_varchar(sql_val);
-    tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
-    duckdb_destroy_value(&url_val);
-    duckdb_destroy_value(&sql_val);
-    duckdb_destroy_value(&tls_val);
-    if (!url || !sql || !url[0] || !sql[0]) {
-        if (url) duckdb_free(url);
-        if (sql) duckdb_free(sql);
-        duckdb_bind_set_error(info, "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires non-empty url and sql");
-        return;
-    }
-    if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
-        duckdb_free(url);
-        duckdb_free(sql);
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
-        if (errmsg) duckdb_free(errmsg);
-        return;
-    }
-    resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_exec_request(sql, 1, &errmsg), 5000, tls_opts, &errmsg);
-    duckdb_free(url);
-    duckdb_free(sql);
-    if (!resp_msg) {
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: remote request failed");
-        if (errmsg) duckdb_free(errmsg);
-        return;
-    }
-    if (ducknng_decode_request(resp_msg, &frame) != 0) {
-        nng_msg_free(resp_msg);
-        duckdb_bind_set_error(info, "ducknng: invalid remote response envelope");
-        return;
-    }
-    if (frame.type == DUCKNNG_RPC_ERROR) {
-        char *detail = ducknng_frame_error_detail(&frame, "ducknng: remote request failed");
-        nng_msg_free(resp_msg);
-        duckdb_bind_set_error(info, detail ? detail : "ducknng: remote request failed");
-        if (detail) duckdb_free(detail);
-        return;
-    }
-    if (frame.type != DUCKNNG_RPC_RESULT || !(frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) ||
-        !(frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
-        nng_msg_free(resp_msg);
-        duckdb_bind_set_error(info, "ducknng: remote query did not return row payloads");
-        return;
-    }
     bind = (ducknng_query_rpc_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
-        nng_msg_free(resp_msg);
+        duckdb_destroy_value(&url_val);
+        duckdb_destroy_value(&sql_val);
+        duckdb_destroy_value(&tls_val);
         duckdb_bind_set_error(info, "ducknng: out of memory");
         return;
     }
     memset(bind, 0, sizeof(*bind));
-    if (ducknng_decode_ipc_table_payload(frame.payload, (size_t)frame.payload_len, &bind->schema, &bind->array, &errmsg) != 0) {
-        nng_msg_free(resp_msg);
-        duckdb_free(bind);
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode remote Arrow row payload");
+    bind->ctx = ctx;
+    bind->url = duckdb_get_varchar(url_val);
+    sql = duckdb_get_varchar(sql_val);
+    bind->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    duckdb_destroy_value(&url_val);
+    duckdb_destroy_value(&sql_val);
+    duckdb_destroy_value(&tls_val);
+    if (!bind->url || !sql || !bind->url[0] || !sql[0]) {
+        if (sql) duckdb_free(sql);
+        destroy_query_rpc_bind_data(bind);
+        duckdb_bind_set_error(info, "ducknng: ducknng_query_rpc(url, sql, tls_config_id) requires non-empty url and sql");
+        return;
+    }
+    if (ducknng_query_rpc_open_session(bind, sql, &errmsg) != 0) {
+        duckdb_free(sql);
+        destroy_query_rpc_bind_data(bind);
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: query_open failed");
         if (errmsg) duckdb_free(errmsg);
         return;
     }
-    nng_msg_free(resp_msg);
-    bind->row_count = (idx_t)bind->array.length;
-    if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+    duckdb_free(sql);
+    if (ducknng_query_rpc_fetch_batch(bind, &errmsg) != 0) {
         destroy_query_rpc_bind_data(bind);
-        duckdb_bind_set_error(info, "ducknng: invalid remote Arrow row schema");
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: fetch failed");
+        if (errmsg) duckdb_free(errmsg);
         return;
     }
-    for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-        duckdb_logical_type type;
-        const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-        if (ducknng_arrow_schema_to_logical_type(bind->schema.children[col], &type, &errmsg) != 0) {
-            destroy_query_rpc_bind_data(bind);
-            duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported remote Arrow type");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        duckdb_bind_add_result_column(info, name, type);
-        duckdb_destroy_logical_type(&type);
+    if (!bind->schema.release || bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+        destroy_query_rpc_bind_data(bind);
+        duckdb_bind_set_error(info, "ducknng: query_rpc could not infer result columns from the first fetch reply");
+        return;
+    }
+    if (ducknng_sql_arrow_bind_result_columns(info, &bind->schema, &errmsg) != 0) {
+        destroy_query_rpc_bind_data(bind);
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported remote Arrow type");
+        if (errmsg) duckdb_free(errmsg);
+        return;
     }
     duckdb_bind_set_bind_data(info, bind, destroy_query_rpc_bind_data);
     duckdb_bind_set_cardinality(info, bind->row_count, true);
@@ -1546,37 +1244,41 @@ static void ducknng_query_rpc_init(duckdb_init_info info) {
 static void ducknng_query_rpc_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_query_rpc_init_data *init = (ducknng_query_rpc_init_data *)duckdb_function_get_init_data(info);
     ducknng_query_rpc_bind_data *bind;
-    struct ArrowArrayView view;
-    struct ArrowError error;
-    idx_t remaining;
-    idx_t chunk_size;
-    idx_t col;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    char *errmsg = NULL;
+    if (!init || !init->bind) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
     bind = init->bind;
-    memset(&view, 0, sizeof(view));
-    memset(&error, 0, sizeof(error));
-    if (ArrowArrayViewInitFromSchema(&view, &bind->schema, &error) != NANOARROW_OK ||
-        ArrowArrayViewSetArray(&view, &bind->array, &error) != NANOARROW_OK) {
-        duckdb_function_set_error(info, error.message[0] ? error.message : "ducknng: failed to view remote Arrow row payload");
-        ArrowArrayViewReset(&view);
-        return;
-    }
-    remaining = bind->row_count - init->offset;
-    chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
-    for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-        duckdb_vector vec = duckdb_data_chunk_get_vector(output, col);
-        if (ducknng_query_rpc_assign_column(vec, view.children[col], bind->schema.children[col], init->offset, chunk_size, NULL) != 0) {
-            duckdb_function_set_error(info, "ducknng: failed to decode remote Arrow row payload");
-            ArrowArrayViewReset(&view);
+    while (init->offset >= bind->row_count) {
+        if (bind->end_of_stream) {
+            (void)ducknng_query_rpc_close_session(bind);
+            duckdb_data_chunk_set_size(output, 0);
+            return;
+        }
+        if (ducknng_query_rpc_fetch_batch(bind, &errmsg) != 0) {
+            duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to fetch the next query batch");
+            if (errmsg) duckdb_free(errmsg);
+            (void)ducknng_query_rpc_close_session(bind);
+            return;
+        }
+        init->offset = 0;
+        if (bind->row_count == 0 && bind->end_of_stream) {
+            (void)ducknng_query_rpc_close_session(bind);
+            duckdb_data_chunk_set_size(output, 0);
             return;
         }
     }
-    init->offset += chunk_size;
-    duckdb_data_chunk_set_size(output, chunk_size);
-    ArrowArrayViewReset(&view);
+    if (ducknng_sql_arrow_scan_table(output, &bind->schema, &bind->array, bind->row_count,
+            &init->offset, &errmsg) != 0) {
+        duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode remote Arrow row payload");
+        if (errmsg) duckdb_free(errmsg);
+        (void)ducknng_query_rpc_close_session(bind);
+        return;
+    }
+    if (init->offset >= bind->row_count && bind->end_of_stream) {
+        (void)ducknng_query_rpc_close_session(bind);
+    }
 }
 
 static void ducknng_single_row_init(duckdb_init_info info) {

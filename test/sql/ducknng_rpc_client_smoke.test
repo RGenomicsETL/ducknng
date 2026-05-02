@@ -79,6 +79,23 @@ SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELE
 7	false
 8	true
 
+query I
+SELECT sessions
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+0
+
+query II
+SELECT count(*)::INTEGER, sum(i) IS NULL
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t WHERE 1 = 0',
+  0::UBIGINT
+)
+----
+0	1
+
 query IIII
 SELECT d = DATE '2024-01-02',
        t = TIME '03:04:05.123456',
@@ -254,10 +271,15 @@ SELECT *
 FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 
 query IIIITT
-SELECT ok, session_id, length(session_token) = 32, idle_timeout_ms, state, next_method
+SELECT ok, session_id > 0, length(session_token) = 32, idle_timeout_ms, state, next_method
 FROM rpc_open
 ----
 1	1	1	300000	open	fetch
+
+statement ok
+SET VARIABLE rpc_session_id = (
+  SELECT session_id FROM rpc_open
+)
 
 statement ok
 SET VARIABLE rpc_session_token = (
@@ -273,13 +295,13 @@ WHERE name = 'rpc_smoke'
 
 query IT
 SELECT ok, error
-FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 ----
 0	ducknng: session owner token mismatch
 
 query IT
 SELECT ok, error
-FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
 ----
 0	ducknng: session owner token mismatch
 
@@ -304,10 +326,10 @@ FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 999::UBIGIN
 statement ok
 CREATE TEMP TABLE rpc_fetch_payload AS
 SELECT *
-FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 
 query IIIII
-SELECT ok, session_id, state IS NULL, octet_length(payload) > 0, end_of_stream
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state IS NULL, octet_length(payload) > 0, end_of_stream
 FROM rpc_fetch_payload
 ----
 1	1	1	1	0
@@ -327,32 +349,32 @@ statement ok
 DROP TABLE rpc_fetch_payload
 
 query IITII
-SELECT ok, session_id, state, payload IS NULL, end_of_stream
-FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state, payload IS NULL, end_of_stream
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 ----
 1	1	exhausted	1	1
 
 query IIT
-SELECT ok, session_id, state
-FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
 ----
 1	1	closed
 
 query IT
 SELECT ok, error
-FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 ----
 0	ducknng: session not found
 
 query IT
 SELECT ok, error
-FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
 ----
 0	ducknng: session not found
 
 query IT
 SELECT ok, error
-FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
 ----
 0	ducknng: session not found
 
@@ -372,10 +394,15 @@ SELECT *
 FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 
 query IIIITT
-SELECT ok, session_id, length(session_token) = 32, idle_timeout_ms, state, next_method
+SELECT ok, session_id > 0, length(session_token) = 32, idle_timeout_ms, state, next_method
 FROM rpc_open_cancel
 ----
-1	2	1	300000	open	fetch
+1	1	1	300000	open	fetch
+
+statement ok
+SET VARIABLE rpc_cancel_session_id = (
+  SELECT session_id FROM rpc_open_cancel
+)
 
 statement ok
 SET VARIABLE rpc_cancel_session_token = (
@@ -384,15 +411,15 @@ SET VARIABLE rpc_cancel_session_token = (
 
 query IT
 SELECT ok, error
-FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 2::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_cancel_session_id')::UBIGINT, '00000000000000000000000000000000', 0::UBIGINT)
 ----
 0	ducknng: session owner token mismatch
 
 query IIT
-SELECT ok, session_id, state
-FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 2::UBIGINT, getvariable('rpc_cancel_session_token')::VARCHAR, 0::UBIGINT)
+SELECT ok, session_id = getvariable('rpc_cancel_session_id')::UBIGINT, state
+FROM ducknng_cancel_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_cancel_session_id')::UBIGINT, getvariable('rpc_cancel_session_token')::VARCHAR, 0::UBIGINT)
 ----
-1	2	cancelled
+1	1	cancelled
 
 statement ok
 DROP TABLE rpc_open_cancel
@@ -403,6 +430,61 @@ FROM ducknng_list_servers()
 WHERE name = 'rpc_smoke'
 ----
 0
+
+statement ok
+CREATE TEMP TABLE rpc_open_table AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE rpc_table_session_id = (
+  SELECT session_id FROM rpc_open_table
+)
+
+statement ok
+SET VARIABLE rpc_table_session_token = (
+  SELECT session_token FROM rpc_open_table
+)
+
+query II
+SELECT count(*)::INTEGER, sum(i)::INTEGER
+FROM ducknng_fetch_query_table(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+----
+6	45
+
+statement error
+SELECT *
+FROM ducknng_fetch_query_table(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  0::UBIGINT
+)
+----
+ducknng: fetch_query_table expected an Arrow row payload
+
+query IIT
+SELECT ok, session_id = getvariable('rpc_table_session_id')::UBIGINT, state
+FROM ducknng_close_query(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('rpc_table_session_id')::UBIGINT,
+  getvariable('rpc_table_session_token')::VARCHAR,
+  0::UBIGINT
+)
+----
+1	1	closed
+
+statement ok
+DROP TABLE rpc_open_table
 
 query I
 SELECT ducknng_open_socket('req')
@@ -604,6 +686,197 @@ SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELE
 7	false
 8	false
 9	true
+
+statement ok
+CREATE TEMP TABLE session_aio_open_launch AS
+SELECT ducknng_open_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT i FROM remote_t ORDER BY i',
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+query I
+SELECT aio_id > 0
+FROM session_aio_open_launch
+----
+1
+
+statement ok
+CREATE TEMP TABLE session_aio_open_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_open_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_open_frame = (
+  SELECT frame FROM session_aio_open_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"session_id":' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+----
+1	result	query_open	1
+
+statement ok
+SET VARIABLE session_aio_session_id = (
+  SELECT json_extract(payload_text::JSON, '$.session_id')::UBIGINT
+  FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+)
+
+statement ok
+SET VARIABLE session_aio_session_token = (
+  SELECT json_extract_string(payload_text::JSON, '$.session_token')
+  FROM ducknng_decode_frame(getvariable('session_aio_open_frame')::BLOB)
+)
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_open_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_open_launch
+
+statement ok
+CREATE TEMP TABLE session_aio_fetch_launch AS
+SELECT ducknng_fetch_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_aio_session_id')::UBIGINT,
+  getvariable('session_aio_session_token')::VARCHAR,
+  0::UBIGINT,
+  0::UBIGINT,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_aio_fetch_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_fetch_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_fetch_frame = (
+  SELECT frame FROM session_aio_fetch_collect
+)
+
+query IIII
+SELECT ok, type_name, name, octet_length(payload) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_fetch_frame')::BLOB)
+----
+1	result	fetch	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_fetch_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_fetch_launch
+
+statement ok
+DROP TABLE session_aio_fetch_collect
+
+statement ok
+CREATE TEMP TABLE session_aio_close_launch AS
+SELECT ducknng_close_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_aio_session_id')::UBIGINT,
+  getvariable('session_aio_session_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_aio_close_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_aio_close_launch), 1000)
+
+statement ok
+SET VARIABLE session_aio_close_frame = (
+  SELECT frame FROM session_aio_close_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"state":"closed"' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_aio_close_frame')::BLOB)
+----
+1	result	close	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_aio_close_launch
+----
+1
+
+statement ok
+DROP TABLE session_aio_open_collect
+
+statement ok
+DROP TABLE session_aio_close_launch
+
+statement ok
+DROP TABLE session_aio_close_collect
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_open AS
+SELECT *
+FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE session_cancel_aio_id = (
+  SELECT session_id FROM session_cancel_aio_open
+)
+
+statement ok
+SET VARIABLE session_cancel_aio_token = (
+  SELECT session_token FROM session_cancel_aio_open
+)
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_launch AS
+SELECT ducknng_cancel_query_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  getvariable('session_cancel_aio_id')::UBIGINT,
+  getvariable('session_cancel_aio_token')::VARCHAR,
+  1000,
+  0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE session_cancel_aio_collect AS
+SELECT *
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM session_cancel_aio_launch), 1000)
+
+statement ok
+SET VARIABLE session_cancel_aio_frame = (
+  SELECT frame FROM session_cancel_aio_collect
+)
+
+query IIII
+SELECT ok, type_name, name, position('"state":"cancelled"' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('session_cancel_aio_frame')::BLOB)
+----
+1	result	cancel	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM session_cancel_aio_launch
+----
+1
+
+statement ok
+DROP TABLE session_cancel_aio_open
+
+statement ok
+DROP TABLE session_cancel_aio_launch
+
+statement ok
+DROP TABLE session_cancel_aio_collect
 
 statement ok
 CREATE TEMP TABLE aio_socket_launch AS

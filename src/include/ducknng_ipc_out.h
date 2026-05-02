@@ -7,6 +7,8 @@ int ducknng_exec_request_to_ipc(const char *sql, int want_result,
     uint8_t **out_bytes, size_t *out_len, char **errmsg);
 int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
     uint64_t batch_bytes, uint8_t **out_bytes, size_t *out_len, char **errmsg);
+char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes);
 int ducknng_result_to_ipc_stream(duckdb_prepared_statement stmt, duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, char **errmsg);
 int ducknng_query_to_ipc_stream(duckdb_connection con, const char *sql,

@@ -1211,6 +1211,38 @@ handle id for the raw reply frame.</td>
 aio handle id for the raw reply frame.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_open_query_raw_aio</code></td>
+<td>scalar</td>
+<td><code>url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id</code></td>
+<td><code>UBIGINT</code></td>
+<td>Launch one asynchronous query_open request and return an aio handle
+id for the raw reply frame.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_fetch_query_raw_aio</code></td>
+<td>scalar</td>
+<td><code>url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id</code></td>
+<td><code>UBIGINT</code></td>
+<td>Launch one asynchronous fetch request and return an aio handle id
+for the raw reply frame.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_close_query_raw_aio</code></td>
+<td>scalar</td>
+<td><code>url, session_id, session_token, timeout_ms, tls_config_id</code></td>
+<td><code>UBIGINT</code></td>
+<td>Launch one asynchronous close request and return an aio handle id
+for the raw reply frame.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_cancel_query_raw_aio</code></td>
+<td>scalar</td>
+<td><code>url, session_id, session_token, timeout_ms, tls_config_id</code></td>
+<td><code>UBIGINT</code></td>
+<td>Launch one asynchronous cancel request and return an aio handle id
+for the raw reply frame.</td>
+</tr>
+<tr class="even">
 <td><code>ducknng_request_socket_raw_aio</code></td>
 <td>scalar</td>
 <td><code>socket_id, frame, timeout_ms</code></td>
@@ -1320,8 +1352,8 @@ row.</td>
 <td>table</td>
 <td><code>url, sql, tls_config_id</code></td>
 <td><code>table</code></td>
-<td>Execute a row-returning RPC query and expose the unary Arrow IPC row
-reply as a DuckDB table.</td>
+<td>Execute a row-returning RPC query as a session convenience wrapper
+and expose the fetched Arrow IPC rows as a DuckDB table.</td>
 </tr>
 </tbody>
 </table>
@@ -1354,6 +1386,14 @@ metadata as a structured row.</td>
 or an Arrow IPC batch payload.</td>
 </tr>
 <tr class="odd">
+<td><code>ducknng_fetch_query_table</code></td>
+<td>table</td>
+<td><code>url, session_id, session_token, batch_rows, batch_bytes, tls_config_id</code></td>
+<td><code>TABLE(dynamic from Arrow IPC batch)</code></td>
+<td>Fetch one session row batch and decode the returned Arrow IPC
+payload directly into a DuckDB table.</td>
+</tr>
+<tr class="even">
 <td><code>ducknng_close_query</code></td>
 <td>table</td>
 <td><code>url, session_id, session_token, tls_config_id</code></td>
@@ -1361,7 +1401,7 @@ or an Arrow IPC batch payload.</td>
 <td>Close a server-side query session and return the JSON control
 metadata as a structured row.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>ducknng_cancel_query</code></td>
 <td>table</td>
 <td><code>url, session_id, session_token, tls_config_id</code></td>
@@ -2395,56 +2435,41 @@ and close a query session explicitly</h3>
 <span id="cb29-31"><a href="#cb29-31" tabindex="-1"></a>       idle_timeout_ms <span class="kw">AS</span> effective_idle_timeout_ms</span>
 <span id="cb29-32"><a href="#cb29-32" tabindex="-1"></a><span class="kw">FROM</span> session_open;</span>
 <span id="cb29-33"><a href="#cb29-33" tabindex="-1"></a></span>
-<span id="cb29-34"><a href="#cb29-34" tabindex="-1"></a><span class="co">-- The first fetch returns one Arrow IPC batch in payload.</span></span>
-<span id="cb29-35"><a href="#cb29-35" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_fetch <span class="kw">AS</span></span>
-<span id="cb29-36"><a href="#cb29-36" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
-<span id="cb29-37"><a href="#cb29-37" tabindex="-1"></a><span class="kw">FROM</span> ducknng_fetch_query(</span>
-<span id="cb29-38"><a href="#cb29-38" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
-<span id="cb29-39"><a href="#cb29-39" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
-<span id="cb29-40"><a href="#cb29-40" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
-<span id="cb29-41"><a href="#cb29-41" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_rows override</span></span>
-<span id="cb29-42"><a href="#cb29-42" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_bytes override</span></span>
-<span id="cb29-43"><a href="#cb29-43" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
-<span id="cb29-44"><a href="#cb29-44" tabindex="-1"></a>);</span>
-<span id="cb29-45"><a href="#cb29-45" tabindex="-1"></a></span>
-<span id="cb29-46"><a href="#cb29-46" tabindex="-1"></a><span class="kw">SELECT</span> ok, session_id, state <span class="kw">IS</span> <span class="kw">NULL</span> <span class="kw">AS</span> state_is_null, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload, end_of_stream</span>
-<span id="cb29-47"><a href="#cb29-47" tabindex="-1"></a><span class="kw">FROM</span> session_fetch;</span>
-<span id="cb29-48"><a href="#cb29-48" tabindex="-1"></a></span>
-<span id="cb29-49"><a href="#cb29-49" tabindex="-1"></a><span class="co">-- Decode that Arrow IPC fetch payload through the body codec table path.</span></span>
-<span id="cb29-50"><a href="#cb29-50" tabindex="-1"></a><span class="co">-- DuckDB table-function arguments cannot contain subqueries, so keep the</span></span>
-<span id="cb29-51"><a href="#cb29-51" tabindex="-1"></a><span class="co">-- payload in a variable before passing it to ducknng_parse_body().</span></span>
-<span id="cb29-52"><a href="#cb29-52" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_fetch_payload <span class="op">=</span> (<span class="kw">SELECT</span> payload <span class="kw">FROM</span> session_fetch);</span>
-<span id="cb29-53"><a href="#cb29-53" tabindex="-1"></a></span>
-<span id="cb29-54"><a href="#cb29-54" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
-<span id="cb29-55"><a href="#cb29-55" tabindex="-1"></a><span class="kw">FROM</span> ducknng_parse_body(</span>
-<span id="cb29-56"><a href="#cb29-56" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_fetch_payload&#39;</span>):<span class="ch">:BLOB</span>,</span>
-<span id="cb29-57"><a href="#cb29-57" tabindex="-1"></a>  <span class="st">&#39;application/vnd.apache.arrow.stream&#39;</span></span>
-<span id="cb29-58"><a href="#cb29-58" tabindex="-1"></a>);</span>
-<span id="cb29-59"><a href="#cb29-59" tabindex="-1"></a></span>
-<span id="cb29-60"><a href="#cb29-60" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_fetch;</span>
-<span id="cb29-61"><a href="#cb29-61" tabindex="-1"></a></span>
-<span id="cb29-62"><a href="#cb29-62" tabindex="-1"></a><span class="co">-- The second fetch returns JSON control metadata saying the session is exhausted.</span></span>
-<span id="cb29-63"><a href="#cb29-63" tabindex="-1"></a><span class="kw">SELECT</span> ok, session_id, state, payload <span class="kw">IS</span> <span class="kw">NULL</span> <span class="kw">AS</span> no_payload, end_of_stream</span>
-<span id="cb29-64"><a href="#cb29-64" tabindex="-1"></a><span class="kw">FROM</span> ducknng_fetch_query(</span>
-<span id="cb29-65"><a href="#cb29-65" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
-<span id="cb29-66"><a href="#cb29-66" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
-<span id="cb29-67"><a href="#cb29-67" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
-<span id="cb29-68"><a href="#cb29-68" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_rows override</span></span>
-<span id="cb29-69"><a href="#cb29-69" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_bytes override</span></span>
-<span id="cb29-70"><a href="#cb29-70" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
-<span id="cb29-71"><a href="#cb29-71" tabindex="-1"></a>);</span>
-<span id="cb29-72"><a href="#cb29-72" tabindex="-1"></a></span>
-<span id="cb29-73"><a href="#cb29-73" tabindex="-1"></a><span class="co">-- Close the exhausted session explicitly.</span></span>
-<span id="cb29-74"><a href="#cb29-74" tabindex="-1"></a><span class="kw">SELECT</span> ok, session_id, state</span>
-<span id="cb29-75"><a href="#cb29-75" tabindex="-1"></a><span class="kw">FROM</span> ducknng_close_query(</span>
-<span id="cb29-76"><a href="#cb29-76" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
-<span id="cb29-77"><a href="#cb29-77" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
-<span id="cb29-78"><a href="#cb29-78" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
-<span id="cb29-79"><a href="#cb29-79" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
-<span id="cb29-80"><a href="#cb29-80" tabindex="-1"></a>);</span>
-<span id="cb29-81"><a href="#cb29-81" tabindex="-1"></a></span>
-<span id="cb29-82"><a href="#cb29-82" tabindex="-1"></a><span class="co">-- Stop the demo listener after the session is closed.</span></span>
-<span id="cb29-83"><a href="#cb29-83" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_session_demo&#39;</span>);</span></code></pre></div>
+<span id="cb29-34"><a href="#cb29-34" tabindex="-1"></a><span class="co">-- Use the table helper when you want one fetch batch decoded directly as rows.</span></span>
+<span id="cb29-35"><a href="#cb29-35" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb29-36"><a href="#cb29-36" tabindex="-1"></a><span class="kw">FROM</span> ducknng_fetch_query_table(</span>
+<span id="cb29-37"><a href="#cb29-37" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
+<span id="cb29-38"><a href="#cb29-38" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
+<span id="cb29-39"><a href="#cb29-39" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
+<span id="cb29-40"><a href="#cb29-40" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_rows override</span></span>
+<span id="cb29-41"><a href="#cb29-41" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_bytes override</span></span>
+<span id="cb29-42"><a href="#cb29-42" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
+<span id="cb29-43"><a href="#cb29-43" tabindex="-1"></a>);</span>
+<span id="cb29-44"><a href="#cb29-44" tabindex="-1"></a></span>
+<span id="cb29-45"><a href="#cb29-45" tabindex="-1"></a><span class="co">-- The raw fetch helper still exposes control_json, payload, and end_of_stream</span></span>
+<span id="cb29-46"><a href="#cb29-46" tabindex="-1"></a><span class="co">-- explicitly. After the table helper consumes the first batch, the next fetch</span></span>
+<span id="cb29-47"><a href="#cb29-47" tabindex="-1"></a><span class="co">-- is already the exhausted control reply.</span></span>
+<span id="cb29-48"><a href="#cb29-48" tabindex="-1"></a><span class="kw">SELECT</span> ok, session_id, state, payload <span class="kw">IS</span> <span class="kw">NULL</span> <span class="kw">AS</span> no_payload, end_of_stream</span>
+<span id="cb29-49"><a href="#cb29-49" tabindex="-1"></a><span class="kw">FROM</span> ducknng_fetch_query(</span>
+<span id="cb29-50"><a href="#cb29-50" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
+<span id="cb29-51"><a href="#cb29-51" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
+<span id="cb29-52"><a href="#cb29-52" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
+<span id="cb29-53"><a href="#cb29-53" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_rows override</span></span>
+<span id="cb29-54"><a href="#cb29-54" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,                                <span class="co">-- batch_bytes override</span></span>
+<span id="cb29-55"><a href="#cb29-55" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
+<span id="cb29-56"><a href="#cb29-56" tabindex="-1"></a>);</span>
+<span id="cb29-57"><a href="#cb29-57" tabindex="-1"></a></span>
+<span id="cb29-58"><a href="#cb29-58" tabindex="-1"></a><span class="co">-- Close the exhausted session explicitly.</span></span>
+<span id="cb29-59"><a href="#cb29-59" tabindex="-1"></a><span class="kw">SELECT</span> ok, session_id, state</span>
+<span id="cb29-60"><a href="#cb29-60" tabindex="-1"></a><span class="kw">FROM</span> ducknng_close_query(</span>
+<span id="cb29-61"><a href="#cb29-61" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;</span>, <span class="co">-- url</span></span>
+<span id="cb29-62"><a href="#cb29-62" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_id&#39;</span>):<span class="ch">:UBIGINT</span>,        <span class="co">-- session_id returned by open_query</span></span>
+<span id="cb29-63"><a href="#cb29-63" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_token&#39;</span>):<span class="ch">:VARCHAR</span>,     <span class="co">-- session_token returned by open_query</span></span>
+<span id="cb29-64"><a href="#cb29-64" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                 <span class="co">-- tls_config_id</span></span>
+<span id="cb29-65"><a href="#cb29-65" tabindex="-1"></a>);</span>
+<span id="cb29-66"><a href="#cb29-66" tabindex="-1"></a></span>
+<span id="cb29-67"><a href="#cb29-67" tabindex="-1"></a><span class="co">-- Stop the demo listener after the session is closed.</span></span>
+<span id="cb29-68"><a href="#cb29-68" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_session_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+--------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;sql_session_demo&#39;, &#39;ipc:///tmp/ducknng_sql_session_demo.ipc&#39;, 1, 134217728, 300000, 0) |
 +--------------------------------------------------------------------------------------------------------------+
@@ -2455,11 +2480,6 @@ and close a query session explicitly</h3>
 +-------------------+---------------------+---------------------------+
 | 1                 | 32                  | 300000                    |
 +-------------------+---------------------+---------------------------+
-+------+------------+---------------+-------------+---------------+
-|  ok  | session_id | state_is_null | has_payload | end_of_stream |
-+------+------------+---------------+-------------+---------------+
-| true | 1          | true          | true        | false         |
-+------+------------+---------------+-------------+---------------+
 +----+
 | id |
 +----+
@@ -2481,36 +2501,224 @@ and close a query session explicitly</h3>
 +-----------------------------------------+
 | true                                    |
 +-----------------------------------------+</code></pre>
+<h3 id="launch-the-session-lifecycle-asynchronously-and-collect-raw-frames">Launch
+the session lifecycle asynchronously and collect raw frames</h3>
+<div class="sourceCode" id="cb31"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb31-1"><a href="#cb31-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
+<span id="cb31-2"><a href="#cb31-2" tabindex="-1"></a><span class="co">-- Start a listener for the async session lifecycle demo.</span></span>
+<span id="cb31-3"><a href="#cb31-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb31-4"><a href="#cb31-4" tabindex="-1"></a>  <span class="st">&#39;sql_session_aio_demo&#39;</span>,</span>
+<span id="cb31-5"><a href="#cb31-5" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-6"><a href="#cb31-6" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb31-7"><a href="#cb31-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb31-8"><a href="#cb31-8" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb31-9"><a href="#cb31-9" tabindex="-1"></a>  <span class="dv">0</span></span>
+<span id="cb31-10"><a href="#cb31-10" tabindex="-1"></a>);</span>
+<span id="cb31-11"><a href="#cb31-11" tabindex="-1"></a></span>
+<span id="cb31-12"><a href="#cb31-12" tabindex="-1"></a><span class="co">-- Launch query_open asynchronously and collect the raw reply frame.</span></span>
+<span id="cb31-13"><a href="#cb31-13" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_open_aio <span class="op">=</span> ducknng_open_query_raw_aio(</span>
+<span id="cb31-14"><a href="#cb31-14" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-15"><a href="#cb31-15" tabindex="-1"></a>  <span class="st">&#39;SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id&#39;</span>,</span>
+<span id="cb31-16"><a href="#cb31-16" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-17"><a href="#cb31-17" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-18"><a href="#cb31-18" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
+<span id="cb31-19"><a href="#cb31-19" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb31-20"><a href="#cb31-20" tabindex="-1"></a>);</span>
+<span id="cb31-21"><a href="#cb31-21" tabindex="-1"></a></span>
+<span id="cb31-22"><a href="#cb31-22" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_open_aio_collect <span class="kw">AS</span></span>
+<span id="cb31-23"><a href="#cb31-23" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb31-24"><a href="#cb31-24" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect(list_value(getvariable(<span class="st">&#39;session_open_aio&#39;</span>):<span class="ch">:UBIGINT</span>), <span class="dv">1000</span>);</span>
+<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a></span>
+<span id="cb31-26"><a href="#cb31-26" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_open_frame <span class="op">=</span> (</span>
+<span id="cb31-27"><a href="#cb31-27" tabindex="-1"></a>  <span class="kw">SELECT</span> frame <span class="kw">FROM</span> session_open_aio_collect</span>
+<span id="cb31-28"><a href="#cb31-28" tabindex="-1"></a>);</span>
+<span id="cb31-29"><a href="#cb31-29" tabindex="-1"></a></span>
+<span id="cb31-30"><a href="#cb31-30" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;session_id&quot;:&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_session_id</span>
+<span id="cb31-31"><a href="#cb31-31" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_open_frame&#39;</span>):<span class="ch">:BLOB</span>);</span>
+<span id="cb31-32"><a href="#cb31-32" tabindex="-1"></a></span>
+<span id="cb31-33"><a href="#cb31-33" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_aio_id <span class="op">=</span> (</span>
+<span id="cb31-34"><a href="#cb31-34" tabindex="-1"></a>  <span class="kw">SELECT</span> json_extract(payload_text:<span class="ch">:JSON</span>, <span class="st">&#39;$.session_id&#39;</span>):<span class="ch">:UBIGINT</span></span>
+<span id="cb31-35"><a href="#cb31-35" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_open_frame&#39;</span>):<span class="ch">:BLOB</span>)</span>
+<span id="cb31-36"><a href="#cb31-36" tabindex="-1"></a>);</span>
+<span id="cb31-37"><a href="#cb31-37" tabindex="-1"></a></span>
+<span id="cb31-38"><a href="#cb31-38" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_aio_token <span class="op">=</span> (</span>
+<span id="cb31-39"><a href="#cb31-39" tabindex="-1"></a>  <span class="kw">SELECT</span> json_extract_string(payload_text:<span class="ch">:JSON</span>, <span class="st">&#39;$.session_token&#39;</span>)</span>
+<span id="cb31-40"><a href="#cb31-40" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_open_frame&#39;</span>):<span class="ch">:BLOB</span>)</span>
+<span id="cb31-41"><a href="#cb31-41" tabindex="-1"></a>);</span>
+<span id="cb31-42"><a href="#cb31-42" tabindex="-1"></a></span>
+<span id="cb31-43"><a href="#cb31-43" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;session_open_aio&#39;</span>):<span class="ch">:UBIGINT</span>) <span class="kw">AS</span> dropped_open_aio;</span>
+<span id="cb31-44"><a href="#cb31-44" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_open_aio_collect;</span>
+<span id="cb31-45"><a href="#cb31-45" tabindex="-1"></a></span>
+<span id="cb31-46"><a href="#cb31-46" tabindex="-1"></a><span class="co">-- Launch fetch asynchronously and decode the collected raw frame explicitly.</span></span>
+<span id="cb31-47"><a href="#cb31-47" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_fetch_aio <span class="op">=</span> ducknng_fetch_query_raw_aio(</span>
+<span id="cb31-48"><a href="#cb31-48" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-49"><a href="#cb31-49" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_aio_id&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-50"><a href="#cb31-50" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_aio_token&#39;</span>):<span class="ch">:VARCHAR</span>,</span>
+<span id="cb31-51"><a href="#cb31-51" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-52"><a href="#cb31-52" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-53"><a href="#cb31-53" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
+<span id="cb31-54"><a href="#cb31-54" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb31-55"><a href="#cb31-55" tabindex="-1"></a>);</span>
+<span id="cb31-56"><a href="#cb31-56" tabindex="-1"></a></span>
+<span id="cb31-57"><a href="#cb31-57" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_fetch_aio_collect <span class="kw">AS</span></span>
+<span id="cb31-58"><a href="#cb31-58" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb31-59"><a href="#cb31-59" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect(list_value(getvariable(<span class="st">&#39;session_fetch_aio&#39;</span>):<span class="ch">:UBIGINT</span>), <span class="dv">1000</span>);</span>
+<span id="cb31-60"><a href="#cb31-60" tabindex="-1"></a></span>
+<span id="cb31-61"><a href="#cb31-61" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_fetch_frame <span class="op">=</span> (</span>
+<span id="cb31-62"><a href="#cb31-62" tabindex="-1"></a>  <span class="kw">SELECT</span> frame <span class="kw">FROM</span> session_fetch_aio_collect</span>
+<span id="cb31-63"><a href="#cb31-63" tabindex="-1"></a>);</span>
+<span id="cb31-64"><a href="#cb31-64" tabindex="-1"></a></span>
+<span id="cb31-65"><a href="#cb31-65" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload</span>
+<span id="cb31-66"><a href="#cb31-66" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>);</span>
+<span id="cb31-67"><a href="#cb31-67" tabindex="-1"></a></span>
+<span id="cb31-68"><a href="#cb31-68" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;session_fetch_aio&#39;</span>):<span class="ch">:UBIGINT</span>) <span class="kw">AS</span> dropped_fetch_aio;</span>
+<span id="cb31-69"><a href="#cb31-69" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_fetch_aio_collect;</span>
+<span id="cb31-70"><a href="#cb31-70" tabindex="-1"></a></span>
+<span id="cb31-71"><a href="#cb31-71" tabindex="-1"></a><span class="co">-- Launch close asynchronously and decode the control reply frame.</span></span>
+<span id="cb31-72"><a href="#cb31-72" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_close_aio <span class="op">=</span> ducknng_close_query_raw_aio(</span>
+<span id="cb31-73"><a href="#cb31-73" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-74"><a href="#cb31-74" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_aio_id&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-75"><a href="#cb31-75" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_aio_token&#39;</span>):<span class="ch">:VARCHAR</span>,</span>
+<span id="cb31-76"><a href="#cb31-76" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
+<span id="cb31-77"><a href="#cb31-77" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb31-78"><a href="#cb31-78" tabindex="-1"></a>);</span>
+<span id="cb31-79"><a href="#cb31-79" tabindex="-1"></a></span>
+<span id="cb31-80"><a href="#cb31-80" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_close_aio_collect <span class="kw">AS</span></span>
+<span id="cb31-81"><a href="#cb31-81" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb31-82"><a href="#cb31-82" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect(list_value(getvariable(<span class="st">&#39;session_close_aio&#39;</span>):<span class="ch">:UBIGINT</span>), <span class="dv">1000</span>);</span>
+<span id="cb31-83"><a href="#cb31-83" tabindex="-1"></a></span>
+<span id="cb31-84"><a href="#cb31-84" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_close_frame <span class="op">=</span> (</span>
+<span id="cb31-85"><a href="#cb31-85" tabindex="-1"></a>  <span class="kw">SELECT</span> frame <span class="kw">FROM</span> session_close_aio_collect</span>
+<span id="cb31-86"><a href="#cb31-86" tabindex="-1"></a>);</span>
+<span id="cb31-87"><a href="#cb31-87" tabindex="-1"></a></span>
+<span id="cb31-88"><a href="#cb31-88" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;state&quot;:&quot;closed&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> is_closed</span>
+<span id="cb31-89"><a href="#cb31-89" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_close_frame&#39;</span>):<span class="ch">:BLOB</span>);</span>
+<span id="cb31-90"><a href="#cb31-90" tabindex="-1"></a></span>
+<span id="cb31-91"><a href="#cb31-91" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;session_close_aio&#39;</span>):<span class="ch">:UBIGINT</span>) <span class="kw">AS</span> dropped_close_aio;</span>
+<span id="cb31-92"><a href="#cb31-92" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_close_aio_collect;</span>
+<span id="cb31-93"><a href="#cb31-93" tabindex="-1"></a></span>
+<span id="cb31-94"><a href="#cb31-94" tabindex="-1"></a><span class="co">-- Open another session so the cancel aio helper has a live target.</span></span>
+<span id="cb31-95"><a href="#cb31-95" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_cancel_open <span class="kw">AS</span></span>
+<span id="cb31-96"><a href="#cb31-96" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb31-97"><a href="#cb31-97" tabindex="-1"></a><span class="kw">FROM</span> ducknng_open_query(</span>
+<span id="cb31-98"><a href="#cb31-98" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-99"><a href="#cb31-99" tabindex="-1"></a>  <span class="st">&#39;SELECT 99 AS id&#39;</span>,</span>
+<span id="cb31-100"><a href="#cb31-100" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-101"><a href="#cb31-101" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-102"><a href="#cb31-102" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb31-103"><a href="#cb31-103" tabindex="-1"></a>);</span>
+<span id="cb31-104"><a href="#cb31-104" tabindex="-1"></a></span>
+<span id="cb31-105"><a href="#cb31-105" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_cancel_id <span class="op">=</span> (</span>
+<span id="cb31-106"><a href="#cb31-106" tabindex="-1"></a>  <span class="kw">SELECT</span> session_id <span class="kw">FROM</span> session_cancel_open</span>
+<span id="cb31-107"><a href="#cb31-107" tabindex="-1"></a>);</span>
+<span id="cb31-108"><a href="#cb31-108" tabindex="-1"></a></span>
+<span id="cb31-109"><a href="#cb31-109" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_cancel_token <span class="op">=</span> (</span>
+<span id="cb31-110"><a href="#cb31-110" tabindex="-1"></a>  <span class="kw">SELECT</span> session_token <span class="kw">FROM</span> session_cancel_open</span>
+<span id="cb31-111"><a href="#cb31-111" tabindex="-1"></a>);</span>
+<span id="cb31-112"><a href="#cb31-112" tabindex="-1"></a></span>
+<span id="cb31-113"><a href="#cb31-113" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_cancel_aio <span class="op">=</span> ducknng_cancel_query_raw_aio(</span>
+<span id="cb31-114"><a href="#cb31-114" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;</span>,</span>
+<span id="cb31-115"><a href="#cb31-115" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_cancel_id&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb31-116"><a href="#cb31-116" tabindex="-1"></a>  getvariable(<span class="st">&#39;session_cancel_token&#39;</span>):<span class="ch">:VARCHAR</span>,</span>
+<span id="cb31-117"><a href="#cb31-117" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
+<span id="cb31-118"><a href="#cb31-118" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb31-119"><a href="#cb31-119" tabindex="-1"></a>);</span>
+<span id="cb31-120"><a href="#cb31-120" tabindex="-1"></a></span>
+<span id="cb31-121"><a href="#cb31-121" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> session_cancel_aio_collect <span class="kw">AS</span></span>
+<span id="cb31-122"><a href="#cb31-122" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb31-123"><a href="#cb31-123" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect(list_value(getvariable(<span class="st">&#39;session_cancel_aio&#39;</span>):<span class="ch">:UBIGINT</span>), <span class="dv">1000</span>);</span>
+<span id="cb31-124"><a href="#cb31-124" tabindex="-1"></a></span>
+<span id="cb31-125"><a href="#cb31-125" tabindex="-1"></a><span class="kw">SET</span> VARIABLE session_cancel_frame <span class="op">=</span> (</span>
+<span id="cb31-126"><a href="#cb31-126" tabindex="-1"></a>  <span class="kw">SELECT</span> frame <span class="kw">FROM</span> session_cancel_aio_collect</span>
+<span id="cb31-127"><a href="#cb31-127" tabindex="-1"></a>);</span>
+<span id="cb31-128"><a href="#cb31-128" tabindex="-1"></a></span>
+<span id="cb31-129"><a href="#cb31-129" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;state&quot;:&quot;cancelled&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> is_cancelled</span>
+<span id="cb31-130"><a href="#cb31-130" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;session_cancel_frame&#39;</span>):<span class="ch">:BLOB</span>);</span>
+<span id="cb31-131"><a href="#cb31-131" tabindex="-1"></a></span>
+<span id="cb31-132"><a href="#cb31-132" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;session_cancel_aio&#39;</span>):<span class="ch">:UBIGINT</span>) <span class="kw">AS</span> dropped_cancel_aio;</span>
+<span id="cb31-133"><a href="#cb31-133" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_cancel_open;</span>
+<span id="cb31-134"><a href="#cb31-134" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> session_cancel_aio_collect;</span>
+<span id="cb31-135"><a href="#cb31-135" tabindex="-1"></a></span>
+<span id="cb31-136"><a href="#cb31-136" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_session_aio_demo&#39;</span>);</span></code></pre></div>
+<pre><code>+----------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server(&#39;sql_session_aio_demo&#39;, &#39;ipc:///tmp/ducknng_sql_session_aio_demo.ipc&#39;, 1, 134217728, 300000, 0) |
++----------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                 |
++----------------------------------------------------------------------------------------------------------------------+
++------+-----------+------------+----------------+
+|  ok  | type_name |    name    | has_session_id |
++------+-----------+------------+----------------+
+| true | result    | query_open | true           |
++------+-----------+------------+----------------+
++------------------+
+| dropped_open_aio |
++------------------+
+| true             |
++------------------+
++------+-----------+-------+-------------+
+|  ok  | type_name | name  | has_payload |
++------+-----------+-------+-------------+
+| true | result    | fetch | true        |
++------+-----------+-------+-------------+
++-------------------+
+| dropped_fetch_aio |
++-------------------+
+| true              |
++-------------------+
++------+-----------+-------+-----------+
+|  ok  | type_name | name  | is_closed |
++------+-----------+-------+-----------+
+| true | result    | close | true      |
++------+-----------+-------+-----------+
++-------------------+
+| dropped_close_aio |
++-------------------+
+| true              |
++-------------------+
++------+-----------+--------+--------------+
+|  ok  | type_name |  name  | is_cancelled |
++------+-----------+--------+--------------+
+| true | result    | cancel | true         |
++------+-----------+--------+--------------+
++--------------------+
+| dropped_cancel_aio |
++--------------------+
+| true               |
++--------------------+
++---------------------------------------------+
+| ducknng_stop_server(&#39;sql_session_aio_demo&#39;) |
++---------------------------------------------+
+| true                                        |
++---------------------------------------------+</code></pre>
 <h3 id="tlstcp-with-a-self-signed-development-tls-config"><code>tls+tcp://</code>
 with a self-signed development TLS config</h3>
-<div class="sourceCode" id="cb31"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb31-1"><a href="#cb31-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
-<span id="cb31-2"><a href="#cb31-2" tabindex="-1"></a><span class="co">-- Generate a self-signed loopback certificate and keep it as a runtime TLS handle.</span></span>
-<span id="cb31-3"><a href="#cb31-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_self_signed_tls_config(<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">365</span>, <span class="dv">0</span>);</span>
-<span id="cb31-4"><a href="#cb31-4" tabindex="-1"></a></span>
-<span id="cb31-5"><a href="#cb31-5" tabindex="-1"></a><span class="co">-- Start a TLS listener using the generated config handle.</span></span>
-<span id="cb31-6"><a href="#cb31-6" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
-<span id="cb31-7"><a href="#cb31-7" tabindex="-1"></a>  <span class="st">&#39;tls_demo_self&#39;</span>,               <span class="co">-- service name</span></span>
-<span id="cb31-8"><a href="#cb31-8" tabindex="-1"></a>  <span class="st">&#39;tls+tcp://127.0.0.1:45453&#39;</span>,   <span class="co">-- listen URL</span></span>
-<span id="cb31-9"><a href="#cb31-9" tabindex="-1"></a>  <span class="dv">1</span>,                             <span class="co">-- REP contexts</span></span>
-<span id="cb31-10"><a href="#cb31-10" tabindex="-1"></a>  <span class="dv">134217728</span>,                     <span class="co">-- recv_max_bytes</span></span>
-<span id="cb31-11"><a href="#cb31-11" tabindex="-1"></a>  <span class="dv">300000</span>,                        <span class="co">-- session_idle_ms</span></span>
-<span id="cb31-12"><a href="#cb31-12" tabindex="-1"></a>  <span class="dv">1</span>                              <span class="co">-- tls_config_id returned above</span></span>
-<span id="cb31-13"><a href="#cb31-13" tabindex="-1"></a>);</span>
-<span id="cb31-14"><a href="#cb31-14" tabindex="-1"></a></span>
-<span id="cb31-15"><a href="#cb31-15" tabindex="-1"></a><span class="co">-- Send the built-in manifest request frame over TLS and decode the reply.</span></span>
-<span id="cb31-16"><a href="#cb31-16" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
-<span id="cb31-17"><a href="#cb31-17" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb31-18"><a href="#cb31-18" tabindex="-1"></a>  ducknng_request_raw(</span>
-<span id="cb31-19"><a href="#cb31-19" tabindex="-1"></a>    <span class="st">&#39;tls+tcp://127.0.0.1:45453&#39;</span>,                <span class="co">-- url</span></span>
-<span id="cb31-20"><a href="#cb31-20" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
-<span id="cb31-21"><a href="#cb31-21" tabindex="-1"></a>    <span class="dv">1000</span>,                                       <span class="co">-- timeout_ms</span></span>
-<span id="cb31-22"><a href="#cb31-22" tabindex="-1"></a>    <span class="dv">1</span>                                           <span class="co">-- tls_config_id</span></span>
-<span id="cb31-23"><a href="#cb31-23" tabindex="-1"></a>  )</span>
-<span id="cb31-24"><a href="#cb31-24" tabindex="-1"></a>);</span>
-<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a></span>
-<span id="cb31-26"><a href="#cb31-26" tabindex="-1"></a><span class="co">-- Clean up the TLS demo server and config handle.</span></span>
-<span id="cb31-27"><a href="#cb31-27" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;tls_demo_self&#39;</span>);</span>
-<span id="cb31-28"><a href="#cb31-28" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
+<div class="sourceCode" id="cb33"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb33-1"><a href="#cb33-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
+<span id="cb33-2"><a href="#cb33-2" tabindex="-1"></a><span class="co">-- Generate a self-signed loopback certificate and keep it as a runtime TLS handle.</span></span>
+<span id="cb33-3"><a href="#cb33-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_self_signed_tls_config(<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">365</span>, <span class="dv">0</span>);</span>
+<span id="cb33-4"><a href="#cb33-4" tabindex="-1"></a></span>
+<span id="cb33-5"><a href="#cb33-5" tabindex="-1"></a><span class="co">-- Start a TLS listener using the generated config handle.</span></span>
+<span id="cb33-6"><a href="#cb33-6" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb33-7"><a href="#cb33-7" tabindex="-1"></a>  <span class="st">&#39;tls_demo_self&#39;</span>,               <span class="co">-- service name</span></span>
+<span id="cb33-8"><a href="#cb33-8" tabindex="-1"></a>  <span class="st">&#39;tls+tcp://127.0.0.1:45453&#39;</span>,   <span class="co">-- listen URL</span></span>
+<span id="cb33-9"><a href="#cb33-9" tabindex="-1"></a>  <span class="dv">1</span>,                             <span class="co">-- REP contexts</span></span>
+<span id="cb33-10"><a href="#cb33-10" tabindex="-1"></a>  <span class="dv">134217728</span>,                     <span class="co">-- recv_max_bytes</span></span>
+<span id="cb33-11"><a href="#cb33-11" tabindex="-1"></a>  <span class="dv">300000</span>,                        <span class="co">-- session_idle_ms</span></span>
+<span id="cb33-12"><a href="#cb33-12" tabindex="-1"></a>  <span class="dv">1</span>                              <span class="co">-- tls_config_id returned above</span></span>
+<span id="cb33-13"><a href="#cb33-13" tabindex="-1"></a>);</span>
+<span id="cb33-14"><a href="#cb33-14" tabindex="-1"></a></span>
+<span id="cb33-15"><a href="#cb33-15" tabindex="-1"></a><span class="co">-- Send the built-in manifest request frame over TLS and decode the reply.</span></span>
+<span id="cb33-16"><a href="#cb33-16" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb33-17"><a href="#cb33-17" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb33-18"><a href="#cb33-18" tabindex="-1"></a>  ducknng_request_raw(</span>
+<span id="cb33-19"><a href="#cb33-19" tabindex="-1"></a>    <span class="st">&#39;tls+tcp://127.0.0.1:45453&#39;</span>,                <span class="co">-- url</span></span>
+<span id="cb33-20"><a href="#cb33-20" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
+<span id="cb33-21"><a href="#cb33-21" tabindex="-1"></a>    <span class="dv">1000</span>,                                       <span class="co">-- timeout_ms</span></span>
+<span id="cb33-22"><a href="#cb33-22" tabindex="-1"></a>    <span class="dv">1</span>                                           <span class="co">-- tls_config_id</span></span>
+<span id="cb33-23"><a href="#cb33-23" tabindex="-1"></a>  )</span>
+<span id="cb33-24"><a href="#cb33-24" tabindex="-1"></a>);</span>
+<span id="cb33-25"><a href="#cb33-25" tabindex="-1"></a></span>
+<span id="cb33-26"><a href="#cb33-26" tabindex="-1"></a><span class="co">-- Clean up the TLS demo server and config handle.</span></span>
+<span id="cb33-27"><a href="#cb33-27" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;tls_demo_self&#39;</span>);</span>
+<span id="cb33-28"><a href="#cb33-28" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
 <pre><code>+-----------------------------------------------------+
 | ducknng_self_signed_tls_config(&#39;127.0.0.1&#39;, 365, 0) |
 +-----------------------------------------------------+
@@ -2601,39 +2809,39 @@ interface for NNG, HTTP/HTTPS framed RPC, and the planned broader HTTP
 server framework.</p>
 <h3 id="tlstcp-from-file-backed-certificate-material"><code>tls+tcp://</code>
 from file-backed certificate material</h3>
-<div class="sourceCode" id="cb33"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb33-1"><a href="#cb33-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
-<span id="cb33-2"><a href="#cb33-2" tabindex="-1"></a><span class="co">-- Register a file-backed TLS config using committed loopback test certificates.</span></span>
-<span id="cb33-3"><a href="#cb33-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_tls_config_from_files(</span>
-<span id="cb33-4"><a href="#cb33-4" tabindex="-1"></a>  <span class="st">&#39;test/certs/loopback-cert-key.pem&#39;</span>, <span class="co">-- cert_key_file</span></span>
-<span id="cb33-5"><a href="#cb33-5" tabindex="-1"></a>  <span class="st">&#39;test/certs/loopback-ca.pem&#39;</span>,       <span class="co">-- ca_file</span></span>
-<span id="cb33-6"><a href="#cb33-6" tabindex="-1"></a>  <span class="kw">NULL</span>,                               <span class="co">-- password</span></span>
-<span id="cb33-7"><a href="#cb33-7" tabindex="-1"></a>  <span class="dv">0</span>                                   <span class="co">-- auth_mode</span></span>
-<span id="cb33-8"><a href="#cb33-8" tabindex="-1"></a>);</span>
-<span id="cb33-9"><a href="#cb33-9" tabindex="-1"></a></span>
-<span id="cb33-10"><a href="#cb33-10" tabindex="-1"></a><span class="co">-- Start a TLS listener with that file-backed config.</span></span>
-<span id="cb33-11"><a href="#cb33-11" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
-<span id="cb33-12"><a href="#cb33-12" tabindex="-1"></a>  <span class="st">&#39;tls_demo_files&#39;</span>,              <span class="co">-- service name</span></span>
-<span id="cb33-13"><a href="#cb33-13" tabindex="-1"></a>  <span class="st">&#39;tls+tcp://127.0.0.1:45454&#39;</span>,   <span class="co">-- listen URL</span></span>
-<span id="cb33-14"><a href="#cb33-14" tabindex="-1"></a>  <span class="dv">1</span>,                             <span class="co">-- REP contexts</span></span>
-<span id="cb33-15"><a href="#cb33-15" tabindex="-1"></a>  <span class="dv">134217728</span>,                     <span class="co">-- recv_max_bytes</span></span>
-<span id="cb33-16"><a href="#cb33-16" tabindex="-1"></a>  <span class="dv">300000</span>,                        <span class="co">-- session_idle_ms</span></span>
-<span id="cb33-17"><a href="#cb33-17" tabindex="-1"></a>  <span class="dv">1</span>                              <span class="co">-- tls_config_id returned above</span></span>
-<span id="cb33-18"><a href="#cb33-18" tabindex="-1"></a>);</span>
-<span id="cb33-19"><a href="#cb33-19" tabindex="-1"></a></span>
-<span id="cb33-20"><a href="#cb33-20" tabindex="-1"></a><span class="co">-- Inspect the manifest reply over TLS using the same config handle on the client side.</span></span>
-<span id="cb33-21"><a href="#cb33-21" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
-<span id="cb33-22"><a href="#cb33-22" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb33-23"><a href="#cb33-23" tabindex="-1"></a>  ducknng_request_raw(</span>
-<span id="cb33-24"><a href="#cb33-24" tabindex="-1"></a>    <span class="st">&#39;tls+tcp://127.0.0.1:45454&#39;</span>,                <span class="co">-- url</span></span>
-<span id="cb33-25"><a href="#cb33-25" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
-<span id="cb33-26"><a href="#cb33-26" tabindex="-1"></a>    <span class="dv">1000</span>,                                       <span class="co">-- timeout_ms</span></span>
-<span id="cb33-27"><a href="#cb33-27" tabindex="-1"></a>    <span class="dv">1</span>                                           <span class="co">-- tls_config_id</span></span>
-<span id="cb33-28"><a href="#cb33-28" tabindex="-1"></a>  )</span>
-<span id="cb33-29"><a href="#cb33-29" tabindex="-1"></a>);</span>
-<span id="cb33-30"><a href="#cb33-30" tabindex="-1"></a></span>
-<span id="cb33-31"><a href="#cb33-31" tabindex="-1"></a><span class="co">-- Clean up the file-backed TLS demo server and config handle.</span></span>
-<span id="cb33-32"><a href="#cb33-32" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;tls_demo_files&#39;</span>);</span>
-<span id="cb33-33"><a href="#cb33-33" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
+<div class="sourceCode" id="cb35"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb35-1"><a href="#cb35-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
+<span id="cb35-2"><a href="#cb35-2" tabindex="-1"></a><span class="co">-- Register a file-backed TLS config using committed loopback test certificates.</span></span>
+<span id="cb35-3"><a href="#cb35-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_tls_config_from_files(</span>
+<span id="cb35-4"><a href="#cb35-4" tabindex="-1"></a>  <span class="st">&#39;test/certs/loopback-cert-key.pem&#39;</span>, <span class="co">-- cert_key_file</span></span>
+<span id="cb35-5"><a href="#cb35-5" tabindex="-1"></a>  <span class="st">&#39;test/certs/loopback-ca.pem&#39;</span>,       <span class="co">-- ca_file</span></span>
+<span id="cb35-6"><a href="#cb35-6" tabindex="-1"></a>  <span class="kw">NULL</span>,                               <span class="co">-- password</span></span>
+<span id="cb35-7"><a href="#cb35-7" tabindex="-1"></a>  <span class="dv">0</span>                                   <span class="co">-- auth_mode</span></span>
+<span id="cb35-8"><a href="#cb35-8" tabindex="-1"></a>);</span>
+<span id="cb35-9"><a href="#cb35-9" tabindex="-1"></a></span>
+<span id="cb35-10"><a href="#cb35-10" tabindex="-1"></a><span class="co">-- Start a TLS listener with that file-backed config.</span></span>
+<span id="cb35-11"><a href="#cb35-11" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb35-12"><a href="#cb35-12" tabindex="-1"></a>  <span class="st">&#39;tls_demo_files&#39;</span>,              <span class="co">-- service name</span></span>
+<span id="cb35-13"><a href="#cb35-13" tabindex="-1"></a>  <span class="st">&#39;tls+tcp://127.0.0.1:45454&#39;</span>,   <span class="co">-- listen URL</span></span>
+<span id="cb35-14"><a href="#cb35-14" tabindex="-1"></a>  <span class="dv">1</span>,                             <span class="co">-- REP contexts</span></span>
+<span id="cb35-15"><a href="#cb35-15" tabindex="-1"></a>  <span class="dv">134217728</span>,                     <span class="co">-- recv_max_bytes</span></span>
+<span id="cb35-16"><a href="#cb35-16" tabindex="-1"></a>  <span class="dv">300000</span>,                        <span class="co">-- session_idle_ms</span></span>
+<span id="cb35-17"><a href="#cb35-17" tabindex="-1"></a>  <span class="dv">1</span>                              <span class="co">-- tls_config_id returned above</span></span>
+<span id="cb35-18"><a href="#cb35-18" tabindex="-1"></a>);</span>
+<span id="cb35-19"><a href="#cb35-19" tabindex="-1"></a></span>
+<span id="cb35-20"><a href="#cb35-20" tabindex="-1"></a><span class="co">-- Inspect the manifest reply over TLS using the same config handle on the client side.</span></span>
+<span id="cb35-21"><a href="#cb35-21" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb35-22"><a href="#cb35-22" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb35-23"><a href="#cb35-23" tabindex="-1"></a>  ducknng_request_raw(</span>
+<span id="cb35-24"><a href="#cb35-24" tabindex="-1"></a>    <span class="st">&#39;tls+tcp://127.0.0.1:45454&#39;</span>,                <span class="co">-- url</span></span>
+<span id="cb35-25"><a href="#cb35-25" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
+<span id="cb35-26"><a href="#cb35-26" tabindex="-1"></a>    <span class="dv">1000</span>,                                       <span class="co">-- timeout_ms</span></span>
+<span id="cb35-27"><a href="#cb35-27" tabindex="-1"></a>    <span class="dv">1</span>                                           <span class="co">-- tls_config_id</span></span>
+<span id="cb35-28"><a href="#cb35-28" tabindex="-1"></a>  )</span>
+<span id="cb35-29"><a href="#cb35-29" tabindex="-1"></a>);</span>
+<span id="cb35-30"><a href="#cb35-30" tabindex="-1"></a></span>
+<span id="cb35-31"><a href="#cb35-31" tabindex="-1"></a><span class="co">-- Clean up the file-backed TLS demo server and config handle.</span></span>
+<span id="cb35-32"><a href="#cb35-32" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;tls_demo_files&#39;</span>);</span>
+<span id="cb35-33"><a href="#cb35-33" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
 <pre><code>+----------------------------------------------------------------------------------------------------------+
 | ducknng_tls_config_from_files(&#39;test/certs/loopback-cert-key.pem&#39;, &#39;test/certs/loopback-ca.pem&#39;, NULL, 0) |
 +----------------------------------------------------------------------------------------------------------+
@@ -2666,53 +2874,53 @@ not the HTTP carrier described in <code>docs/http.md</code>. They use
 <code>ducknng_start_server(...)</code>, the same framed
 manifest/RPC/session helpers, and the same TLS handle model as the other
 NNG transports.</p>
-<div class="sourceCode" id="cb35"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb35-1"><a href="#cb35-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
-<span id="cb35-2"><a href="#cb35-2" tabindex="-1"></a><span class="co">-- Plain WebSocket transport through the NNG service layer.</span></span>
-<span id="cb35-3"><a href="#cb35-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
-<span id="cb35-4"><a href="#cb35-4" tabindex="-1"></a>  <span class="st">&#39;ws_demo&#39;</span>,</span>
-<span id="cb35-5"><a href="#cb35-5" tabindex="-1"></a>  <span class="st">&#39;ws://127.0.0.1:45455/_ducknng&#39;</span>,</span>
-<span id="cb35-6"><a href="#cb35-6" tabindex="-1"></a>  <span class="dv">1</span>,</span>
-<span id="cb35-7"><a href="#cb35-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
-<span id="cb35-8"><a href="#cb35-8" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
-<span id="cb35-9"><a href="#cb35-9" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb35-10"><a href="#cb35-10" tabindex="-1"></a>);</span>
-<span id="cb35-11"><a href="#cb35-11" tabindex="-1"></a></span>
-<span id="cb35-12"><a href="#cb35-12" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
-<span id="cb35-13"><a href="#cb35-13" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb35-14"><a href="#cb35-14" tabindex="-1"></a>  ducknng_request_raw(</span>
-<span id="cb35-15"><a href="#cb35-15" tabindex="-1"></a>    <span class="st">&#39;ws://127.0.0.1:45455/_ducknng&#39;</span>,</span>
-<span id="cb35-16"><a href="#cb35-16" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
-<span id="cb35-17"><a href="#cb35-17" tabindex="-1"></a>    <span class="dv">1000</span>,</span>
-<span id="cb35-18"><a href="#cb35-18" tabindex="-1"></a>    <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb35-19"><a href="#cb35-19" tabindex="-1"></a>  )</span>
-<span id="cb35-20"><a href="#cb35-20" tabindex="-1"></a>);</span>
-<span id="cb35-21"><a href="#cb35-21" tabindex="-1"></a></span>
-<span id="cb35-22"><a href="#cb35-22" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;ws_demo&#39;</span>);</span>
-<span id="cb35-23"><a href="#cb35-23" tabindex="-1"></a></span>
-<span id="cb35-24"><a href="#cb35-24" tabindex="-1"></a><span class="co">-- Secure WebSocket transport uses the same reusable TLS handle model.</span></span>
-<span id="cb35-25"><a href="#cb35-25" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_self_signed_tls_config(<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">365</span>, <span class="dv">0</span>);</span>
-<span id="cb35-26"><a href="#cb35-26" tabindex="-1"></a></span>
-<span id="cb35-27"><a href="#cb35-27" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
-<span id="cb35-28"><a href="#cb35-28" tabindex="-1"></a>  <span class="st">&#39;wss_demo&#39;</span>,</span>
-<span id="cb35-29"><a href="#cb35-29" tabindex="-1"></a>  <span class="st">&#39;wss://127.0.0.1:45456/_ducknng&#39;</span>,</span>
-<span id="cb35-30"><a href="#cb35-30" tabindex="-1"></a>  <span class="dv">1</span>,</span>
-<span id="cb35-31"><a href="#cb35-31" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
-<span id="cb35-32"><a href="#cb35-32" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
-<span id="cb35-33"><a href="#cb35-33" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb35-34"><a href="#cb35-34" tabindex="-1"></a>);</span>
-<span id="cb35-35"><a href="#cb35-35" tabindex="-1"></a></span>
-<span id="cb35-36"><a href="#cb35-36" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
-<span id="cb35-37"><a href="#cb35-37" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb35-38"><a href="#cb35-38" tabindex="-1"></a>  ducknng_request_raw(</span>
-<span id="cb35-39"><a href="#cb35-39" tabindex="-1"></a>    <span class="st">&#39;wss://127.0.0.1:45456/_ducknng&#39;</span>,</span>
-<span id="cb35-40"><a href="#cb35-40" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
-<span id="cb35-41"><a href="#cb35-41" tabindex="-1"></a>    <span class="dv">1000</span>,</span>
-<span id="cb35-42"><a href="#cb35-42" tabindex="-1"></a>    <span class="dv">1</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb35-43"><a href="#cb35-43" tabindex="-1"></a>  )</span>
-<span id="cb35-44"><a href="#cb35-44" tabindex="-1"></a>);</span>
-<span id="cb35-45"><a href="#cb35-45" tabindex="-1"></a></span>
-<span id="cb35-46"><a href="#cb35-46" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;wss_demo&#39;</span>);</span>
-<span id="cb35-47"><a href="#cb35-47" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
+<div class="sourceCode" id="cb37"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb37-1"><a href="#cb37-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
+<span id="cb37-2"><a href="#cb37-2" tabindex="-1"></a><span class="co">-- Plain WebSocket transport through the NNG service layer.</span></span>
+<span id="cb37-3"><a href="#cb37-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb37-4"><a href="#cb37-4" tabindex="-1"></a>  <span class="st">&#39;ws_demo&#39;</span>,</span>
+<span id="cb37-5"><a href="#cb37-5" tabindex="-1"></a>  <span class="st">&#39;ws://127.0.0.1:45455/_ducknng&#39;</span>,</span>
+<span id="cb37-6"><a href="#cb37-6" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb37-7"><a href="#cb37-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb37-8"><a href="#cb37-8" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb37-9"><a href="#cb37-9" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb37-10"><a href="#cb37-10" tabindex="-1"></a>);</span>
+<span id="cb37-11"><a href="#cb37-11" tabindex="-1"></a></span>
+<span id="cb37-12"><a href="#cb37-12" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
+<span id="cb37-13"><a href="#cb37-13" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb37-14"><a href="#cb37-14" tabindex="-1"></a>  ducknng_request_raw(</span>
+<span id="cb37-15"><a href="#cb37-15" tabindex="-1"></a>    <span class="st">&#39;ws://127.0.0.1:45455/_ducknng&#39;</span>,</span>
+<span id="cb37-16"><a href="#cb37-16" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
+<span id="cb37-17"><a href="#cb37-17" tabindex="-1"></a>    <span class="dv">1000</span>,</span>
+<span id="cb37-18"><a href="#cb37-18" tabindex="-1"></a>    <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb37-19"><a href="#cb37-19" tabindex="-1"></a>  )</span>
+<span id="cb37-20"><a href="#cb37-20" tabindex="-1"></a>);</span>
+<span id="cb37-21"><a href="#cb37-21" tabindex="-1"></a></span>
+<span id="cb37-22"><a href="#cb37-22" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;ws_demo&#39;</span>);</span>
+<span id="cb37-23"><a href="#cb37-23" tabindex="-1"></a></span>
+<span id="cb37-24"><a href="#cb37-24" tabindex="-1"></a><span class="co">-- Secure WebSocket transport uses the same reusable TLS handle model.</span></span>
+<span id="cb37-25"><a href="#cb37-25" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_self_signed_tls_config(<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">365</span>, <span class="dv">0</span>);</span>
+<span id="cb37-26"><a href="#cb37-26" tabindex="-1"></a></span>
+<span id="cb37-27"><a href="#cb37-27" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb37-28"><a href="#cb37-28" tabindex="-1"></a>  <span class="st">&#39;wss_demo&#39;</span>,</span>
+<span id="cb37-29"><a href="#cb37-29" tabindex="-1"></a>  <span class="st">&#39;wss://127.0.0.1:45456/_ducknng&#39;</span>,</span>
+<span id="cb37-30"><a href="#cb37-30" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb37-31"><a href="#cb37-31" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb37-32"><a href="#cb37-32" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb37-33"><a href="#cb37-33" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb37-34"><a href="#cb37-34" tabindex="-1"></a>);</span>
+<span id="cb37-35"><a href="#cb37-35" tabindex="-1"></a></span>
+<span id="cb37-36"><a href="#cb37-36" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
+<span id="cb37-37"><a href="#cb37-37" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb37-38"><a href="#cb37-38" tabindex="-1"></a>  ducknng_request_raw(</span>
+<span id="cb37-39"><a href="#cb37-39" tabindex="-1"></a>    <span class="st">&#39;wss://127.0.0.1:45456/_ducknng&#39;</span>,</span>
+<span id="cb37-40"><a href="#cb37-40" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
+<span id="cb37-41"><a href="#cb37-41" tabindex="-1"></a>    <span class="dv">1000</span>,</span>
+<span id="cb37-42"><a href="#cb37-42" tabindex="-1"></a>    <span class="dv">1</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb37-43"><a href="#cb37-43" tabindex="-1"></a>  )</span>
+<span id="cb37-44"><a href="#cb37-44" tabindex="-1"></a>);</span>
+<span id="cb37-45"><a href="#cb37-45" tabindex="-1"></a></span>
+<span id="cb37-46"><a href="#cb37-46" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;wss_demo&#39;</span>);</span>
+<span id="cb37-47"><a href="#cb37-47" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(<span class="dv">1</span>);</span></code></pre></div>
 <pre><code>+--------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;ws_demo&#39;, &#39;ws://127.0.0.1:45455/_ducknng&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
 +--------------------------------------------------------------------------------------------------------------+
@@ -2761,232 +2969,232 @@ remote <code>exec</code> requests, inspect the same table locally, and
 then clean up.</p>
 <h4 id="frame-encoding-and-decoding-helpers">Frame encoding and decoding
 helpers</h4>
-<div class="sourceCode" id="cb37"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb37-1"><a href="#cb37-1" tabindex="-1"></a><span class="co"># Little-endian helpers for the versioned ducknng RPC envelope.</span></span>
-<span id="cb37-2"><a href="#cb37-2" tabindex="-1"></a>write_u32le <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
-<span id="cb37-3"><a href="#cb37-3" tabindex="-1"></a>  <span class="fu">writeBin</span>(<span class="fu">as.integer</span>(x), <span class="fu">raw</span>(), <span class="at">size =</span> <span class="dv">4</span><span class="dt">L</span>, <span class="at">endian =</span> <span class="st">&quot;little&quot;</span>)</span>
-<span id="cb37-4"><a href="#cb37-4" tabindex="-1"></a>}</span>
-<span id="cb37-5"><a href="#cb37-5" tabindex="-1"></a></span>
-<span id="cb37-6"><a href="#cb37-6" tabindex="-1"></a>write_u64le <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
-<span id="cb37-7"><a href="#cb37-7" tabindex="-1"></a>  x <span class="ot">&lt;-</span> <span class="fu">as.double</span>(x)</span>
-<span id="cb37-8"><a href="#cb37-8" tabindex="-1"></a>  <span class="fu">c</span>(<span class="fu">write_u32le</span>(x <span class="sc">%%</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span>), <span class="fu">write_u32le</span>(<span class="fu">floor</span>(x <span class="sc">/</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span>)))</span>
-<span id="cb37-9"><a href="#cb37-9" tabindex="-1"></a>}</span>
-<span id="cb37-10"><a href="#cb37-10" tabindex="-1"></a></span>
-<span id="cb37-11"><a href="#cb37-11" tabindex="-1"></a>read_u32le_bytes <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
-<span id="cb37-12"><a href="#cb37-12" tabindex="-1"></a>  <span class="fu">sum</span>(<span class="fu">as.double</span>(<span class="fu">as.integer</span>(x)) <span class="sc">*</span> <span class="dv">256</span><span class="sc">^</span>(<span class="dv">0</span><span class="sc">:</span><span class="dv">3</span>))</span>
-<span id="cb37-13"><a href="#cb37-13" tabindex="-1"></a>}</span>
-<span id="cb37-14"><a href="#cb37-14" tabindex="-1"></a></span>
-<span id="cb37-15"><a href="#cb37-15" tabindex="-1"></a>read_u64le_bytes <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
-<span id="cb37-16"><a href="#cb37-16" tabindex="-1"></a>  <span class="fu">read_u32le_bytes</span>(x[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]) <span class="sc">+</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span> <span class="sc">*</span> <span class="fu">read_u32le_bytes</span>(x[<span class="dv">5</span><span class="sc">:</span><span class="dv">8</span>])</span>
-<span id="cb37-17"><a href="#cb37-17" tabindex="-1"></a>}</span>
-<span id="cb37-18"><a href="#cb37-18" tabindex="-1"></a></span>
-<span id="cb37-19"><a href="#cb37-19" tabindex="-1"></a>read_u32le <span class="ot">&lt;-</span> <span class="cf">function</span>(buf, offset) {</span>
-<span id="cb37-20"><a href="#cb37-20" tabindex="-1"></a>  <span class="fu">read_u32le_bytes</span>(buf[offset <span class="sc">+</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">3</span>])</span>
-<span id="cb37-21"><a href="#cb37-21" tabindex="-1"></a>}</span>
-<span id="cb37-22"><a href="#cb37-22" tabindex="-1"></a></span>
-<span id="cb37-23"><a href="#cb37-23" tabindex="-1"></a>read_u64le <span class="ot">&lt;-</span> <span class="cf">function</span>(buf, offset) {</span>
-<span id="cb37-24"><a href="#cb37-24" tabindex="-1"></a>  <span class="fu">read_u64le_bytes</span>(buf[offset <span class="sc">+</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">7</span>])</span>
-<span id="cb37-25"><a href="#cb37-25" tabindex="-1"></a>}</span>
-<span id="cb37-26"><a href="#cb37-26" tabindex="-1"></a></span>
-<span id="cb37-27"><a href="#cb37-27" tabindex="-1"></a><span class="co"># Encode the Arrow IPC payload carried by the built-in exec RPC method.</span></span>
-<span id="cb37-28"><a href="#cb37-28" tabindex="-1"></a>encode_ducknng_exec_payload <span class="ot">&lt;-</span> <span class="cf">function</span>(sql, <span class="at">want_result =</span> <span class="cn">FALSE</span>) {</span>
-<span id="cb37-29"><a href="#cb37-29" tabindex="-1"></a>  raw_con <span class="ot">&lt;-</span> <span class="fu">rawConnection</span>(<span class="fu">raw</span>(), <span class="at">open =</span> <span class="st">&quot;r+&quot;</span>)</span>
-<span id="cb37-30"><a href="#cb37-30" tabindex="-1"></a>  <span class="fu">on.exit</span>(<span class="fu">close</span>(raw_con), <span class="at">add =</span> <span class="cn">TRUE</span>)</span>
-<span id="cb37-31"><a href="#cb37-31" tabindex="-1"></a></span>
-<span id="cb37-32"><a href="#cb37-32" tabindex="-1"></a>  nanoarrow<span class="sc">::</span><span class="fu">write_nanoarrow</span>(</span>
-<span id="cb37-33"><a href="#cb37-33" tabindex="-1"></a>    <span class="fu">data.frame</span>(<span class="at">sql =</span> sql, <span class="at">want_result =</span> want_result),</span>
-<span id="cb37-34"><a href="#cb37-34" tabindex="-1"></a>    raw_con</span>
-<span id="cb37-35"><a href="#cb37-35" tabindex="-1"></a>  )</span>
-<span id="cb37-36"><a href="#cb37-36" tabindex="-1"></a></span>
-<span id="cb37-37"><a href="#cb37-37" tabindex="-1"></a>  <span class="fu">rawConnectionValue</span>(raw_con)</span>
-<span id="cb37-38"><a href="#cb37-38" tabindex="-1"></a>}</span>
-<span id="cb37-39"><a href="#cb37-39" tabindex="-1"></a></span>
-<span id="cb37-40"><a href="#cb37-40" tabindex="-1"></a><span class="co"># Build a version 1 RPC call frame for the named method.</span></span>
-<span id="cb37-41"><a href="#cb37-41" tabindex="-1"></a>encode_ducknng_call_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(method, payload, <span class="at">flags =</span> <span class="dv">0</span><span class="dt">L</span>) {</span>
-<span id="cb37-42"><a href="#cb37-42" tabindex="-1"></a>  method_name <span class="ot">&lt;-</span> <span class="fu">charToRaw</span>(method)</span>
-<span id="cb37-43"><a href="#cb37-43" tabindex="-1"></a></span>
-<span id="cb37-44"><a href="#cb37-44" tabindex="-1"></a>  <span class="fu">c</span>(</span>
-<span id="cb37-45"><a href="#cb37-45" tabindex="-1"></a>    <span class="fu">as.raw</span>(<span class="dv">1</span><span class="dt">L</span>),</span>
-<span id="cb37-46"><a href="#cb37-46" tabindex="-1"></a>    <span class="fu">as.raw</span>(<span class="dv">1</span><span class="dt">L</span>),</span>
-<span id="cb37-47"><a href="#cb37-47" tabindex="-1"></a>    <span class="fu">write_u32le</span>(flags),</span>
-<span id="cb37-48"><a href="#cb37-48" tabindex="-1"></a>    <span class="fu">write_u32le</span>(<span class="fu">length</span>(method_name)),</span>
-<span id="cb37-49"><a href="#cb37-49" tabindex="-1"></a>    <span class="fu">write_u32le</span>(<span class="dv">0</span>),</span>
-<span id="cb37-50"><a href="#cb37-50" tabindex="-1"></a>    <span class="fu">write_u64le</span>(<span class="fu">length</span>(payload)),</span>
-<span id="cb37-51"><a href="#cb37-51" tabindex="-1"></a>    method_name,</span>
-<span id="cb37-52"><a href="#cb37-52" tabindex="-1"></a>    payload</span>
-<span id="cb37-53"><a href="#cb37-53" tabindex="-1"></a>  )</span>
-<span id="cb37-54"><a href="#cb37-54" tabindex="-1"></a>}</span>
-<span id="cb37-55"><a href="#cb37-55" tabindex="-1"></a></span>
-<span id="cb37-56"><a href="#cb37-56" tabindex="-1"></a>encode_ducknng_exec_request <span class="ot">&lt;-</span> <span class="cf">function</span>(sql, <span class="at">want_result =</span> <span class="cn">FALSE</span>) {</span>
-<span id="cb37-57"><a href="#cb37-57" tabindex="-1"></a>  <span class="fu">encode_ducknng_call_frame</span>(</span>
-<span id="cb37-58"><a href="#cb37-58" tabindex="-1"></a>    <span class="at">method =</span> <span class="st">&quot;exec&quot;</span>,</span>
-<span id="cb37-59"><a href="#cb37-59" tabindex="-1"></a>    <span class="at">payload =</span> <span class="fu">encode_ducknng_exec_payload</span>(sql, <span class="at">want_result =</span> want_result)</span>
-<span id="cb37-60"><a href="#cb37-60" tabindex="-1"></a>  )</span>
-<span id="cb37-61"><a href="#cb37-61" tabindex="-1"></a>}</span>
-<span id="cb37-62"><a href="#cb37-62" tabindex="-1"></a></span>
-<span id="cb37-63"><a href="#cb37-63" tabindex="-1"></a><span class="co"># Decode a reply envelope and parse its Arrow IPC payload when present.</span></span>
-<span id="cb37-64"><a href="#cb37-64" tabindex="-1"></a>decode_ducknng_exec_reply <span class="ot">&lt;-</span> <span class="cf">function</span>(buf) {</span>
-<span id="cb37-65"><a href="#cb37-65" tabindex="-1"></a>  header_size <span class="ot">&lt;-</span> <span class="dv">23</span><span class="dt">L</span></span>
-<span id="cb37-66"><a href="#cb37-66" tabindex="-1"></a></span>
-<span id="cb37-67"><a href="#cb37-67" tabindex="-1"></a>  <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.raw</span>(buf) <span class="sc">||</span> <span class="fu">length</span>(buf) <span class="sc">&lt;</span> (header_size <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)) {</span>
-<span id="cb37-68"><a href="#cb37-68" tabindex="-1"></a>    <span class="fu">stop</span>(<span class="st">&quot;ducknng reply frame was empty or truncated&quot;</span>, <span class="at">call. =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb37-69"><a href="#cb37-69" tabindex="-1"></a>  }</span>
-<span id="cb37-70"><a href="#cb37-70" tabindex="-1"></a></span>
-<span id="cb37-71"><a href="#cb37-71" tabindex="-1"></a>  name_len <span class="ot">&lt;-</span> <span class="fu">read_u32le</span>(buf, <span class="dv">7</span>)</span>
-<span id="cb37-72"><a href="#cb37-72" tabindex="-1"></a>  error_len <span class="ot">&lt;-</span> <span class="fu">read_u32le</span>(buf, <span class="dv">11</span>)</span>
-<span id="cb37-73"><a href="#cb37-73" tabindex="-1"></a>  payload_len <span class="ot">&lt;-</span> <span class="fu">read_u64le</span>(buf, <span class="dv">15</span>)</span>
-<span id="cb37-74"><a href="#cb37-74" tabindex="-1"></a></span>
-<span id="cb37-75"><a href="#cb37-75" tabindex="-1"></a>  name_start <span class="ot">&lt;-</span> header_size</span>
-<span id="cb37-76"><a href="#cb37-76" tabindex="-1"></a>  error_start <span class="ot">&lt;-</span> name_start <span class="sc">+</span> name_len</span>
-<span id="cb37-77"><a href="#cb37-77" tabindex="-1"></a>  payload_start <span class="ot">&lt;-</span> error_start <span class="sc">+</span> error_len</span>
-<span id="cb37-78"><a href="#cb37-78" tabindex="-1"></a>  payload_end <span class="ot">&lt;-</span> payload_start <span class="sc">+</span> payload_len <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span></span>
-<span id="cb37-79"><a href="#cb37-79" tabindex="-1"></a></span>
-<span id="cb37-80"><a href="#cb37-80" tabindex="-1"></a>  payload <span class="ot">&lt;-</span> <span class="cf">if</span> (payload_len <span class="sc">&gt;</span> <span class="dv">0</span>) buf[payload_start<span class="sc">:</span>payload_end] <span class="cf">else</span> <span class="fu">raw</span>()</span>
-<span id="cb37-81"><a href="#cb37-81" tabindex="-1"></a></span>
-<span id="cb37-82"><a href="#cb37-82" tabindex="-1"></a>  <span class="fu">list</span>(</span>
-<span id="cb37-83"><a href="#cb37-83" tabindex="-1"></a>    <span class="at">version =</span> <span class="fu">as.integer</span>(buf[<span class="dv">1</span>]),</span>
-<span id="cb37-84"><a href="#cb37-84" tabindex="-1"></a>    <span class="at">type =</span> <span class="fu">as.integer</span>(buf[<span class="dv">2</span>]),</span>
-<span id="cb37-85"><a href="#cb37-85" tabindex="-1"></a>    <span class="at">flags =</span> <span class="fu">read_u32le</span>(buf, <span class="dv">3</span>),</span>
-<span id="cb37-86"><a href="#cb37-86" tabindex="-1"></a>    <span class="at">method =</span> <span class="fu">rawToChar</span>(buf[name_start<span class="sc">:</span>(error_start <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)]),</span>
-<span id="cb37-87"><a href="#cb37-87" tabindex="-1"></a>    <span class="at">error =</span> <span class="cf">if</span> (error_len <span class="sc">&gt;</span> <span class="dv">0</span>) <span class="fu">rawToChar</span>(buf[error_start<span class="sc">:</span>(payload_start <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)]) <span class="cf">else</span> <span class="st">&quot;&quot;</span>,</span>
-<span id="cb37-88"><a href="#cb37-88" tabindex="-1"></a>    <span class="at">payload =</span> payload,</span>
-<span id="cb37-89"><a href="#cb37-89" tabindex="-1"></a>    <span class="at">data =</span> <span class="cf">if</span> (payload_len <span class="sc">&gt;</span> <span class="dv">0</span>) <span class="fu">as.data.frame</span>(nanoarrow<span class="sc">::</span><span class="fu">read_nanoarrow</span>(payload)) <span class="cf">else</span> <span class="cn">NULL</span></span>
-<span id="cb37-90"><a href="#cb37-90" tabindex="-1"></a>  )</span>
-<span id="cb37-91"><a href="#cb37-91" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb39"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb39-1"><a href="#cb39-1" tabindex="-1"></a><span class="co"># Little-endian helpers for the versioned ducknng RPC envelope.</span></span>
+<span id="cb39-2"><a href="#cb39-2" tabindex="-1"></a>write_u32le <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
+<span id="cb39-3"><a href="#cb39-3" tabindex="-1"></a>  <span class="fu">writeBin</span>(<span class="fu">as.integer</span>(x), <span class="fu">raw</span>(), <span class="at">size =</span> <span class="dv">4</span><span class="dt">L</span>, <span class="at">endian =</span> <span class="st">&quot;little&quot;</span>)</span>
+<span id="cb39-4"><a href="#cb39-4" tabindex="-1"></a>}</span>
+<span id="cb39-5"><a href="#cb39-5" tabindex="-1"></a></span>
+<span id="cb39-6"><a href="#cb39-6" tabindex="-1"></a>write_u64le <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
+<span id="cb39-7"><a href="#cb39-7" tabindex="-1"></a>  x <span class="ot">&lt;-</span> <span class="fu">as.double</span>(x)</span>
+<span id="cb39-8"><a href="#cb39-8" tabindex="-1"></a>  <span class="fu">c</span>(<span class="fu">write_u32le</span>(x <span class="sc">%%</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span>), <span class="fu">write_u32le</span>(<span class="fu">floor</span>(x <span class="sc">/</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span>)))</span>
+<span id="cb39-9"><a href="#cb39-9" tabindex="-1"></a>}</span>
+<span id="cb39-10"><a href="#cb39-10" tabindex="-1"></a></span>
+<span id="cb39-11"><a href="#cb39-11" tabindex="-1"></a>read_u32le_bytes <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
+<span id="cb39-12"><a href="#cb39-12" tabindex="-1"></a>  <span class="fu">sum</span>(<span class="fu">as.double</span>(<span class="fu">as.integer</span>(x)) <span class="sc">*</span> <span class="dv">256</span><span class="sc">^</span>(<span class="dv">0</span><span class="sc">:</span><span class="dv">3</span>))</span>
+<span id="cb39-13"><a href="#cb39-13" tabindex="-1"></a>}</span>
+<span id="cb39-14"><a href="#cb39-14" tabindex="-1"></a></span>
+<span id="cb39-15"><a href="#cb39-15" tabindex="-1"></a>read_u64le_bytes <span class="ot">&lt;-</span> <span class="cf">function</span>(x) {</span>
+<span id="cb39-16"><a href="#cb39-16" tabindex="-1"></a>  <span class="fu">read_u32le_bytes</span>(x[<span class="dv">1</span><span class="sc">:</span><span class="dv">4</span>]) <span class="sc">+</span> <span class="dv">2</span><span class="sc">^</span><span class="dv">32</span> <span class="sc">*</span> <span class="fu">read_u32le_bytes</span>(x[<span class="dv">5</span><span class="sc">:</span><span class="dv">8</span>])</span>
+<span id="cb39-17"><a href="#cb39-17" tabindex="-1"></a>}</span>
+<span id="cb39-18"><a href="#cb39-18" tabindex="-1"></a></span>
+<span id="cb39-19"><a href="#cb39-19" tabindex="-1"></a>read_u32le <span class="ot">&lt;-</span> <span class="cf">function</span>(buf, offset) {</span>
+<span id="cb39-20"><a href="#cb39-20" tabindex="-1"></a>  <span class="fu">read_u32le_bytes</span>(buf[offset <span class="sc">+</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">3</span>])</span>
+<span id="cb39-21"><a href="#cb39-21" tabindex="-1"></a>}</span>
+<span id="cb39-22"><a href="#cb39-22" tabindex="-1"></a></span>
+<span id="cb39-23"><a href="#cb39-23" tabindex="-1"></a>read_u64le <span class="ot">&lt;-</span> <span class="cf">function</span>(buf, offset) {</span>
+<span id="cb39-24"><a href="#cb39-24" tabindex="-1"></a>  <span class="fu">read_u64le_bytes</span>(buf[offset <span class="sc">+</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">7</span>])</span>
+<span id="cb39-25"><a href="#cb39-25" tabindex="-1"></a>}</span>
+<span id="cb39-26"><a href="#cb39-26" tabindex="-1"></a></span>
+<span id="cb39-27"><a href="#cb39-27" tabindex="-1"></a><span class="co"># Encode the Arrow IPC payload carried by the built-in exec RPC method.</span></span>
+<span id="cb39-28"><a href="#cb39-28" tabindex="-1"></a>encode_ducknng_exec_payload <span class="ot">&lt;-</span> <span class="cf">function</span>(sql, <span class="at">want_result =</span> <span class="cn">FALSE</span>) {</span>
+<span id="cb39-29"><a href="#cb39-29" tabindex="-1"></a>  raw_con <span class="ot">&lt;-</span> <span class="fu">rawConnection</span>(<span class="fu">raw</span>(), <span class="at">open =</span> <span class="st">&quot;r+&quot;</span>)</span>
+<span id="cb39-30"><a href="#cb39-30" tabindex="-1"></a>  <span class="fu">on.exit</span>(<span class="fu">close</span>(raw_con), <span class="at">add =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb39-31"><a href="#cb39-31" tabindex="-1"></a></span>
+<span id="cb39-32"><a href="#cb39-32" tabindex="-1"></a>  nanoarrow<span class="sc">::</span><span class="fu">write_nanoarrow</span>(</span>
+<span id="cb39-33"><a href="#cb39-33" tabindex="-1"></a>    <span class="fu">data.frame</span>(<span class="at">sql =</span> sql, <span class="at">want_result =</span> want_result),</span>
+<span id="cb39-34"><a href="#cb39-34" tabindex="-1"></a>    raw_con</span>
+<span id="cb39-35"><a href="#cb39-35" tabindex="-1"></a>  )</span>
+<span id="cb39-36"><a href="#cb39-36" tabindex="-1"></a></span>
+<span id="cb39-37"><a href="#cb39-37" tabindex="-1"></a>  <span class="fu">rawConnectionValue</span>(raw_con)</span>
+<span id="cb39-38"><a href="#cb39-38" tabindex="-1"></a>}</span>
+<span id="cb39-39"><a href="#cb39-39" tabindex="-1"></a></span>
+<span id="cb39-40"><a href="#cb39-40" tabindex="-1"></a><span class="co"># Build a version 1 RPC call frame for the named method.</span></span>
+<span id="cb39-41"><a href="#cb39-41" tabindex="-1"></a>encode_ducknng_call_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(method, payload, <span class="at">flags =</span> <span class="dv">0</span><span class="dt">L</span>) {</span>
+<span id="cb39-42"><a href="#cb39-42" tabindex="-1"></a>  method_name <span class="ot">&lt;-</span> <span class="fu">charToRaw</span>(method)</span>
+<span id="cb39-43"><a href="#cb39-43" tabindex="-1"></a></span>
+<span id="cb39-44"><a href="#cb39-44" tabindex="-1"></a>  <span class="fu">c</span>(</span>
+<span id="cb39-45"><a href="#cb39-45" tabindex="-1"></a>    <span class="fu">as.raw</span>(<span class="dv">1</span><span class="dt">L</span>),</span>
+<span id="cb39-46"><a href="#cb39-46" tabindex="-1"></a>    <span class="fu">as.raw</span>(<span class="dv">1</span><span class="dt">L</span>),</span>
+<span id="cb39-47"><a href="#cb39-47" tabindex="-1"></a>    <span class="fu">write_u32le</span>(flags),</span>
+<span id="cb39-48"><a href="#cb39-48" tabindex="-1"></a>    <span class="fu">write_u32le</span>(<span class="fu">length</span>(method_name)),</span>
+<span id="cb39-49"><a href="#cb39-49" tabindex="-1"></a>    <span class="fu">write_u32le</span>(<span class="dv">0</span>),</span>
+<span id="cb39-50"><a href="#cb39-50" tabindex="-1"></a>    <span class="fu">write_u64le</span>(<span class="fu">length</span>(payload)),</span>
+<span id="cb39-51"><a href="#cb39-51" tabindex="-1"></a>    method_name,</span>
+<span id="cb39-52"><a href="#cb39-52" tabindex="-1"></a>    payload</span>
+<span id="cb39-53"><a href="#cb39-53" tabindex="-1"></a>  )</span>
+<span id="cb39-54"><a href="#cb39-54" tabindex="-1"></a>}</span>
+<span id="cb39-55"><a href="#cb39-55" tabindex="-1"></a></span>
+<span id="cb39-56"><a href="#cb39-56" tabindex="-1"></a>encode_ducknng_exec_request <span class="ot">&lt;-</span> <span class="cf">function</span>(sql, <span class="at">want_result =</span> <span class="cn">FALSE</span>) {</span>
+<span id="cb39-57"><a href="#cb39-57" tabindex="-1"></a>  <span class="fu">encode_ducknng_call_frame</span>(</span>
+<span id="cb39-58"><a href="#cb39-58" tabindex="-1"></a>    <span class="at">method =</span> <span class="st">&quot;exec&quot;</span>,</span>
+<span id="cb39-59"><a href="#cb39-59" tabindex="-1"></a>    <span class="at">payload =</span> <span class="fu">encode_ducknng_exec_payload</span>(sql, <span class="at">want_result =</span> want_result)</span>
+<span id="cb39-60"><a href="#cb39-60" tabindex="-1"></a>  )</span>
+<span id="cb39-61"><a href="#cb39-61" tabindex="-1"></a>}</span>
+<span id="cb39-62"><a href="#cb39-62" tabindex="-1"></a></span>
+<span id="cb39-63"><a href="#cb39-63" tabindex="-1"></a><span class="co"># Decode a reply envelope and parse its Arrow IPC payload when present.</span></span>
+<span id="cb39-64"><a href="#cb39-64" tabindex="-1"></a>decode_ducknng_exec_reply <span class="ot">&lt;-</span> <span class="cf">function</span>(buf) {</span>
+<span id="cb39-65"><a href="#cb39-65" tabindex="-1"></a>  header_size <span class="ot">&lt;-</span> <span class="dv">23</span><span class="dt">L</span></span>
+<span id="cb39-66"><a href="#cb39-66" tabindex="-1"></a></span>
+<span id="cb39-67"><a href="#cb39-67" tabindex="-1"></a>  <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.raw</span>(buf) <span class="sc">||</span> <span class="fu">length</span>(buf) <span class="sc">&lt;</span> (header_size <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)) {</span>
+<span id="cb39-68"><a href="#cb39-68" tabindex="-1"></a>    <span class="fu">stop</span>(<span class="st">&quot;ducknng reply frame was empty or truncated&quot;</span>, <span class="at">call. =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb39-69"><a href="#cb39-69" tabindex="-1"></a>  }</span>
+<span id="cb39-70"><a href="#cb39-70" tabindex="-1"></a></span>
+<span id="cb39-71"><a href="#cb39-71" tabindex="-1"></a>  name_len <span class="ot">&lt;-</span> <span class="fu">read_u32le</span>(buf, <span class="dv">7</span>)</span>
+<span id="cb39-72"><a href="#cb39-72" tabindex="-1"></a>  error_len <span class="ot">&lt;-</span> <span class="fu">read_u32le</span>(buf, <span class="dv">11</span>)</span>
+<span id="cb39-73"><a href="#cb39-73" tabindex="-1"></a>  payload_len <span class="ot">&lt;-</span> <span class="fu">read_u64le</span>(buf, <span class="dv">15</span>)</span>
+<span id="cb39-74"><a href="#cb39-74" tabindex="-1"></a></span>
+<span id="cb39-75"><a href="#cb39-75" tabindex="-1"></a>  name_start <span class="ot">&lt;-</span> header_size</span>
+<span id="cb39-76"><a href="#cb39-76" tabindex="-1"></a>  error_start <span class="ot">&lt;-</span> name_start <span class="sc">+</span> name_len</span>
+<span id="cb39-77"><a href="#cb39-77" tabindex="-1"></a>  payload_start <span class="ot">&lt;-</span> error_start <span class="sc">+</span> error_len</span>
+<span id="cb39-78"><a href="#cb39-78" tabindex="-1"></a>  payload_end <span class="ot">&lt;-</span> payload_start <span class="sc">+</span> payload_len <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb39-79"><a href="#cb39-79" tabindex="-1"></a></span>
+<span id="cb39-80"><a href="#cb39-80" tabindex="-1"></a>  payload <span class="ot">&lt;-</span> <span class="cf">if</span> (payload_len <span class="sc">&gt;</span> <span class="dv">0</span>) buf[payload_start<span class="sc">:</span>payload_end] <span class="cf">else</span> <span class="fu">raw</span>()</span>
+<span id="cb39-81"><a href="#cb39-81" tabindex="-1"></a></span>
+<span id="cb39-82"><a href="#cb39-82" tabindex="-1"></a>  <span class="fu">list</span>(</span>
+<span id="cb39-83"><a href="#cb39-83" tabindex="-1"></a>    <span class="at">version =</span> <span class="fu">as.integer</span>(buf[<span class="dv">1</span>]),</span>
+<span id="cb39-84"><a href="#cb39-84" tabindex="-1"></a>    <span class="at">type =</span> <span class="fu">as.integer</span>(buf[<span class="dv">2</span>]),</span>
+<span id="cb39-85"><a href="#cb39-85" tabindex="-1"></a>    <span class="at">flags =</span> <span class="fu">read_u32le</span>(buf, <span class="dv">3</span>),</span>
+<span id="cb39-86"><a href="#cb39-86" tabindex="-1"></a>    <span class="at">method =</span> <span class="fu">rawToChar</span>(buf[name_start<span class="sc">:</span>(error_start <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)]),</span>
+<span id="cb39-87"><a href="#cb39-87" tabindex="-1"></a>    <span class="at">error =</span> <span class="cf">if</span> (error_len <span class="sc">&gt;</span> <span class="dv">0</span>) <span class="fu">rawToChar</span>(buf[error_start<span class="sc">:</span>(payload_start <span class="sc">-</span> <span class="dv">1</span><span class="dt">L</span>)]) <span class="cf">else</span> <span class="st">&quot;&quot;</span>,</span>
+<span id="cb39-88"><a href="#cb39-88" tabindex="-1"></a>    <span class="at">payload =</span> payload,</span>
+<span id="cb39-89"><a href="#cb39-89" tabindex="-1"></a>    <span class="at">data =</span> <span class="cf">if</span> (payload_len <span class="sc">&gt;</span> <span class="dv">0</span>) <span class="fu">as.data.frame</span>(nanoarrow<span class="sc">::</span><span class="fu">read_nanoarrow</span>(payload)) <span class="cf">else</span> <span class="cn">NULL</span></span>
+<span id="cb39-90"><a href="#cb39-90" tabindex="-1"></a>  )</span>
+<span id="cb39-91"><a href="#cb39-91" tabindex="-1"></a>}</span></code></pre></div>
 <h4 id="reqrep-retry-helpers">REQ/REP retry helpers</h4>
-<div class="sourceCode" id="cb38"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" tabindex="-1"></a><span class="co"># Send and receive with the same retry style used in mangoro examples.</span></span>
-<span id="cb38-2"><a href="#cb38-2" tabindex="-1"></a>send_ducknng_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, frame, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>, <span class="at">max_attempts =</span> <span class="dv">20</span><span class="dt">L</span>) {</span>
-<span id="cb38-3"><a href="#cb38-3" tabindex="-1"></a>  attempt <span class="ot">&lt;-</span> <span class="dv">1</span><span class="dt">L</span></span>
-<span id="cb38-4"><a href="#cb38-4" tabindex="-1"></a>  send_result <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">send</span>(socket, frame, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
-<span id="cb38-5"><a href="#cb38-5" tabindex="-1"></a></span>
-<span id="cb38-6"><a href="#cb38-6" tabindex="-1"></a>  <span class="cf">while</span> (nanonext<span class="sc">::</span><span class="fu">is_error_value</span>(send_result) <span class="sc">&amp;&amp;</span> attempt <span class="sc">&lt;</span> max_attempts) {</span>
-<span id="cb38-7"><a href="#cb38-7" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(<span class="fl">0.25</span>)</span>
-<span id="cb38-8"><a href="#cb38-8" tabindex="-1"></a>    send_result <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">send</span>(socket, frame, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
-<span id="cb38-9"><a href="#cb38-9" tabindex="-1"></a>    attempt <span class="ot">&lt;-</span> attempt <span class="sc">+</span> <span class="dv">1</span><span class="dt">L</span></span>
-<span id="cb38-10"><a href="#cb38-10" tabindex="-1"></a>  }</span>
-<span id="cb38-11"><a href="#cb38-11" tabindex="-1"></a></span>
-<span id="cb38-12"><a href="#cb38-12" tabindex="-1"></a>  send_result</span>
-<span id="cb38-13"><a href="#cb38-13" tabindex="-1"></a>}</span>
-<span id="cb38-14"><a href="#cb38-14" tabindex="-1"></a></span>
-<span id="cb38-15"><a href="#cb38-15" tabindex="-1"></a>recv_ducknng_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>, <span class="at">max_attempts =</span> <span class="dv">20</span><span class="dt">L</span>) {</span>
-<span id="cb38-16"><a href="#cb38-16" tabindex="-1"></a>  attempt <span class="ot">&lt;-</span> <span class="dv">1</span><span class="dt">L</span></span>
-<span id="cb38-17"><a href="#cb38-17" tabindex="-1"></a>  response <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">recv</span>(socket, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
-<span id="cb38-18"><a href="#cb38-18" tabindex="-1"></a></span>
-<span id="cb38-19"><a href="#cb38-19" tabindex="-1"></a>  <span class="cf">while</span> (</span>
-<span id="cb38-20"><a href="#cb38-20" tabindex="-1"></a>    (</span>
-<span id="cb38-21"><a href="#cb38-21" tabindex="-1"></a>      nanonext<span class="sc">::</span><span class="fu">is_error_value</span>(response) <span class="sc">||</span></span>
-<span id="cb38-22"><a href="#cb38-22" tabindex="-1"></a>      <span class="sc">!</span><span class="fu">is.raw</span>(response) <span class="sc">||</span></span>
-<span id="cb38-23"><a href="#cb38-23" tabindex="-1"></a>      <span class="fu">length</span>(response) <span class="sc">&lt;</span> <span class="dv">22</span><span class="dt">L</span></span>
-<span id="cb38-24"><a href="#cb38-24" tabindex="-1"></a>    ) <span class="sc">&amp;&amp;</span></span>
-<span id="cb38-25"><a href="#cb38-25" tabindex="-1"></a>    attempt <span class="sc">&lt;</span> max_attempts</span>
-<span id="cb38-26"><a href="#cb38-26" tabindex="-1"></a>  ) {</span>
-<span id="cb38-27"><a href="#cb38-27" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(<span class="fl">0.25</span>)</span>
-<span id="cb38-28"><a href="#cb38-28" tabindex="-1"></a>    response <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">recv</span>(socket, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
-<span id="cb38-29"><a href="#cb38-29" tabindex="-1"></a>    attempt <span class="ot">&lt;-</span> attempt <span class="sc">+</span> <span class="dv">1</span><span class="dt">L</span></span>
-<span id="cb38-30"><a href="#cb38-30" tabindex="-1"></a>  }</span>
-<span id="cb38-31"><a href="#cb38-31" tabindex="-1"></a></span>
-<span id="cb38-32"><a href="#cb38-32" tabindex="-1"></a>  response</span>
-<span id="cb38-33"><a href="#cb38-33" tabindex="-1"></a>}</span>
-<span id="cb38-34"><a href="#cb38-34" tabindex="-1"></a></span>
-<span id="cb38-35"><a href="#cb38-35" tabindex="-1"></a>run_ducknng_req <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, frame, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>) {</span>
-<span id="cb38-36"><a href="#cb38-36" tabindex="-1"></a>  <span class="fu">send_ducknng_frame</span>(socket, frame, <span class="at">timeout_ms =</span> timeout_ms)</span>
-<span id="cb38-37"><a href="#cb38-37" tabindex="-1"></a>  <span class="fu">decode_ducknng_exec_reply</span>(</span>
-<span id="cb38-38"><a href="#cb38-38" tabindex="-1"></a>    <span class="fu">recv_ducknng_frame</span>(socket, <span class="at">timeout_ms =</span> timeout_ms)</span>
-<span id="cb38-39"><a href="#cb38-39" tabindex="-1"></a>  )</span>
-<span id="cb38-40"><a href="#cb38-40" tabindex="-1"></a>}</span>
-<span id="cb38-41"><a href="#cb38-41" tabindex="-1"></a></span>
-<span id="cb38-42"><a href="#cb38-42" tabindex="-1"></a><span class="co"># Wait for an IPC listener path to appear before dialing it.</span></span>
-<span id="cb38-43"><a href="#cb38-43" tabindex="-1"></a>wait_for_ducknng_listener <span class="ot">&lt;-</span> <span class="cf">function</span>(path, <span class="at">timeout_secs =</span> <span class="dv">10</span>, <span class="at">interval_secs =</span> <span class="fl">0.1</span>) {</span>
-<span id="cb38-44"><a href="#cb38-44" tabindex="-1"></a>  deadline <span class="ot">&lt;-</span> <span class="fu">Sys.time</span>() <span class="sc">+</span> timeout_secs</span>
-<span id="cb38-45"><a href="#cb38-45" tabindex="-1"></a></span>
-<span id="cb38-46"><a href="#cb38-46" tabindex="-1"></a>  <span class="cf">while</span> (<span class="fu">Sys.time</span>() <span class="sc">&lt;</span> deadline) {</span>
-<span id="cb38-47"><a href="#cb38-47" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">file.exists</span>(path)) {</span>
-<span id="cb38-48"><a href="#cb38-48" tabindex="-1"></a>      <span class="fu">return</span>(<span class="fu">invisible</span>(<span class="cn">TRUE</span>))</span>
-<span id="cb38-49"><a href="#cb38-49" tabindex="-1"></a>    }</span>
-<span id="cb38-50"><a href="#cb38-50" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(interval_secs)</span>
-<span id="cb38-51"><a href="#cb38-51" tabindex="-1"></a>  }</span>
-<span id="cb38-52"><a href="#cb38-52" tabindex="-1"></a></span>
-<span id="cb38-53"><a href="#cb38-53" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;ducknng IPC listener did not become ready in time&quot;</span>, <span class="at">call. =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb38-54"><a href="#cb38-54" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb40"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" tabindex="-1"></a><span class="co"># Send and receive with the same retry style used in mangoro examples.</span></span>
+<span id="cb40-2"><a href="#cb40-2" tabindex="-1"></a>send_ducknng_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, frame, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>, <span class="at">max_attempts =</span> <span class="dv">20</span><span class="dt">L</span>) {</span>
+<span id="cb40-3"><a href="#cb40-3" tabindex="-1"></a>  attempt <span class="ot">&lt;-</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb40-4"><a href="#cb40-4" tabindex="-1"></a>  send_result <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">send</span>(socket, frame, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
+<span id="cb40-5"><a href="#cb40-5" tabindex="-1"></a></span>
+<span id="cb40-6"><a href="#cb40-6" tabindex="-1"></a>  <span class="cf">while</span> (nanonext<span class="sc">::</span><span class="fu">is_error_value</span>(send_result) <span class="sc">&amp;&amp;</span> attempt <span class="sc">&lt;</span> max_attempts) {</span>
+<span id="cb40-7"><a href="#cb40-7" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(<span class="fl">0.25</span>)</span>
+<span id="cb40-8"><a href="#cb40-8" tabindex="-1"></a>    send_result <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">send</span>(socket, frame, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
+<span id="cb40-9"><a href="#cb40-9" tabindex="-1"></a>    attempt <span class="ot">&lt;-</span> attempt <span class="sc">+</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb40-10"><a href="#cb40-10" tabindex="-1"></a>  }</span>
+<span id="cb40-11"><a href="#cb40-11" tabindex="-1"></a></span>
+<span id="cb40-12"><a href="#cb40-12" tabindex="-1"></a>  send_result</span>
+<span id="cb40-13"><a href="#cb40-13" tabindex="-1"></a>}</span>
+<span id="cb40-14"><a href="#cb40-14" tabindex="-1"></a></span>
+<span id="cb40-15"><a href="#cb40-15" tabindex="-1"></a>recv_ducknng_frame <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>, <span class="at">max_attempts =</span> <span class="dv">20</span><span class="dt">L</span>) {</span>
+<span id="cb40-16"><a href="#cb40-16" tabindex="-1"></a>  attempt <span class="ot">&lt;-</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb40-17"><a href="#cb40-17" tabindex="-1"></a>  response <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">recv</span>(socket, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
+<span id="cb40-18"><a href="#cb40-18" tabindex="-1"></a></span>
+<span id="cb40-19"><a href="#cb40-19" tabindex="-1"></a>  <span class="cf">while</span> (</span>
+<span id="cb40-20"><a href="#cb40-20" tabindex="-1"></a>    (</span>
+<span id="cb40-21"><a href="#cb40-21" tabindex="-1"></a>      nanonext<span class="sc">::</span><span class="fu">is_error_value</span>(response) <span class="sc">||</span></span>
+<span id="cb40-22"><a href="#cb40-22" tabindex="-1"></a>      <span class="sc">!</span><span class="fu">is.raw</span>(response) <span class="sc">||</span></span>
+<span id="cb40-23"><a href="#cb40-23" tabindex="-1"></a>      <span class="fu">length</span>(response) <span class="sc">&lt;</span> <span class="dv">22</span><span class="dt">L</span></span>
+<span id="cb40-24"><a href="#cb40-24" tabindex="-1"></a>    ) <span class="sc">&amp;&amp;</span></span>
+<span id="cb40-25"><a href="#cb40-25" tabindex="-1"></a>    attempt <span class="sc">&lt;</span> max_attempts</span>
+<span id="cb40-26"><a href="#cb40-26" tabindex="-1"></a>  ) {</span>
+<span id="cb40-27"><a href="#cb40-27" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(<span class="fl">0.25</span>)</span>
+<span id="cb40-28"><a href="#cb40-28" tabindex="-1"></a>    response <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">recv</span>(socket, <span class="at">mode =</span> <span class="st">&quot;raw&quot;</span>, <span class="at">block =</span> timeout_ms)</span>
+<span id="cb40-29"><a href="#cb40-29" tabindex="-1"></a>    attempt <span class="ot">&lt;-</span> attempt <span class="sc">+</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb40-30"><a href="#cb40-30" tabindex="-1"></a>  }</span>
+<span id="cb40-31"><a href="#cb40-31" tabindex="-1"></a></span>
+<span id="cb40-32"><a href="#cb40-32" tabindex="-1"></a>  response</span>
+<span id="cb40-33"><a href="#cb40-33" tabindex="-1"></a>}</span>
+<span id="cb40-34"><a href="#cb40-34" tabindex="-1"></a></span>
+<span id="cb40-35"><a href="#cb40-35" tabindex="-1"></a>run_ducknng_req <span class="ot">&lt;-</span> <span class="cf">function</span>(socket, frame, <span class="at">timeout_ms =</span> <span class="dv">1000</span><span class="dt">L</span>) {</span>
+<span id="cb40-36"><a href="#cb40-36" tabindex="-1"></a>  <span class="fu">send_ducknng_frame</span>(socket, frame, <span class="at">timeout_ms =</span> timeout_ms)</span>
+<span id="cb40-37"><a href="#cb40-37" tabindex="-1"></a>  <span class="fu">decode_ducknng_exec_reply</span>(</span>
+<span id="cb40-38"><a href="#cb40-38" tabindex="-1"></a>    <span class="fu">recv_ducknng_frame</span>(socket, <span class="at">timeout_ms =</span> timeout_ms)</span>
+<span id="cb40-39"><a href="#cb40-39" tabindex="-1"></a>  )</span>
+<span id="cb40-40"><a href="#cb40-40" tabindex="-1"></a>}</span>
+<span id="cb40-41"><a href="#cb40-41" tabindex="-1"></a></span>
+<span id="cb40-42"><a href="#cb40-42" tabindex="-1"></a><span class="co"># Wait for an IPC listener path to appear before dialing it.</span></span>
+<span id="cb40-43"><a href="#cb40-43" tabindex="-1"></a>wait_for_ducknng_listener <span class="ot">&lt;-</span> <span class="cf">function</span>(path, <span class="at">timeout_secs =</span> <span class="dv">10</span>, <span class="at">interval_secs =</span> <span class="fl">0.1</span>) {</span>
+<span id="cb40-44"><a href="#cb40-44" tabindex="-1"></a>  deadline <span class="ot">&lt;-</span> <span class="fu">Sys.time</span>() <span class="sc">+</span> timeout_secs</span>
+<span id="cb40-45"><a href="#cb40-45" tabindex="-1"></a></span>
+<span id="cb40-46"><a href="#cb40-46" tabindex="-1"></a>  <span class="cf">while</span> (<span class="fu">Sys.time</span>() <span class="sc">&lt;</span> deadline) {</span>
+<span id="cb40-47"><a href="#cb40-47" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">file.exists</span>(path)) {</span>
+<span id="cb40-48"><a href="#cb40-48" tabindex="-1"></a>      <span class="fu">return</span>(<span class="fu">invisible</span>(<span class="cn">TRUE</span>))</span>
+<span id="cb40-49"><a href="#cb40-49" tabindex="-1"></a>    }</span>
+<span id="cb40-50"><a href="#cb40-50" tabindex="-1"></a>    <span class="fu">Sys.sleep</span>(interval_secs)</span>
+<span id="cb40-51"><a href="#cb40-51" tabindex="-1"></a>  }</span>
+<span id="cb40-52"><a href="#cb40-52" tabindex="-1"></a></span>
+<span id="cb40-53"><a href="#cb40-53" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">&quot;ducknng IPC listener did not become ready in time&quot;</span>, <span class="at">call. =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb40-54"><a href="#cb40-54" tabindex="-1"></a>}</span></code></pre></div>
 <h4 id="start-a-local-ducknng-server-and-dial-a-req-socket">Start a
 local ducknng server and dial a req socket</h4>
-<div class="sourceCode" id="cb39"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb39-1"><a href="#cb39-1" tabindex="-1"></a><span class="co"># Start a ducknng server in this R session, then talk to it over a req socket.</span></span>
-<span id="cb39-2"><a href="#cb39-2" tabindex="-1"></a>ext_path <span class="ot">&lt;-</span> <span class="fu">normalizePath</span>(<span class="st">&quot;build/release/ducknng.duckdb_extension&quot;</span>)</span>
-<span id="cb39-3"><a href="#cb39-3" tabindex="-1"></a>ipc_path <span class="ot">&lt;-</span> <span class="st">&quot;/tmp/ducknng_readme_exec.ipc&quot;</span></span>
-<span id="cb39-4"><a href="#cb39-4" tabindex="-1"></a><span class="fu">unlink</span>(ipc_path)</span>
-<span id="cb39-5"><a href="#cb39-5" tabindex="-1"></a>ipc_url <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;ipc://&quot;</span>, ipc_path)</span>
-<span id="cb39-6"><a href="#cb39-6" tabindex="-1"></a></span>
-<span id="cb39-7"><a href="#cb39-7" tabindex="-1"></a>db_driver <span class="ot">&lt;-</span> duckdb<span class="sc">::</span><span class="fu">duckdb</span>(</span>
-<span id="cb39-8"><a href="#cb39-8" tabindex="-1"></a>  <span class="at">dbdir =</span> <span class="st">&quot;:memory:&quot;</span>,</span>
-<span id="cb39-9"><a href="#cb39-9" tabindex="-1"></a>  <span class="at">config =</span> <span class="fu">list</span>(<span class="at">allow_unsigned_extensions =</span> <span class="st">&quot;true&quot;</span>)</span>
-<span id="cb39-10"><a href="#cb39-10" tabindex="-1"></a>)</span>
-<span id="cb39-11"><a href="#cb39-11" tabindex="-1"></a>db_con <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbConnect</span>(db_driver)</span>
-<span id="cb39-12"><a href="#cb39-12" tabindex="-1"></a></span>
-<span id="cb39-13"><a href="#cb39-13" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT 42 AS ok&quot;</span>)</span>
-<span id="cb39-14"><a href="#cb39-14" tabindex="-1"></a><span class="co">#&gt;   ok</span></span>
-<span id="cb39-15"><a href="#cb39-15" tabindex="-1"></a><span class="co">#&gt; 1 42</span></span>
-<span id="cb39-16"><a href="#cb39-16" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbExecute</span>(db_con, <span class="fu">sprintf</span>(<span class="st">&quot;LOAD &#39;%s&#39;&quot;</span>, ext_path))</span>
-<span id="cb39-17"><a href="#cb39-17" tabindex="-1"></a><span class="co">#&gt; [1] 0</span></span>
-<span id="cb39-18"><a href="#cb39-18" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(</span>
-<span id="cb39-19"><a href="#cb39-19" tabindex="-1"></a>  db_con,</span>
-<span id="cb39-20"><a href="#cb39-20" tabindex="-1"></a>  <span class="fu">sprintf</span>(</span>
-<span id="cb39-21"><a href="#cb39-21" tabindex="-1"></a>    <span class="st">&quot;SELECT ducknng_start_server(&#39;sql_exec&#39;, &#39;%s&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span>,</span>
-<span id="cb39-22"><a href="#cb39-22" tabindex="-1"></a>    ipc_url</span>
-<span id="cb39-23"><a href="#cb39-23" tabindex="-1"></a>  )</span>
-<span id="cb39-24"><a href="#cb39-24" tabindex="-1"></a>)</span>
-<span id="cb39-25"><a href="#cb39-25" tabindex="-1"></a><span class="co">#&gt;   ducknng_start_server(&#39;sql_exec&#39;, &#39;ipc:///tmp/ducknng_readme_exec.ipc&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;))</span></span>
-<span id="cb39-26"><a href="#cb39-26" tabindex="-1"></a><span class="co">#&gt; 1                                                                                                               TRUE</span></span>
-<span id="cb39-27"><a href="#cb39-27" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT ducknng_register_exec_method()&quot;</span>)</span>
-<span id="cb39-28"><a href="#cb39-28" tabindex="-1"></a><span class="co">#&gt;   ducknng_register_exec_method()</span></span>
-<span id="cb39-29"><a href="#cb39-29" tabindex="-1"></a><span class="co">#&gt; 1                           TRUE</span></span>
-<span id="cb39-30"><a href="#cb39-30" tabindex="-1"></a></span>
-<span id="cb39-31"><a href="#cb39-31" tabindex="-1"></a><span class="fu">wait_for_ducknng_listener</span>(ipc_path)</span>
-<span id="cb39-32"><a href="#cb39-32" tabindex="-1"></a>req <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">socket</span>(<span class="st">&quot;req&quot;</span>, <span class="at">dial =</span> ipc_url)</span></code></pre></div>
+<div class="sourceCode" id="cb41"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb41-1"><a href="#cb41-1" tabindex="-1"></a><span class="co"># Start a ducknng server in this R session, then talk to it over a req socket.</span></span>
+<span id="cb41-2"><a href="#cb41-2" tabindex="-1"></a>ext_path <span class="ot">&lt;-</span> <span class="fu">normalizePath</span>(<span class="st">&quot;build/release/ducknng.duckdb_extension&quot;</span>)</span>
+<span id="cb41-3"><a href="#cb41-3" tabindex="-1"></a>ipc_path <span class="ot">&lt;-</span> <span class="st">&quot;/tmp/ducknng_readme_exec.ipc&quot;</span></span>
+<span id="cb41-4"><a href="#cb41-4" tabindex="-1"></a><span class="fu">unlink</span>(ipc_path)</span>
+<span id="cb41-5"><a href="#cb41-5" tabindex="-1"></a>ipc_url <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;ipc://&quot;</span>, ipc_path)</span>
+<span id="cb41-6"><a href="#cb41-6" tabindex="-1"></a></span>
+<span id="cb41-7"><a href="#cb41-7" tabindex="-1"></a>db_driver <span class="ot">&lt;-</span> duckdb<span class="sc">::</span><span class="fu">duckdb</span>(</span>
+<span id="cb41-8"><a href="#cb41-8" tabindex="-1"></a>  <span class="at">dbdir =</span> <span class="st">&quot;:memory:&quot;</span>,</span>
+<span id="cb41-9"><a href="#cb41-9" tabindex="-1"></a>  <span class="at">config =</span> <span class="fu">list</span>(<span class="at">allow_unsigned_extensions =</span> <span class="st">&quot;true&quot;</span>)</span>
+<span id="cb41-10"><a href="#cb41-10" tabindex="-1"></a>)</span>
+<span id="cb41-11"><a href="#cb41-11" tabindex="-1"></a>db_con <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbConnect</span>(db_driver)</span>
+<span id="cb41-12"><a href="#cb41-12" tabindex="-1"></a></span>
+<span id="cb41-13"><a href="#cb41-13" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT 42 AS ok&quot;</span>)</span>
+<span id="cb41-14"><a href="#cb41-14" tabindex="-1"></a><span class="co">#&gt;   ok</span></span>
+<span id="cb41-15"><a href="#cb41-15" tabindex="-1"></a><span class="co">#&gt; 1 42</span></span>
+<span id="cb41-16"><a href="#cb41-16" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbExecute</span>(db_con, <span class="fu">sprintf</span>(<span class="st">&quot;LOAD &#39;%s&#39;&quot;</span>, ext_path))</span>
+<span id="cb41-17"><a href="#cb41-17" tabindex="-1"></a><span class="co">#&gt; [1] 0</span></span>
+<span id="cb41-18"><a href="#cb41-18" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(</span>
+<span id="cb41-19"><a href="#cb41-19" tabindex="-1"></a>  db_con,</span>
+<span id="cb41-20"><a href="#cb41-20" tabindex="-1"></a>  <span class="fu">sprintf</span>(</span>
+<span id="cb41-21"><a href="#cb41-21" tabindex="-1"></a>    <span class="st">&quot;SELECT ducknng_start_server(&#39;sql_exec&#39;, &#39;%s&#39;, 1, 134217728, 300000, 0::UBIGINT)&quot;</span>,</span>
+<span id="cb41-22"><a href="#cb41-22" tabindex="-1"></a>    ipc_url</span>
+<span id="cb41-23"><a href="#cb41-23" tabindex="-1"></a>  )</span>
+<span id="cb41-24"><a href="#cb41-24" tabindex="-1"></a>)</span>
+<span id="cb41-25"><a href="#cb41-25" tabindex="-1"></a><span class="co">#&gt;   ducknng_start_server(&#39;sql_exec&#39;, &#39;ipc:///tmp/ducknng_readme_exec.ipc&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;))</span></span>
+<span id="cb41-26"><a href="#cb41-26" tabindex="-1"></a><span class="co">#&gt; 1                                                                                                               TRUE</span></span>
+<span id="cb41-27"><a href="#cb41-27" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT ducknng_register_exec_method()&quot;</span>)</span>
+<span id="cb41-28"><a href="#cb41-28" tabindex="-1"></a><span class="co">#&gt;   ducknng_register_exec_method()</span></span>
+<span id="cb41-29"><a href="#cb41-29" tabindex="-1"></a><span class="co">#&gt; 1                           TRUE</span></span>
+<span id="cb41-30"><a href="#cb41-30" tabindex="-1"></a></span>
+<span id="cb41-31"><a href="#cb41-31" tabindex="-1"></a><span class="fu">wait_for_ducknng_listener</span>(ipc_path)</span>
+<span id="cb41-32"><a href="#cb41-32" tabindex="-1"></a>req <span class="ot">&lt;-</span> nanonext<span class="sc">::</span><span class="fu">socket</span>(<span class="st">&quot;req&quot;</span>, <span class="at">dial =</span> ipc_url)</span></code></pre></div>
 <h4 id="create-and-insert-rows-remotely">Create and insert rows
 remotely</h4>
-<div class="sourceCode" id="cb40"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" tabindex="-1"></a><span class="co"># Create a table remotely and inspect the metadata reply.</span></span>
-<span id="cb40-2"><a href="#cb40-2" tabindex="-1"></a>create_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
-<span id="cb40-3"><a href="#cb40-3" tabindex="-1"></a>  req,</span>
-<span id="cb40-4"><a href="#cb40-4" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(<span class="st">&quot;CREATE TABLE ducknng_exec_demo(i INTEGER)&quot;</span>)</span>
-<span id="cb40-5"><a href="#cb40-5" tabindex="-1"></a>)</span>
-<span id="cb40-6"><a href="#cb40-6" tabindex="-1"></a>create_reply<span class="sc">$</span>data</span>
-<span id="cb40-7"><a href="#cb40-7" tabindex="-1"></a><span class="co">#&gt;   rows_changed statement_type result_type</span></span>
-<span id="cb40-8"><a href="#cb40-8" tabindex="-1"></a><span class="co">#&gt; 1            0              7           2</span></span>
-<span id="cb40-9"><a href="#cb40-9" tabindex="-1"></a></span>
-<span id="cb40-10"><a href="#cb40-10" tabindex="-1"></a><span class="co"># Insert rows remotely and inspect the second metadata reply.</span></span>
-<span id="cb40-11"><a href="#cb40-11" tabindex="-1"></a>insert_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
-<span id="cb40-12"><a href="#cb40-12" tabindex="-1"></a>  req,</span>
-<span id="cb40-13"><a href="#cb40-13" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(<span class="st">&quot;INSERT INTO ducknng_exec_demo VALUES (42), (99)&quot;</span>)</span>
-<span id="cb40-14"><a href="#cb40-14" tabindex="-1"></a>)</span>
-<span id="cb40-15"><a href="#cb40-15" tabindex="-1"></a>insert_reply<span class="sc">$</span>data</span>
-<span id="cb40-16"><a href="#cb40-16" tabindex="-1"></a><span class="co">#&gt;   rows_changed statement_type result_type</span></span>
-<span id="cb40-17"><a href="#cb40-17" tabindex="-1"></a><span class="co">#&gt; 1            2              2           1</span></span></code></pre></div>
+<div class="sourceCode" id="cb42"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a><span class="co"># Create a table remotely and inspect the metadata reply.</span></span>
+<span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a>create_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
+<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a>  req,</span>
+<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(<span class="st">&quot;CREATE TABLE ducknng_exec_demo(i INTEGER)&quot;</span>)</span>
+<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a>)</span>
+<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>create_reply<span class="sc">$</span>data</span>
+<span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a><span class="co">#&gt;   rows_changed statement_type result_type</span></span>
+<span id="cb42-8"><a href="#cb42-8" tabindex="-1"></a><span class="co">#&gt; 1            0              7           2</span></span>
+<span id="cb42-9"><a href="#cb42-9" tabindex="-1"></a></span>
+<span id="cb42-10"><a href="#cb42-10" tabindex="-1"></a><span class="co"># Insert rows remotely and inspect the second metadata reply.</span></span>
+<span id="cb42-11"><a href="#cb42-11" tabindex="-1"></a>insert_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
+<span id="cb42-12"><a href="#cb42-12" tabindex="-1"></a>  req,</span>
+<span id="cb42-13"><a href="#cb42-13" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(<span class="st">&quot;INSERT INTO ducknng_exec_demo VALUES (42), (99)&quot;</span>)</span>
+<span id="cb42-14"><a href="#cb42-14" tabindex="-1"></a>)</span>
+<span id="cb42-15"><a href="#cb42-15" tabindex="-1"></a>insert_reply<span class="sc">$</span>data</span>
+<span id="cb42-16"><a href="#cb42-16" tabindex="-1"></a><span class="co">#&gt;   rows_changed statement_type result_type</span></span>
+<span id="cb42-17"><a href="#cb42-17" tabindex="-1"></a><span class="co">#&gt; 1            2              2           1</span></span></code></pre></div>
 <h4 id="query-rows-remotely-with-want_result--true">Query rows remotely
 with <code>want_result = TRUE</code></h4>
-<div class="sourceCode" id="cb41"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb41-1"><a href="#cb41-1" tabindex="-1"></a>select_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
-<span id="cb41-2"><a href="#cb41-2" tabindex="-1"></a>  req,</span>
-<span id="cb41-3"><a href="#cb41-3" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(</span>
-<span id="cb41-4"><a href="#cb41-4" tabindex="-1"></a>    <span class="st">&quot;SELECT i, i &gt; 50 AS gt_50 FROM ducknng_exec_demo ORDER BY i&quot;</span>,</span>
-<span id="cb41-5"><a href="#cb41-5" tabindex="-1"></a>    <span class="at">want_result =</span> <span class="cn">TRUE</span></span>
-<span id="cb41-6"><a href="#cb41-6" tabindex="-1"></a>  )</span>
-<span id="cb41-7"><a href="#cb41-7" tabindex="-1"></a>)</span>
-<span id="cb41-8"><a href="#cb41-8" tabindex="-1"></a>select_reply<span class="sc">$</span>data</span>
-<span id="cb41-9"><a href="#cb41-9" tabindex="-1"></a><span class="co">#&gt;    i gt_50</span></span>
-<span id="cb41-10"><a href="#cb41-10" tabindex="-1"></a><span class="co">#&gt; 1 42 FALSE</span></span>
-<span id="cb41-11"><a href="#cb41-11" tabindex="-1"></a><span class="co">#&gt; 2 99  TRUE</span></span></code></pre></div>
+<div class="sourceCode" id="cb43"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a>select_reply <span class="ot">&lt;-</span> <span class="fu">run_ducknng_req</span>(</span>
+<span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a>  req,</span>
+<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a>  <span class="fu">encode_ducknng_exec_request</span>(</span>
+<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>    <span class="st">&quot;SELECT i, i &gt; 50 AS gt_50 FROM ducknng_exec_demo ORDER BY i&quot;</span>,</span>
+<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a>    <span class="at">want_result =</span> <span class="cn">TRUE</span></span>
+<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>  )</span>
+<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a>)</span>
+<span id="cb43-8"><a href="#cb43-8" tabindex="-1"></a>select_reply<span class="sc">$</span>data</span>
+<span id="cb43-9"><a href="#cb43-9" tabindex="-1"></a><span class="co">#&gt;    i gt_50</span></span>
+<span id="cb43-10"><a href="#cb43-10" tabindex="-1"></a><span class="co">#&gt; 1 42 FALSE</span></span>
+<span id="cb43-11"><a href="#cb43-11" tabindex="-1"></a><span class="co">#&gt; 2 99  TRUE</span></span></code></pre></div>
 <h4 id="inspect-the-same-table-locally-through-duckdb">Inspect the same
 table locally through DuckDB</h4>
-<div class="sourceCode" id="cb42"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a>server_rows <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT * FROM ducknng_exec_demo ORDER BY i&quot;</span>)</span>
-<span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a>server_rows</span>
-<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a><span class="co">#&gt;    i</span></span>
-<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a><span class="co">#&gt; 1 42</span></span>
-<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a><span class="co">#&gt; 2 99</span></span></code></pre></div>
+<div class="sourceCode" id="cb44"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a>server_rows <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT * FROM ducknng_exec_demo ORDER BY i&quot;</span>)</span>
+<span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a>server_rows</span>
+<span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a><span class="co">#&gt;    i</span></span>
+<span id="cb44-4"><a href="#cb44-4" tabindex="-1"></a><span class="co">#&gt; 1 42</span></span>
+<span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a><span class="co">#&gt; 2 99</span></span></code></pre></div>
 <h4 id="stop-the-server-and-clean-up">Stop the server and clean up</h4>
-<div class="sourceCode" id="cb43"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT ducknng_stop_server(&#39;sql_exec&#39;)&quot;</span>)</span>
-<span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="co">#&gt;   ducknng_stop_server(&#39;sql_exec&#39;)</span></span>
-<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="co">#&gt; 1                            TRUE</span></span>
-<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a><span class="fu">close</span>(req)</span>
-<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbDisconnect</span>(db_con)</span>
-<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a><span class="fu">unlink</span>(ipc_path)</span></code></pre></div>
+<div class="sourceCode" id="cb45"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb45-1"><a href="#cb45-1" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT ducknng_stop_server(&#39;sql_exec&#39;)&quot;</span>)</span>
+<span id="cb45-2"><a href="#cb45-2" tabindex="-1"></a><span class="co">#&gt;   ducknng_stop_server(&#39;sql_exec&#39;)</span></span>
+<span id="cb45-3"><a href="#cb45-3" tabindex="-1"></a><span class="co">#&gt; 1                            TRUE</span></span>
+<span id="cb45-4"><a href="#cb45-4" tabindex="-1"></a><span class="fu">close</span>(req)</span>
+<span id="cb45-5"><a href="#cb45-5" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbDisconnect</span>(db_con)</span>
+<span id="cb45-6"><a href="#cb45-6" tabindex="-1"></a><span class="fu">unlink</span>(ipc_path)</span></code></pre></div>
 <h2 id="deployment-and-admission-policy">Deployment and admission
 policy</h2>
 <p><code>ducknng</code> defaults to low-level, default-open transport
@@ -3061,44 +3269,44 @@ an allowlist and returns to default-open admission subject to
 TLS/method/session policy. An empty JSON array, <code>[]</code>, is
 active deny-all.</p>
 <p>Example shape:</p>
-<div class="sourceCode" id="cb44"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="co">-- Set a default allowlist on the TLS handle before starting services with it.</span></span>
-<span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_tls_peer_allowlist(</span>
-<span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span>,</span>
-<span id="cb44-4"><a href="#cb44-4" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-a.example&quot;,&quot;tls:san:client-b.example&quot;]&#39;</span></span>
-<span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a>);</span>
-<span id="cb44-6"><a href="#cb44-6" tabindex="-1"></a></span>
-<span id="cb44-7"><a href="#cb44-7" tabindex="-1"></a><span class="co">-- Start with an IP/CIDR allowlist already installed before the listener accepts traffic.</span></span>
-<span id="cb44-8"><a href="#cb44-8" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
-<span id="cb44-9"><a href="#cb44-9" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
-<span id="cb44-10"><a href="#cb44-10" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
-<span id="cb44-11"><a href="#cb44-11" tabindex="-1"></a>  <span class="dv">1</span>,</span>
-<span id="cb44-12"><a href="#cb44-12" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
-<span id="cb44-13"><a href="#cb44-13" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
-<span id="cb44-14"><a href="#cb44-14" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
-<span id="cb44-15"><a href="#cb44-15" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;]&#39;</span></span>
-<span id="cb44-16"><a href="#cb44-16" tabindex="-1"></a>);</span>
-<span id="cb44-17"><a href="#cb44-17" tabindex="-1"></a></span>
-<span id="cb44-18"><a href="#cb44-18" tabindex="-1"></a><span class="co">-- Later, rotate or tighten admission for a running service.</span></span>
-<span id="cb44-19"><a href="#cb44-19" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_peer_allowlist(</span>
-<span id="cb44-20"><a href="#cb44-20" tabindex="-1"></a>  <span class="st">&#39;sql_rpc&#39;</span>,</span>
-<span id="cb44-21"><a href="#cb44-21" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-b.example&quot;]&#39;</span></span>
-<span id="cb44-22"><a href="#cb44-22" tabindex="-1"></a>);</span>
-<span id="cb44-23"><a href="#cb44-23" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_ip_allowlist(</span>
-<span id="cb44-24"><a href="#cb44-24" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
-<span id="cb44-25"><a href="#cb44-25" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;,&quot;10.0.0.0/8&quot;]&#39;</span></span>
-<span id="cb44-26"><a href="#cb44-26" tabindex="-1"></a>);</span>
-<span id="cb44-27"><a href="#cb44-27" tabindex="-1"></a></span>
-<span id="cb44-28"><a href="#cb44-28" tabindex="-1"></a><span class="co">-- Set a basic service-side resource limit for query sessions.</span></span>
-<span id="cb44-29"><a href="#cb44-29" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_limits(<span class="st">&#39;sql_http&#39;</span>, <span class="dv">16</span>:<span class="ch">:UBIGINT</span>);</span>
-<span id="cb44-30"><a href="#cb44-30" tabindex="-1"></a></span>
-<span id="cb44-31"><a href="#cb44-31" tabindex="-1"></a><span class="co">-- Add a flexible SQL callback when policy depends on request context.</span></span>
-<span id="cb44-32"><a href="#cb44-32" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_authorizer(</span>
-<span id="cb44-33"><a href="#cb44-33" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
-<span id="cb44-34"><a href="#cb44-34" tabindex="-1"></a>  <span class="st">&#39;SELECT remote_ip = </span><span class="ch">&#39;&#39;</span><span class="st">127.0.0.1</span><span class="ch">&#39;&#39;</span><span class="st"> AND rpc_method = </span><span class="ch">&#39;&#39;</span><span class="st">manifest</span><span class="ch">&#39;&#39;</span><span class="st"> AS allow,</span></span>
-<span id="cb44-35"><a href="#cb44-35" tabindex="-1"></a><span class="st">          403 AS status,</span></span>
-<span id="cb44-36"><a href="#cb44-36" tabindex="-1"></a><span class="st">          </span><span class="ch">&#39;&#39;</span><span class="st">not authorized</span><span class="ch">&#39;&#39;</span><span class="st"> AS reason</span></span>
-<span id="cb44-37"><a href="#cb44-37" tabindex="-1"></a><span class="st">   FROM ducknng_auth_context()&#39;</span></span>
-<span id="cb44-38"><a href="#cb44-38" tabindex="-1"></a>);</span></code></pre></div>
+<div class="sourceCode" id="cb46"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb46-1"><a href="#cb46-1" tabindex="-1"></a><span class="co">-- Set a default allowlist on the TLS handle before starting services with it.</span></span>
+<span id="cb46-2"><a href="#cb46-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_tls_peer_allowlist(</span>
+<span id="cb46-3"><a href="#cb46-3" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb46-4"><a href="#cb46-4" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-a.example&quot;,&quot;tls:san:client-b.example&quot;]&#39;</span></span>
+<span id="cb46-5"><a href="#cb46-5" tabindex="-1"></a>);</span>
+<span id="cb46-6"><a href="#cb46-6" tabindex="-1"></a></span>
+<span id="cb46-7"><a href="#cb46-7" tabindex="-1"></a><span class="co">-- Start with an IP/CIDR allowlist already installed before the listener accepts traffic.</span></span>
+<span id="cb46-8"><a href="#cb46-8" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
+<span id="cb46-9"><a href="#cb46-9" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
+<span id="cb46-10"><a href="#cb46-10" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
+<span id="cb46-11"><a href="#cb46-11" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb46-12"><a href="#cb46-12" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb46-13"><a href="#cb46-13" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb46-14"><a href="#cb46-14" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb46-15"><a href="#cb46-15" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;]&#39;</span></span>
+<span id="cb46-16"><a href="#cb46-16" tabindex="-1"></a>);</span>
+<span id="cb46-17"><a href="#cb46-17" tabindex="-1"></a></span>
+<span id="cb46-18"><a href="#cb46-18" tabindex="-1"></a><span class="co">-- Later, rotate or tighten admission for a running service.</span></span>
+<span id="cb46-19"><a href="#cb46-19" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_peer_allowlist(</span>
+<span id="cb46-20"><a href="#cb46-20" tabindex="-1"></a>  <span class="st">&#39;sql_rpc&#39;</span>,</span>
+<span id="cb46-21"><a href="#cb46-21" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-b.example&quot;]&#39;</span></span>
+<span id="cb46-22"><a href="#cb46-22" tabindex="-1"></a>);</span>
+<span id="cb46-23"><a href="#cb46-23" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_ip_allowlist(</span>
+<span id="cb46-24"><a href="#cb46-24" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
+<span id="cb46-25"><a href="#cb46-25" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;,&quot;10.0.0.0/8&quot;]&#39;</span></span>
+<span id="cb46-26"><a href="#cb46-26" tabindex="-1"></a>);</span>
+<span id="cb46-27"><a href="#cb46-27" tabindex="-1"></a></span>
+<span id="cb46-28"><a href="#cb46-28" tabindex="-1"></a><span class="co">-- Set a basic service-side resource limit for query sessions.</span></span>
+<span id="cb46-29"><a href="#cb46-29" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_limits(<span class="st">&#39;sql_http&#39;</span>, <span class="dv">16</span>:<span class="ch">:UBIGINT</span>);</span>
+<span id="cb46-30"><a href="#cb46-30" tabindex="-1"></a></span>
+<span id="cb46-31"><a href="#cb46-31" tabindex="-1"></a><span class="co">-- Add a flexible SQL callback when policy depends on request context.</span></span>
+<span id="cb46-32"><a href="#cb46-32" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_authorizer(</span>
+<span id="cb46-33"><a href="#cb46-33" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
+<span id="cb46-34"><a href="#cb46-34" tabindex="-1"></a>  <span class="st">&#39;SELECT remote_ip = </span><span class="ch">&#39;&#39;</span><span class="st">127.0.0.1</span><span class="ch">&#39;&#39;</span><span class="st"> AND rpc_method = </span><span class="ch">&#39;&#39;</span><span class="st">manifest</span><span class="ch">&#39;&#39;</span><span class="st"> AS allow,</span></span>
+<span id="cb46-35"><a href="#cb46-35" tabindex="-1"></a><span class="st">          403 AS status,</span></span>
+<span id="cb46-36"><a href="#cb46-36" tabindex="-1"></a><span class="st">          </span><span class="ch">&#39;&#39;</span><span class="st">not authorized</span><span class="ch">&#39;&#39;</span><span class="st"> AS reason</span></span>
+<span id="cb46-37"><a href="#cb46-37" tabindex="-1"></a><span class="st">   FROM ducknng_auth_context()&#39;</span></span>
+<span id="cb46-38"><a href="#cb46-38" tabindex="-1"></a>);</span></code></pre></div>
 <p>Transport-specific deployment notes:</p>
 <table>
 <thead>

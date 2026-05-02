@@ -280,6 +280,24 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
             payload, payload_len);
         return 0;
     }
+    if (session->batch_no == 0) {
+        if (ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg) != 0) {
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_release(session);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
+                errmsg ? errmsg : "ducknng: fetch failed to encode empty Arrow batch");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        session->eos = 1;
+        ducknng_mutex_unlock(&session->mu);
+        ducknng_session_release(session);
+        ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
+            DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM |
+                DUCKNNG_RPC_FLAG_END_OF_STREAM,
+            payload, payload_len);
+        return 0;
+    }
     session->eos = 1;
     ducknng_mutex_unlock(&session->mu);
     ducknng_session_release(session);

@@ -88,6 +88,10 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_request_raw_aio` | scalar | `url, frame, timeout_ms, tls_config_id` | `UBIGINT` | Launch one raw req/rep roundtrip asynchronously and return a future-like aio handle id. |
 | `ducknng_get_rpc_manifest_raw_aio` | scalar | `url, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous manifest RPC request and return an aio handle id for the raw reply frame. |
 | `ducknng_run_rpc_raw_aio` | scalar | `url, sql, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous metadata-only exec RPC request and return an aio handle id for the raw reply frame. |
+| `ducknng_open_query_raw_aio` | scalar | `url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous query_open request and return an aio handle id for the raw reply frame. |
+| `ducknng_fetch_query_raw_aio` | scalar | `url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous fetch request and return an aio handle id for the raw reply frame. |
+| `ducknng_close_query_raw_aio` | scalar | `url, session_id, session_token, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous close request and return an aio handle id for the raw reply frame. |
+| `ducknng_cancel_query_raw_aio` | scalar | `url, session_id, session_token, timeout_ms, tls_config_id` | `UBIGINT` | Launch one asynchronous cancel request and return an aio handle id for the raw reply frame. |
 | `ducknng_request_socket_raw_aio` | scalar | `socket_id, frame, timeout_ms` | `UBIGINT` | Launch one raw req/rep roundtrip asynchronously on an existing req socket handle and return an aio handle id. |
 | `ducknng_send_socket_raw_aio` | scalar | `socket_id, frame, timeout_ms` | `UBIGINT` | Launch one raw socket send asynchronously and return an aio handle id. |
 | `ducknng_recv_socket_raw_aio` | scalar | `socket_id, timeout_ms` | `UBIGINT` | Launch one raw socket receive asynchronously and return an aio handle id. |
@@ -105,7 +109,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id` | `BLOB` | Request the RPC manifest and return the raw reply frame as BLOB. |
 | `ducknng_run_rpc` | table | `url, sql, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row. |
 | `ducknng_run_rpc_raw` | scalar | `url, sql, tls_config_id` | `BLOB` | Execute the exec RPC and return the raw reply frame as BLOB. |
-| `ducknng_query_rpc` | table | `url, sql, tls_config_id` | `table` | Execute a row-returning RPC query and expose the unary Arrow IPC row reply as a DuckDB table. |
+| `ducknng_query_rpc` | table | `url, sql, tls_config_id` | `table` | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table. |
 
 ## RPC Session
 
@@ -113,5 +117,6 @@ This file is generated from `function_catalog/functions.yaml`.
 |---|---|---|---|---|
 | `ducknng_open_query` | table | `url, sql, batch_rows, batch_bytes, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)` | Open a server-side query session and return the JSON control metadata as a structured row. |
 | `ducknng_fetch_query` | table | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT, payload BLOB, end_of_stream BOOLEAN)` | Fetch the next session reply and return either JSON control metadata or an Arrow IPC batch payload. |
+| `ducknng_fetch_query_table` | table | `url, session_id, session_token, batch_rows, batch_bytes, tls_config_id` | `TABLE(dynamic from Arrow IPC batch)` | Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table. |
 | `ducknng_close_query` | table | `url, session_id, session_token, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)` | Close a server-side query session and return the JSON control metadata as a structured row. |
 | `ducknng_cancel_query` | table | `url, session_id, session_token, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)` | Request cancellation for a server-side query session and return the JSON control metadata as a structured row. |

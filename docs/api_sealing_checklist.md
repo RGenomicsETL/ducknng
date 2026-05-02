@@ -36,7 +36,7 @@ The current implementation enforces the stable baseline quotas: listener receive
 
 ### 3. Fetch payload decoding stance
 
-Fetched Arrow payloads are decodable today through the body codec table path: store the `payload` BLOB returned by `ducknng_fetch_query(...)` and call `ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream')`. That keeps `ducknng_fetch_query(...)` explicit about session control metadata while reusing the same Arrow IPC decoder used for body codecs. A later `ducknng_fetch_query_table(...)` convenience wrapper may be added, but it is not required to seal the current contract.
+Fetched Arrow payloads are decodable two ways today. `ducknng_fetch_query(...)` keeps the explicit control row and returns the Arrow IPC batch as `payload`, which can still be decoded through `ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream')`. `ducknng_fetch_query_table(...)` is the convenience wrapper for the common one-fetch row path: it expects an Arrow row reply and exposes that batch directly as a DuckDB table. Both surfaces reuse the same shared Arrow IPC decoder and DuckDB vector mapping.
 
 ### 4. HTTP async and web-server framework scope
 
@@ -55,7 +55,7 @@ The generic socket dial surface accepts an explicit `tls_config_id`, which makes
 
 ### 6. Final async surface scope
 
-The stable async contract is raw-result-first. NNG/RPC aio helpers collect raw frames through `ducknng_aio_collect(...)`, HTTP aio helpers collect raw HTTP status/header/body rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. AIO launch timeout bounds one pending operation; `ducknng_aio_collect(..., wait_ms)` and `ducknng_ncurl_aio_collect(..., wait_ms)` only control how long a later collection call waits. Additional structured async wrappers may be added later as convenience APIs, but they are additive and must not become a second background-job or streaming protocol.
+The stable async contract is raw-result-first. NNG/RPC aio helpers collect raw frames through `ducknng_aio_collect(...)`, including the raw session-family launchers `ducknng_open_query_raw_aio(...)`, `ducknng_fetch_query_raw_aio(...)`, `ducknng_close_query_raw_aio(...)`, and `ducknng_cancel_query_raw_aio(...)`. HTTP aio helpers collect raw HTTP status/header/body rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. AIO launch timeout bounds one pending operation; `ducknng_aio_collect(..., wait_ms)` and `ducknng_ncurl_aio_collect(..., wait_ms)` only control how long a later collection call waits. Additional structured async wrappers may be added later as convenience APIs, but they are additive and must not become a second background-job or streaming protocol.
 
 ### 7. Final type contract stance
 

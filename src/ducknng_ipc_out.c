@@ -743,6 +743,29 @@ cleanup:
     return rc;
 }
 
+char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes) {
+    char buf[320];
+    int n;
+    if (session_id == 0 || !session_token || !session_token[0]) return NULL;
+    n = snprintf(buf, sizeof(buf), "{\"session_id\":%llu,\"session_token\":\"%s\"",
+        (unsigned long long)session_id, session_token);
+    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+    if (batch_rows > 0) {
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_rows\":%llu",
+            (unsigned long long)batch_rows);
+        if ((size_t)n >= sizeof(buf)) return NULL;
+    }
+    if (batch_bytes > 0) {
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_bytes\":%llu",
+            (unsigned long long)batch_bytes);
+        if ((size_t)n >= sizeof(buf)) return NULL;
+    }
+    n += snprintf(buf + n, sizeof(buf) - (size_t)n, "}");
+    if ((size_t)n >= sizeof(buf)) return NULL;
+    return ducknng_strdup(buf);
+}
+
 int ducknng_query_to_ipc_stream(duckdb_connection con, const char *sql,
     uint8_t **out_bytes, size_t *out_len, char **errmsg) {
     duckdb_result result;

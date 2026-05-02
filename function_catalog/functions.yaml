@@ -818,6 +818,78 @@
       ]
     },
     {
+      "name": "ducknng_open_query_raw_aio",
+      "kind": "scalar",
+      "category": "Async I/O",
+      "signature": "ducknng_open_query_raw_aio(url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Launch one asynchronous query_open request and return an aio handle id for the raw reply frame.",
+      "notes": [
+        "This is the raw async session-open companion to ducknng_open_query().",
+        "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
+        "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
+      ],
+      "examples": [
+        "SELECT ducknng_open_query_raw_aio('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT, 0::UBIGINT, 1000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_fetch_query_raw_aio",
+      "kind": "scalar",
+      "category": "Async I/O",
+      "signature": "ducknng_fetch_query_raw_aio(url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Launch one asynchronous fetch request and return an aio handle id for the raw reply frame.",
+      "notes": [
+        "This is the raw async companion to ducknng_fetch_query().",
+        "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
+        "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
+      ],
+      "examples": [
+        "SELECT ducknng_fetch_query_raw_aio('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 1000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_close_query_raw_aio",
+      "kind": "scalar",
+      "category": "Async I/O",
+      "signature": "ducknng_close_query_raw_aio(url, session_id, session_token, timeout_ms, tls_config_id)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Launch one asynchronous close request and return an aio handle id for the raw reply frame.",
+      "notes": [
+        "This is the raw async companion to ducknng_close_query().",
+        "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
+        "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
+      ],
+      "examples": [
+        "SELECT ducknng_close_query_raw_aio('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 1000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_cancel_query_raw_aio",
+      "kind": "scalar",
+      "category": "Async I/O",
+      "signature": "ducknng_cancel_query_raw_aio(url, session_id, session_token, timeout_ms, tls_config_id)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Launch one asynchronous cancel request and return an aio handle id for the raw reply frame.",
+      "notes": [
+        "This is the raw async companion to ducknng_cancel_query().",
+        "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
+        "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
+      ],
+      "examples": [
+        "SELECT ducknng_cancel_query_raw_aio('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 1000, 0::UBIGINT);"
+      ]
+    },
+    {
       "name": "ducknng_request_socket_raw_aio",
       "kind": "scalar",
       "category": "Async I/O",
@@ -1036,10 +1108,11 @@
       "returns": "table",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Execute a row-returning RPC query and expose the unary Arrow IPC row reply as a DuckDB table.",
+      "description": "Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "This is the current unary row path, not the future session streaming path.",
+        "This helper now opens a server-side query session, fetches Arrow IPC batches until end-of-stream, and closes the session automatically.",
+        "It is the ergonomic row path for session-backed SQL queries; use ducknng_open_query(), ducknng_fetch_query(), ducknng_fetch_query_table(), ducknng_close_query(), and ducknng_cancel_query() when you need explicit session lifecycle control.",
         "These helpers require the remote server to have explicitly registered the exec method."
       ],
       "examples": [
@@ -1080,11 +1153,32 @@
         "session_token must match the bearer capability returned by ducknng_open_query().",
         "If the session was opened over verified mTLS, this request must arrive with the same transport-derived peer identity.",
         "When a row batch is returned, payload contains one Arrow IPC batch and control_json is NULL.",
-        "Decode a row-batch payload in SQL with ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream').",
+        "Use ducknng_fetch_query_table() when you want one fetch expressed directly as a DuckDB table rather than as a raw Arrow IPC payload.",
+        "Decode a row-batch payload in SQL with ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream') when you need the explicit control row and payload split.",
         "When the session is exhausted, payload is NULL, state is usually exhausted, and end_of_stream is TRUE."
       ],
       "examples": [
         "SELECT * FROM ducknng_fetch_query('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_fetch_query_table",
+      "kind": "table",
+      "category": "RPC Session",
+      "signature": "ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)",
+      "returns": "TABLE(dynamic from Arrow IPC batch)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table.",
+      "notes": [
+        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
+        "session_token must match the bearer capability returned by ducknng_open_query().",
+        "If the session was opened over verified mTLS, this request must arrive with the same transport-derived peer identity.",
+        "This helper is a one-fetch convenience wrapper. It expects the reply to contain an Arrow IPC row payload and raises an error on a control-only exhausted reply.",
+        "Use ducknng_fetch_query() when you need explicit access to control_json, payload, and end_of_stream in the same structured row."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_fetch_query_table('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT);"
       ]
     },
     {
