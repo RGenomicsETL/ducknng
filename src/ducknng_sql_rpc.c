@@ -343,7 +343,44 @@ static int ducknng_start_service_with_tls_opts(ducknng_sql_context *ctx, const c
     return 0;
 }
 
-static void ducknng_server_start_tls_config_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+static int ducknng_validate_service_start_url(const char *listen, const ducknng_tls_opts *tls_opts, char **errmsg) {
+    ducknng_transport_url parsed;
+    if (!listen || !listen[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: listen URL must be non-empty");
+        return -1;
+    }
+    if (ducknng_transport_url_parse(listen, &parsed, errmsg) != 0) return -1;
+    if (ducknng_transport_url_is_http(&parsed)) {
+        return ducknng_validate_http_server_url(listen, tls_opts, errmsg);
+    }
+    return ducknng_listener_validate_startup_url(listen, tls_opts, errmsg);
+}
+
+static int ducknng_start_server_row(ducknng_sql_context *ctx, const char *name, const char *listen,
+    int contexts, uint64_t recv_max, uint64_t idle_ms, uint64_t tls_config_id,
+    const char *ip_allowlist_json, char **errmsg) {
+    uint64_t copied_tls_id = 0;
+    char *tls_source = NULL;
+    ducknng_tls_opts tls_opts_copy;
+    int rc = -1;
+    ducknng_tls_opts_init(&tls_opts_copy);
+    if (tls_config_id != 0 &&
+        ducknng_lookup_tls_config_copy(ctx, tls_config_id, &copied_tls_id, &tls_source, &tls_opts_copy, errmsg) != 0) {
+        goto done;
+    }
+    if (ducknng_validate_service_start_url(listen, tls_config_id != 0 ? &tls_opts_copy : NULL, errmsg) != 0) {
+        goto done;
+    }
+    rc = ducknng_start_service_with_tls_opts(ctx, name, listen, contexts, recv_max, idle_ms,
+        copied_tls_id, tls_source, tls_config_id != 0 ? &tls_opts_copy : NULL,
+        ip_allowlist_json, errmsg);
+done:
+    ducknng_tls_opts_reset(&tls_opts_copy);
+    if (tls_source) duckdb_free(tls_source);
+    return rc;
+}
+
+static void ducknng_server_start_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t ncols = duckdb_data_chunk_get_column_count(input);
     idx_t row;
@@ -358,45 +395,16 @@ static void ducknng_server_start_tls_config_scalar(duckdb_function_info info, du
         uint64_t idle_ms = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 300000ULL);
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 5), row, 0);
         char *ip_allowlist_json = ncols > 6 ? arg_varchar_dup(duckdb_data_chunk_get_vector(input, 6), row) : NULL;
-        uint64_t copied_tls_id = 0;
-        char *tls_source = NULL;
-        ducknng_tls_opts tls_opts_copy;
         char *errmsg = NULL;
-        ducknng_tls_opts_init(&tls_opts_copy);
-        if (tls_config_id != 0 && ducknng_lookup_tls_config_copy(ctx, tls_config_id, &copied_tls_id, &tls_source, &tls_opts_copy, &errmsg) != 0) {
-            if (name) duckdb_free(name);
-            if (listen) duckdb_free(listen);
-            if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        if (ducknng_validate_nng_url(listen, &errmsg) != 0) {
-            if (name) duckdb_free(name);
-            if (listen) duckdb_free(listen);
-            if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid listen URL");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        if (ducknng_start_service_with_tls_opts(ctx, name, listen, contexts, recv_max, idle_ms,
-                copied_tls_id, tls_source, tls_config_id != 0 ? &tls_opts_copy : NULL,
+        if (ducknng_start_server_row(ctx, name, listen, contexts, recv_max, idle_ms, tls_config_id,
                 ip_allowlist_json, &errmsg) != 0) {
             if (name) duckdb_free(name);
             if (listen) duckdb_free(listen);
             if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to start service");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
-        ducknng_tls_opts_reset(&tls_opts_copy);
-        if (tls_source) duckdb_free(tls_source);
         if (name) duckdb_free(name);
         if (listen) duckdb_free(listen);
         if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
@@ -418,45 +426,16 @@ static void ducknng_http_server_start_scalar(duckdb_function_info info, duckdb_d
         uint64_t idle_ms = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 300000ULL);
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 0);
         char *ip_allowlist_json = ncols > 5 ? arg_varchar_dup(duckdb_data_chunk_get_vector(input, 5), row) : NULL;
-        uint64_t copied_tls_id = 0;
-        char *tls_source = NULL;
-        ducknng_tls_opts tls_opts_copy;
         char *errmsg = NULL;
-        ducknng_tls_opts_init(&tls_opts_copy);
-        if (tls_config_id != 0 && ducknng_lookup_tls_config_copy(ctx, tls_config_id, &copied_tls_id, &tls_source, &tls_opts_copy, &errmsg) != 0) {
-            if (name) duckdb_free(name);
-            if (listen) duckdb_free(listen);
-            if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        if (ducknng_validate_http_server_url(listen, tls_config_id != 0 ? &tls_opts_copy : NULL, &errmsg) != 0) {
-            if (name) duckdb_free(name);
-            if (listen) duckdb_free(listen);
-            if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid HTTP listen URL");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        if (ducknng_start_service_with_tls_opts(ctx, name, listen, 1, recv_max, idle_ms,
-                copied_tls_id, tls_source, tls_config_id != 0 ? &tls_opts_copy : NULL,
+        if (ducknng_start_server_row(ctx, name, listen, 1, recv_max, idle_ms, tls_config_id,
                 ip_allowlist_json, &errmsg) != 0) {
             if (name) duckdb_free(name);
             if (listen) duckdb_free(listen);
             if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
-            ducknng_tls_opts_reset(&tls_opts_copy);
-            if (tls_source) duckdb_free(tls_source);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to start HTTP service");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
-        ducknng_tls_opts_reset(&tls_opts_copy);
-        if (tls_source) duckdb_free(tls_source);
         if (name) duckdb_free(name);
         if (listen) duckdb_free(listen);
         if (ip_allowlist_json) duckdb_free(ip_allowlist_json);
@@ -2409,8 +2388,8 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     duckdb_type request_tls_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
     duckdb_type request_socket_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER};
     if (!ctx) return 0;
-    if (!register_scalar(connection, "ducknng_start_server", 6, ducknng_server_start_tls_config_scalar, ctx, start_tls_config_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(connection, "ducknng_start_server", 7, ducknng_server_start_tls_config_scalar, ctx, start_tls_config_ip_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!register_scalar(connection, "ducknng_start_server", 6, ducknng_server_start_scalar, ctx, start_tls_config_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!register_scalar(connection, "ducknng_start_server", 7, ducknng_server_start_scalar, ctx, start_tls_config_ip_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!register_scalar(connection, "ducknng_start_http_server", 5, ducknng_http_server_start_scalar, ctx, start_http_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!register_scalar(connection, "ducknng_start_http_server", 6, ducknng_http_server_start_scalar, ctx, start_http_ip_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!register_scalar(connection, "ducknng_stop_server", 1, ducknng_server_stop_scalar, ctx, stop_types, DUCKDB_TYPE_BOOLEAN)) return 0;

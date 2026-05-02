@@ -28,10 +28,10 @@ through each in turn.
     `ducknng_list_pipes(...)`).
 2.  **Framed RPC.** A versioned envelope carries Arrow IPC table
     payloads or JSON control text. Servers come up with
-    `ducknng_start_server(...)` (NNG) or
-    `ducknng_start_http_server(...)` (HTTP/HTTPS). Clients call by URL;
-    synchronous helpers route by scheme, AIO helpers expose the same
-    calls as futures.
+    `ducknng_start_server(...)`, and the listen URL scheme chooses NNG
+    or HTTP/HTTPS. `ducknng_start_http_server(...)` remains a thin
+    HTTP/HTTPS alias. Clients call by URL; synchronous helpers route by
+    scheme, AIO helpers expose the same calls as futures.
 3.  **Policy.** Manifest-driven method registry with opt-in `exec`. Fast
     C admission for required mTLS, exact peer-identity allowlists,
     IP/CIDR allowlists, and service limits. Optional SQL authorizers run
@@ -97,10 +97,12 @@ SELECT ducknng_stop_server('hello');
     | true                         |
     +------------------------------+
 
-Swap `ducknng_start_server(...)` for `ducknng_start_http_server(...)`
-and the same RPC methods are mounted at an `http://` or `https://` URL
-path. The **Examples** section walks through transport patterns, AIO,
-the client surface, body codecs, and sessions in that order.
+Point `ducknng_start_server(...)` at an `http://` or `https://` URL and
+the same RPC methods are mounted on the HTTP carrier.
+`ducknng_start_http_server(...)` remains available as a thin alias if
+you want the explicit HTTP-only spelling. The **Examples** section walks
+through transport patterns, AIO, the client surface, body codecs, and
+sessions in that order.
 
 ## Lifetime and manual cleanup
 
@@ -151,11 +153,11 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Service Control
 
-| name                        | kind   | arguments                                                                                     | returns   | description                                        |
-|-----------------------------|--------|-----------------------------------------------------------------------------------------------|-----------|----------------------------------------------------|
-| `ducknng_start_server`      | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng NNG listener.                |
-| `ducknng_start_http_server` | scalar | `name, listen, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]`           | `BOOLEAN` | Start a named ducknng HTTP or HTTPS frame carrier. |
-| `ducknng_stop_server`       | scalar | `name`                                                                                        | `BOOLEAN` | Stop a named ducknng service.                      |
+| name                        | kind   | arguments                                                                                     | returns   | description                                                                      |
+|-----------------------------|--------|-----------------------------------------------------------------------------------------------|-----------|----------------------------------------------------------------------------------|
+| `ducknng_start_server`      | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng service and choose the carrier from the listen URL scheme. |
+| `ducknng_start_http_server` | scalar | `name, listen, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]`           | `BOOLEAN` | Start a named ducknng HTTP or HTTPS frame carrier alias.                         |
+| `ducknng_stop_server`       | scalar | `name`                                                                                        | `BOOLEAN` | Stop a named ducknng service.                                                    |
 
 ## Introspection
 
@@ -728,17 +730,19 @@ SELECT ducknng_drop_tls_config(1);
 
 ### Start `ducknng` on `http://` and use the routed helpers directly
 
-`ducknng_start_http_server(...)` mounts the existing framed RPC surface
-at the exact path encoded in the listen URL. The higher-level
-synchronous request, RPC, and session helpers use the same names they
-already use for NNG URLs and switch carriers automatically from the
-scheme.
+`ducknng_start_server(...)` mounts the existing framed RPC surface at
+the exact path encoded in the listen URL, and the higher-level
+synchronous request, RPC, and session helpers keep the same names they
+already use for NNG URLs while switching carriers automatically from the
+scheme. `ducknng_start_http_server(...)` remains a thin alias if you
+want the HTTP-only spelling.
 
 ``` sql
 LOAD 'build/release/ducknng.duckdb_extension';
-SELECT ducknng_start_http_server(
+SELECT ducknng_start_server(
   'http_demo',
   'http://127.0.0.1:18444/_ducknng',
+  1,
   134217728,
   300000,
   0::UBIGINT
@@ -772,11 +776,11 @@ FROM ducknng_decode_frame(getvariable('http_demo_frame'));
 SELECT ducknng_stop_server('http_demo');
 ```
 
-    +--------------------------------------------------------------------------------------------------------------------+
-    | ducknng_start_http_server('http_demo', 'http://127.0.0.1:18444/_ducknng', 134217728, 300000, CAST(0 AS "UBIGINT")) |
-    +--------------------------------------------------------------------------------------------------------------------+
-    | true                                                                                                               |
-    +--------------------------------------------------------------------------------------------------------------------+
+    +------------------------------------------------------------------------------------------------------------------+
+    | ducknng_start_server('http_demo', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
+    +------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                             |
+    +------------------------------------------------------------------------------------------------------------------+
     +-------------+--------------+--------------+
     | server_name | method_count | has_manifest |
     +-------------+--------------+--------------+
@@ -1102,10 +1106,13 @@ SET VARIABLE bus_close_a = ducknng_close_socket(getvariable('bus_a')::UBIGINT);
 The stable async contract is raw-result-first. NNG/RPC aio helpers
 collect raw frames through `ducknng_aio_collect(...)`, HTTP aio helpers
 collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and
-callers explicitly decode frames or bodies afterward. Structured async
-wrappers may be added later as conveniences, but they remain additive;
-aio handles represent one pending operation, not a background job or
-streaming protocol.
+callers explicitly decode frames or bodies afterward. URL-launched NNG
+request aio helpers also keep the initial dial in NNG’s background retry
+path, so launch returns a handle even if the listener is not up yet and
+the eventual terminal result still reflects the ordinary request
+operation. Structured async wrappers may be added later as conveniences,
+but they remain additive; aio handles represent one pending operation,
+not a background job or streaming protocol.
 
 ``` sql
 LOAD 'build/release/ducknng.duckdb_extension';
@@ -2071,12 +2078,13 @@ SELECT ducknng_set_service_authorizer(
 
 Transport-specific deployment notes:
 
-| Surface                                                                                                      | Accepted schemes                                                 | TLS handle accepted on             |
-|--------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|------------------------------------|
-| `ducknng_start_server(...)` and generic socket APIs                                                          | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://` | `tls+tcp://`, `wss://`             |
-| synchronous RPC/session helpers                                                                              | NNG schemes plus `http://`, `https://`                           | `tls+tcp://`, `wss://`, `https://` |
-| raw RPC AIO helpers                                                                                          | NNG schemes only                                                 | `tls+tcp://`, `wss://`             |
-| `ducknng_start_http_server(...)`, `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, `ducknng_ncurl_table(...)` | `http://`, `https://`                                            | `https://`                         |
+| Surface                                                                                                      | Accepted schemes                                                                        | TLS handle accepted on             |
+|--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|------------------------------------|
+| `ducknng_start_server(...)`                                                                                  | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, `https://` | `tls+tcp://`, `wss://`, `https://` |
+| synchronous RPC/session helpers                                                                              | NNG schemes plus `http://`, `https://`                                                  | `tls+tcp://`, `wss://`, `https://` |
+| raw RPC AIO helpers                                                                                          | NNG schemes only                                                                        | `tls+tcp://`, `wss://`             |
+| generic socket APIs                                                                                          | `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`                        | `tls+tcp://`, `wss://`             |
+| `ducknng_start_http_server(...)`, `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, `ducknng_ncurl_table(...)` | `http://`, `https://`                                                                   | `https://`                         |
 
 Supplying a non-zero TLS handle on a non-TLS URL is rejected rather than
 silently ignored. HTTP/HTTPS URLs are rejected by the generic NNG socket

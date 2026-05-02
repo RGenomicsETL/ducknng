@@ -510,6 +510,9 @@ int ducknng_socket_set_timeout_ms(nng_socket sock, int send_timeout_ms, int recv
     return 0;
 }
 int ducknng_socket_dial(nng_socket sock, const char *url) { return nng_dial(sock, url, NULL, 0); }
+int ducknng_socket_dial_nonblocking(nng_socket sock, const char *url) {
+    return nng_dial(sock, url, NULL, NNG_FLAG_NONBLOCK);
+}
 int ducknng_socket_send(nng_socket sock, nng_msg *msg) { return nng_sendmsg(sock, msg, 0); }
 int ducknng_socket_recv(nng_socket sock, nng_msg **msg) { return nng_recvmsg(sock, msg, 0); }
 int ducknng_socket_subscribe(nng_socket sock, const void *topic, size_t len) {

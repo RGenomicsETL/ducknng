@@ -43,6 +43,7 @@ int ducknng_validate_nng_url(const char *url, char **errmsg);
 int ducknng_socket_validate_client_url(const char *url, const ducknng_tls_opts *opts, char **errmsg);
 int ducknng_socket_set_timeout_ms(nng_socket sock, int send_timeout_ms, int recv_timeout_ms);
 int ducknng_socket_dial(nng_socket sock, const char *url);
+int ducknng_socket_dial_nonblocking(nng_socket sock, const char *url);
 int ducknng_socket_send(nng_socket sock, nng_msg *msg);
 int ducknng_socket_recv(nng_socket sock, nng_msg **msg);
 int ducknng_socket_subscribe(nng_socket sock, const void *topic, size_t len);

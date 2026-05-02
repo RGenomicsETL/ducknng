@@ -8,15 +8,16 @@
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Start a named ducknng NNG listener.",
+      "description": "Start a named ducknng service and choose the carrier from the listen URL scheme.",
       "notes": [
-        "Transport is selected by the NNG listen URL scheme. Supported listener schemes now include inproc://, ipc://, tcp://, tls+tcp://, ws://, and wss://.",
-        "Use ducknng_tls_config_from_files(), ducknng_tls_config_from_pem(), or ducknng_self_signed_tls_config() to create a reusable TLS handle for tls+tcp:// and wss:// listeners.",
+        "Transport is selected by the listen URL scheme. Supported schemes now include inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://, http://, and https://.",
+        "Use ducknng_tls_config_from_files(), ducknng_tls_config_from_pem(), or ducknng_self_signed_tls_config() to create a reusable TLS handle for tls+tcp://, wss://, and https:// listeners.",
         "Optional ip_allowlist_json is a JSON array of IPv4/IPv6 literals or CIDR blocks copied into the service before it starts.",
         "For network-exposed services, prefer TLS/mTLS and use IP allowlists as an additional or proxy-friendly admission layer."
       ],
       "examples": [
-        "SELECT ducknng_start_server('sql0', 'ipc:///tmp/ducknng_sql0.ipc', 1, 134217728, 300000, 0);"
+        "SELECT ducknng_start_server('sql0', 'ipc:///tmp/ducknng_sql0.ipc', 1, 134217728, 300000, 0);",
+        "SELECT ducknng_start_server('http0', 'http://127.0.0.1:8080/_ducknng', 1, 134217728, 300000, 0::UBIGINT);"
       ]
     },
     {
@@ -27,9 +28,10 @@
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Start a named ducknng HTTP or HTTPS frame carrier.",
+      "description": "Start a named ducknng HTTP or HTTPS frame carrier alias.",
       "notes": [
         "listen must be an http:// or https:// URL whose path becomes the mounted RPC endpoint.",
+        "This is a thin alias for ducknng_start_server(...) with contexts fixed to 1.",
         "Use ducknng_tls_config_from_files(), ducknng_tls_config_from_pem(), or ducknng_self_signed_tls_config() to create a reusable TLS handle for https:// listeners.",
         "Optional ip_allowlist_json is a JSON array of IPv4/IPv6 literals or CIDR blocks checked before HTTP framed-RPC dispatch.",
         "For public HTTP-style deployments, prefer https:// directly or a reverse proxy/firewall enforcing IP/CIDR policy before loopback http://."

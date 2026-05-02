@@ -60,9 +60,28 @@ SELECT ducknng_start_server('bad_tls_cfg', 'ipc:///tmp/ducknng_bad_tls_cfg.ipc',
 ducknng: TLS configuration requires a tls+tcp:// or wss:// listen URL
 
 statement error
-SELECT ducknng_start_server('bad_http_transport', 'https://127.0.0.1:45446', 1, 134217728, 300000, 0)
+SELECT ducknng_start_server('bad_http_path', 'https://127.0.0.1:45446', 1, 134217728, 300000, 0)
 ----
-ducknng: http:// and https:// are supported by the HTTP carrier, not the NNG socket/service layer
+ducknng: HTTP listen URL must include an absolute path such as /_ducknng
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http0', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT position('/_ducknng' IN listen) > 0
+FROM ducknng_list_servers()
+WHERE name = 'http0'
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http0') THEN 1 ELSE 0 END
+----
+1
 
 query I
 SELECT ducknng_drop_tls_config(1)

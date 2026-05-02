@@ -353,7 +353,10 @@ static int ducknng_client_open_req_socket_tls(const char *url, int timeout_ms, c
         ducknng_socket_close(*out);
         return -1;
     }
-    rv = ducknng_socket_dial(*out, url);
+    /* Launch must not block on the first dial attempt. The request AIO itself
+     * remains the one user-visible future, while NNG retries the initial
+     * connection attempt in the background. */
+    rv = ducknng_socket_dial_nonblocking(*out, url);
     if (rv != 0) {
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         ducknng_socket_close(*out);

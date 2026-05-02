@@ -449,6 +449,48 @@ FROM ducknng_decode_frame(ducknng_request_raw('ipc:///tmp/ducknng_rpc_client_smo
 1	1	2	4	result	manifest	1
 
 statement ok
+CREATE TEMP TABLE aio_prestart_launch AS
+SELECT ducknng_request_raw_aio(
+  'ipc:///tmp/ducknng_rpc_client_smoke_prestart.ipc',
+  from_hex('01000000000000000000000000000000000000000000'),
+  5000,
+  0::UBIGINT
+) AS aio_id
+
+query IIII
+SELECT aio_prestart_launch.aio_id > 0, kind = 'request', state = 'pending', phase = 'send'
+FROM aio_prestart_launch, ducknng_aio_status(aio_prestart_launch.aio_id)
+----
+1	1	1	1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('rpc_smoke_prestart', 'ipc:///tmp/ducknng_rpc_client_smoke_prestart.ipc', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT aio_id = (SELECT aio_id FROM aio_prestart_launch), ok, octet_length(frame) > 0
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM aio_prestart_launch), 5000)
+----
+1	1	1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM aio_prestart_launch
+----
+1
+
+statement ok
+DROP TABLE aio_prestart_launch
+
+query I
+SELECT CASE WHEN ducknng_stop_server('rpc_smoke_prestart') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
 CREATE TEMP TABLE aio_launch AS
 SELECT
   ducknng_request_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT) AS aio1,

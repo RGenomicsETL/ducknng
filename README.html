@@ -628,10 +628,11 @@ AIO handles. Per-service pipe-event telemetry
 <code>ducknng_list_pipes(...)</code>).</li>
 <li><strong>Framed RPC.</strong> A versioned envelope carries Arrow IPC
 table payloads or JSON control text. Servers come up with
-<code>ducknng_start_server(...)</code> (NNG) or
-<code>ducknng_start_http_server(...)</code> (HTTP/HTTPS). Clients call
-by URL; synchronous helpers route by scheme, AIO helpers expose the same
-calls as futures.</li>
+<code>ducknng_start_server(...)</code>, and the listen URL scheme
+chooses NNG or HTTP/HTTPS. <code>ducknng_start_http_server(...)</code>
+remains a thin HTTP/HTTPS alias. Clients call by URL; synchronous
+helpers route by scheme, AIO helpers expose the same calls as
+futures.</li>
 <li><strong>Policy.</strong> Manifest-driven method registry with opt-in
 <code>exec</code>. Fast C admission for required mTLS, exact
 peer-identity allowlists, IP/CIDR allowlists, and service limits.
@@ -686,11 +687,13 @@ built-in <code>manifest</code> method, and stop it again:</p>
 +------------------------------+
 | true                         |
 +------------------------------+</code></pre>
-<p>Swap <code>ducknng_start_server(...)</code> for
-<code>ducknng_start_http_server(...)</code> and the same RPC methods are
-mounted at an <code>http://</code> or <code>https://</code> URL path.
-The <strong>Examples</strong> section walks through transport patterns,
-AIO, the client surface, body codecs, and sessions in that order.</p>
+<p>Point <code>ducknng_start_server(...)</code> at an
+<code>http://</code> or <code>https://</code> URL and the same RPC
+methods are mounted on the HTTP carrier.
+<code>ducknng_start_http_server(...)</code> remains available as a thin
+alias if you want the explicit HTTP-only spelling. The
+<strong>Examples</strong> section walks through transport patterns, AIO,
+the client surface, body codecs, and sessions in that order.</p>
 <h2 id="lifetime-and-manual-cleanup">Lifetime and manual cleanup</h2>
 <p>DuckDB’s extension API does give <code>ducknng</code> destroy
 callbacks for internal function-registration, bind, and init state. What
@@ -756,14 +759,15 @@ Expand the full generated function catalog
 <td>scalar</td>
 <td><code>name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]</code></td>
 <td><code>BOOLEAN</code></td>
-<td>Start a named ducknng NNG listener.</td>
+<td>Start a named ducknng service and choose the carrier from the listen
+URL scheme.</td>
 </tr>
 <tr class="even">
 <td><code>ducknng_start_http_server</code></td>
 <td>scalar</td>
 <td><code>name, listen, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]</code></td>
 <td><code>BOOLEAN</code></td>
-<td>Start a named ducknng HTTP or HTTPS frame carrier.</td>
+<td>Start a named ducknng HTTP or HTTPS frame carrier alias.</td>
 </tr>
 <tr class="odd">
 <td><code>ducknng_stop_server</code></td>
@@ -1821,51 +1825,54 @@ selects that carrier.</p>
 <h3 id="start-ducknng-on-http-and-use-the-routed-helpers-directly">Start
 <code>ducknng</code> on <code>http://</code> and use the routed helpers
 directly</h3>
-<p><code>ducknng_start_http_server(...)</code> mounts the existing
-framed RPC surface at the exact path encoded in the listen URL. The
-higher-level synchronous request, RPC, and session helpers use the same
-names they already use for NNG URLs and switch carriers automatically
-from the scheme.</p>
+<p><code>ducknng_start_server(...)</code> mounts the existing framed RPC
+surface at the exact path encoded in the listen URL, and the
+higher-level synchronous request, RPC, and session helpers keep the same
+names they already use for NNG URLs while switching carriers
+automatically from the scheme.
+<code>ducknng_start_http_server(...)</code> remains a thin alias if you
+want the HTTP-only spelling.</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
-<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_http_server(</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
 <span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>  <span class="st">&#39;http_demo&#39;</span>,</span>
 <span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
-<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
-<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
-<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>);</span>
-<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a></span>
-<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a><span class="kw">WITH</span> manifest_row <span class="kw">AS</span> (</span>
-<span id="cb13-11"><a href="#cb13-11" tabindex="-1"></a>  <span class="kw">SELECT</span> manifest</span>
-<span id="cb13-12"><a href="#cb13-12" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_get_rpc_manifest(<span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
-<span id="cb13-13"><a href="#cb13-13" tabindex="-1"></a>  <span class="kw">WHERE</span> ok</span>
-<span id="cb13-14"><a href="#cb13-14" tabindex="-1"></a>)</span>
-<span id="cb13-15"><a href="#cb13-15" tabindex="-1"></a><span class="kw">SELECT</span> json_extract_string(manifest:<span class="ch">:JSON</span>, <span class="st">&#39;$.server.name&#39;</span>) <span class="kw">AS</span> server_name,</span>
-<span id="cb13-16"><a href="#cb13-16" tabindex="-1"></a>       json_array_length(json_extract(manifest:<span class="ch">:JSON</span>, <span class="st">&#39;$.methods&#39;</span>)) <span class="kw">AS</span> method_count,</span>
-<span id="cb13-17"><a href="#cb13-17" tabindex="-1"></a>       position(<span class="st">&#39;&quot;name&quot;:&quot;manifest&quot;&#39;</span> <span class="kw">IN</span> manifest) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_manifest</span>
-<span id="cb13-18"><a href="#cb13-18" tabindex="-1"></a><span class="kw">FROM</span> manifest_row;</span>
-<span id="cb13-19"><a href="#cb13-19" tabindex="-1"></a></span>
-<span id="cb13-20"><a href="#cb13-20" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_demo_frame <span class="op">=</span> (</span>
-<span id="cb13-21"><a href="#cb13-21" tabindex="-1"></a>  <span class="kw">SELECT</span> <span class="kw">body</span></span>
-<span id="cb13-22"><a href="#cb13-22" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb13-23"><a href="#cb13-23" tabindex="-1"></a>    <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
-<span id="cb13-24"><a href="#cb13-24" tabindex="-1"></a>    <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb13-25"><a href="#cb13-25" tabindex="-1"></a>    <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/vnd.ducknng.frame&quot;}]&#39;</span>,</span>
-<span id="cb13-26"><a href="#cb13-26" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
-<span id="cb13-27"><a href="#cb13-27" tabindex="-1"></a>    <span class="dv">2000</span>,</span>
-<span id="cb13-28"><a href="#cb13-28" tabindex="-1"></a>    <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb13-29"><a href="#cb13-29" tabindex="-1"></a>  )</span>
-<span id="cb13-30"><a href="#cb13-30" tabindex="-1"></a>);</span>
-<span id="cb13-31"><a href="#cb13-31" tabindex="-1"></a></span>
-<span id="cb13-32"><a href="#cb13-32" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
-<span id="cb13-33"><a href="#cb13-33" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;http_demo_frame&#39;</span>));</span>
-<span id="cb13-34"><a href="#cb13-34" tabindex="-1"></a></span>
-<span id="cb13-35"><a href="#cb13-35" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_demo&#39;</span>);</span></code></pre></div>
-<pre><code>+--------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_http_server(&#39;http_demo&#39;, &#39;http://127.0.0.1:18444/_ducknng&#39;, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+--------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                               |
-+--------------------------------------------------------------------------------------------------------------------+
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a>);</span>
+<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a></span>
+<span id="cb13-11"><a href="#cb13-11" tabindex="-1"></a><span class="kw">WITH</span> manifest_row <span class="kw">AS</span> (</span>
+<span id="cb13-12"><a href="#cb13-12" tabindex="-1"></a>  <span class="kw">SELECT</span> manifest</span>
+<span id="cb13-13"><a href="#cb13-13" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_get_rpc_manifest(<span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
+<span id="cb13-14"><a href="#cb13-14" tabindex="-1"></a>  <span class="kw">WHERE</span> ok</span>
+<span id="cb13-15"><a href="#cb13-15" tabindex="-1"></a>)</span>
+<span id="cb13-16"><a href="#cb13-16" tabindex="-1"></a><span class="kw">SELECT</span> json_extract_string(manifest:<span class="ch">:JSON</span>, <span class="st">&#39;$.server.name&#39;</span>) <span class="kw">AS</span> server_name,</span>
+<span id="cb13-17"><a href="#cb13-17" tabindex="-1"></a>       json_array_length(json_extract(manifest:<span class="ch">:JSON</span>, <span class="st">&#39;$.methods&#39;</span>)) <span class="kw">AS</span> method_count,</span>
+<span id="cb13-18"><a href="#cb13-18" tabindex="-1"></a>       position(<span class="st">&#39;&quot;name&quot;:&quot;manifest&quot;&#39;</span> <span class="kw">IN</span> manifest) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_manifest</span>
+<span id="cb13-19"><a href="#cb13-19" tabindex="-1"></a><span class="kw">FROM</span> manifest_row;</span>
+<span id="cb13-20"><a href="#cb13-20" tabindex="-1"></a></span>
+<span id="cb13-21"><a href="#cb13-21" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_demo_frame <span class="op">=</span> (</span>
+<span id="cb13-22"><a href="#cb13-22" tabindex="-1"></a>  <span class="kw">SELECT</span> <span class="kw">body</span></span>
+<span id="cb13-23"><a href="#cb13-23" tabindex="-1"></a>  <span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb13-24"><a href="#cb13-24" tabindex="-1"></a>    <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
+<span id="cb13-25"><a href="#cb13-25" tabindex="-1"></a>    <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb13-26"><a href="#cb13-26" tabindex="-1"></a>    <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/vnd.ducknng.frame&quot;}]&#39;</span>,</span>
+<span id="cb13-27"><a href="#cb13-27" tabindex="-1"></a>    from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>),</span>
+<span id="cb13-28"><a href="#cb13-28" tabindex="-1"></a>    <span class="dv">2000</span>,</span>
+<span id="cb13-29"><a href="#cb13-29" tabindex="-1"></a>    <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb13-30"><a href="#cb13-30" tabindex="-1"></a>  )</span>
+<span id="cb13-31"><a href="#cb13-31" tabindex="-1"></a>);</span>
+<span id="cb13-32"><a href="#cb13-32" tabindex="-1"></a></span>
+<span id="cb13-33"><a href="#cb13-33" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
+<span id="cb13-34"><a href="#cb13-34" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;http_demo_frame&#39;</span>));</span>
+<span id="cb13-35"><a href="#cb13-35" tabindex="-1"></a></span>
+<span id="cb13-36"><a href="#cb13-36" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_demo&#39;</span>);</span></code></pre></div>
+<pre><code>+------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server(&#39;http_demo&#39;, &#39;http://127.0.0.1:18444/_ducknng&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
++------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                             |
++------------------------------------------------------------------------------------------------------------------+
 +-------------+--------------+--------------+
 | server_name | method_count | has_manifest |
 +-------------+--------------+--------------+
@@ -2172,10 +2179,13 @@ raw requests asynchronously and collect the reply frames later</h3>
 collect raw frames through <code>ducknng_aio_collect(...)</code>, HTTP
 aio helpers collect HTTP-shaped rows through
 <code>ducknng_ncurl_aio_collect(...)</code>, and callers explicitly
-decode frames or bodies afterward. Structured async wrappers may be
-added later as conveniences, but they remain additive; aio handles
-represent one pending operation, not a background job or streaming
-protocol.</p>
+decode frames or bodies afterward. URL-launched NNG request aio helpers
+also keep the initial dial in NNG’s background retry path, so launch
+returns a handle even if the listener is not up yet and the eventual
+terminal result still reflects the ordinary request operation.
+Structured async wrappers may be added later as conveniences, but they
+remain additive; aio handles represent one pending operation, not a
+background job or streaming protocol.</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="co">-- Start a local listener that the aio requests will target.</span></span>
 <span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
@@ -3108,10 +3118,12 @@ active deny-all.</p>
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>ducknng_start_server(...)</code> and generic socket APIs</td>
+<td><code>ducknng_start_server(...)</code></td>
 <td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>,
-<code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code></td>
-<td><code>tls+tcp://</code>, <code>wss://</code></td>
+<code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>,
+<code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>,
+<code>https://</code></td>
 </tr>
 <tr class="even">
 <td>synchronous RPC/session helpers</td>
@@ -3125,6 +3137,12 @@ active deny-all.</p>
 <td><code>tls+tcp://</code>, <code>wss://</code></td>
 </tr>
 <tr class="even">
+<td>generic socket APIs</td>
+<td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>,
+<code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code></td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_start_http_server(...)</code>,
 <code>ducknng_ncurl(...)</code>, <code>ducknng_ncurl_aio(...)</code>,
 <code>ducknng_ncurl_table(...)</code></td>
