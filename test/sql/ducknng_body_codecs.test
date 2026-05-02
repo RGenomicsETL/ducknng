@@ -66,7 +66,7 @@ SELECT CASE WHEN ducknng_stop_server('codec_rpc') THEN 1 ELSE 0 END
 
 query I
 SELECT CASE
-  WHEN ducknng_start_http_server('codec_http', 'http://127.0.0.1:45464/_ducknng', 134217728, 300000, 0::UBIGINT)
+  WHEN ducknng_start_server('codec_http', 'http://127.0.0.1:45464/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
   THEN 1 ELSE 0 END
 ----
 1

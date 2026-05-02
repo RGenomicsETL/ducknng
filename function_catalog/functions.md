@@ -7,7 +7,6 @@ This file is generated from `function_catalog/functions.yaml`.
 | name | kind | arguments | returns | description |
 |---|---|---|---|---|
 | `ducknng_start_server` | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng service and choose the carrier from the listen URL scheme. |
-| `ducknng_start_http_server` | scalar | `name, listen, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng HTTP or HTTPS frame carrier alias. |
 | `ducknng_stop_server` | scalar | `name` | `BOOLEAN` | Stop a named ducknng service. |
 
 ## Introspection

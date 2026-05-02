@@ -629,10 +629,10 @@ AIO handles. Per-service pipe-event telemetry
 <li><strong>Framed RPC.</strong> A versioned envelope carries Arrow IPC
 table payloads or JSON control text. Servers come up with
 <code>ducknng_start_server(...)</code>, and the listen URL scheme
-chooses NNG or HTTP/HTTPS. <code>ducknng_start_http_server(...)</code>
-remains a thin HTTP/HTTPS alias. Clients call by URL; synchronous
-helpers route by scheme, AIO helpers expose the same calls as
-futures.</li>
+chooses NNG or HTTP/HTTPS. HTTP/HTTPS stays on the same server
+entrypoint with <code>contexts = 1</code>. Clients call by URL;
+synchronous helpers route by scheme, AIO helpers expose the same calls
+as futures.</li>
 <li><strong>Policy.</strong> Manifest-driven method registry with opt-in
 <code>exec</code>. Fast C admission for required mTLS, exact
 peer-identity allowlists, IP/CIDR allowlists, and service limits.
@@ -688,12 +688,11 @@ built-in <code>manifest</code> method, and stop it again:</p>
 | true                         |
 +------------------------------+</code></pre>
 <p>Point <code>ducknng_start_server(...)</code> at an
-<code>http://</code> or <code>https://</code> URL and the same RPC
-methods are mounted on the HTTP carrier.
-<code>ducknng_start_http_server(...)</code> remains available as a thin
-alias if you want the explicit HTTP-only spelling. The
-<strong>Examples</strong> section walks through transport patterns, AIO,
-the client surface, body codecs, and sessions in that order.</p>
+<code>http://</code> or <code>https://</code> URL with
+<code>contexts = 1</code> and the same RPC methods are mounted on the
+HTTP carrier. The <strong>Examples</strong> section walks through
+transport patterns, AIO, the client surface, body codecs, and sessions
+in that order.</p>
 <h2 id="lifetime-and-manual-cleanup">Lifetime and manual cleanup</h2>
 <p>DuckDB’s extension API does give <code>ducknng</code> destroy
 callbacks for internal function-registration, bind, and init state. What
@@ -763,13 +762,6 @@ Expand the full generated function catalog
 URL scheme.</td>
 </tr>
 <tr class="even">
-<td><code>ducknng_start_http_server</code></td>
-<td>scalar</td>
-<td><code>name, listen, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Start a named ducknng HTTP or HTTPS frame carrier alias.</td>
-</tr>
-<tr class="odd">
 <td><code>ducknng_stop_server</code></td>
 <td>scalar</td>
 <td><code>name</code></td>
@@ -1829,9 +1821,8 @@ directly</h3>
 surface at the exact path encoded in the listen URL, and the
 higher-level synchronous request, RPC, and session helpers keep the same
 names they already use for NNG URLs while switching carriers
-automatically from the scheme.
-<code>ducknng_start_http_server(...)</code> remains a thin alias if you
-want the HTTP-only spelling.</p>
+automatically from the scheme. For <code>http://</code> and
+<code>https://</code>, use <code>contexts = 1</code>.</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
 <span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>  <span class="st">&#39;http_demo&#39;</span>,</span>
@@ -3077,36 +3068,37 @@ active deny-all.</p>
 <span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a>);</span>
 <span id="cb44-6"><a href="#cb44-6" tabindex="-1"></a></span>
 <span id="cb44-7"><a href="#cb44-7" tabindex="-1"></a><span class="co">-- Start with an IP/CIDR allowlist already installed before the listener accepts traffic.</span></span>
-<span id="cb44-8"><a href="#cb44-8" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_http_server(</span>
+<span id="cb44-8"><a href="#cb44-8" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
 <span id="cb44-9"><a href="#cb44-9" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
 <span id="cb44-10"><a href="#cb44-10" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18444/_ducknng&#39;</span>,</span>
-<span id="cb44-11"><a href="#cb44-11" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
-<span id="cb44-12"><a href="#cb44-12" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
-<span id="cb44-13"><a href="#cb44-13" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
-<span id="cb44-14"><a href="#cb44-14" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;]&#39;</span></span>
-<span id="cb44-15"><a href="#cb44-15" tabindex="-1"></a>);</span>
-<span id="cb44-16"><a href="#cb44-16" tabindex="-1"></a></span>
-<span id="cb44-17"><a href="#cb44-17" tabindex="-1"></a><span class="co">-- Later, rotate or tighten admission for a running service.</span></span>
-<span id="cb44-18"><a href="#cb44-18" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_peer_allowlist(</span>
-<span id="cb44-19"><a href="#cb44-19" tabindex="-1"></a>  <span class="st">&#39;sql_rpc&#39;</span>,</span>
-<span id="cb44-20"><a href="#cb44-20" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-b.example&quot;]&#39;</span></span>
-<span id="cb44-21"><a href="#cb44-21" tabindex="-1"></a>);</span>
-<span id="cb44-22"><a href="#cb44-22" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_ip_allowlist(</span>
-<span id="cb44-23"><a href="#cb44-23" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
-<span id="cb44-24"><a href="#cb44-24" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;,&quot;10.0.0.0/8&quot;]&#39;</span></span>
-<span id="cb44-25"><a href="#cb44-25" tabindex="-1"></a>);</span>
-<span id="cb44-26"><a href="#cb44-26" tabindex="-1"></a></span>
-<span id="cb44-27"><a href="#cb44-27" tabindex="-1"></a><span class="co">-- Set a basic service-side resource limit for query sessions.</span></span>
-<span id="cb44-28"><a href="#cb44-28" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_limits(<span class="st">&#39;sql_http&#39;</span>, <span class="dv">16</span>:<span class="ch">:UBIGINT</span>);</span>
-<span id="cb44-29"><a href="#cb44-29" tabindex="-1"></a></span>
-<span id="cb44-30"><a href="#cb44-30" tabindex="-1"></a><span class="co">-- Add a flexible SQL callback when policy depends on request context.</span></span>
-<span id="cb44-31"><a href="#cb44-31" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_authorizer(</span>
-<span id="cb44-32"><a href="#cb44-32" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
-<span id="cb44-33"><a href="#cb44-33" tabindex="-1"></a>  <span class="st">&#39;SELECT remote_ip = </span><span class="ch">&#39;&#39;</span><span class="st">127.0.0.1</span><span class="ch">&#39;&#39;</span><span class="st"> AND rpc_method = </span><span class="ch">&#39;&#39;</span><span class="st">manifest</span><span class="ch">&#39;&#39;</span><span class="st"> AS allow,</span></span>
-<span id="cb44-34"><a href="#cb44-34" tabindex="-1"></a><span class="st">          403 AS status,</span></span>
-<span id="cb44-35"><a href="#cb44-35" tabindex="-1"></a><span class="st">          </span><span class="ch">&#39;&#39;</span><span class="st">not authorized</span><span class="ch">&#39;&#39;</span><span class="st"> AS reason</span></span>
-<span id="cb44-36"><a href="#cb44-36" tabindex="-1"></a><span class="st">   FROM ducknng_auth_context()&#39;</span></span>
-<span id="cb44-37"><a href="#cb44-37" tabindex="-1"></a>);</span></code></pre></div>
+<span id="cb44-11"><a href="#cb44-11" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb44-12"><a href="#cb44-12" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
+<span id="cb44-13"><a href="#cb44-13" tabindex="-1"></a>  <span class="dv">300000</span>,</span>
+<span id="cb44-14"><a href="#cb44-14" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb44-15"><a href="#cb44-15" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;]&#39;</span></span>
+<span id="cb44-16"><a href="#cb44-16" tabindex="-1"></a>);</span>
+<span id="cb44-17"><a href="#cb44-17" tabindex="-1"></a></span>
+<span id="cb44-18"><a href="#cb44-18" tabindex="-1"></a><span class="co">-- Later, rotate or tighten admission for a running service.</span></span>
+<span id="cb44-19"><a href="#cb44-19" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_peer_allowlist(</span>
+<span id="cb44-20"><a href="#cb44-20" tabindex="-1"></a>  <span class="st">&#39;sql_rpc&#39;</span>,</span>
+<span id="cb44-21"><a href="#cb44-21" tabindex="-1"></a>  <span class="st">&#39;[&quot;tls:san:client-b.example&quot;]&#39;</span></span>
+<span id="cb44-22"><a href="#cb44-22" tabindex="-1"></a>);</span>
+<span id="cb44-23"><a href="#cb44-23" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_ip_allowlist(</span>
+<span id="cb44-24"><a href="#cb44-24" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
+<span id="cb44-25"><a href="#cb44-25" tabindex="-1"></a>  <span class="st">&#39;[&quot;127.0.0.1/32&quot;,&quot;10.0.0.0/8&quot;]&#39;</span></span>
+<span id="cb44-26"><a href="#cb44-26" tabindex="-1"></a>);</span>
+<span id="cb44-27"><a href="#cb44-27" tabindex="-1"></a></span>
+<span id="cb44-28"><a href="#cb44-28" tabindex="-1"></a><span class="co">-- Set a basic service-side resource limit for query sessions.</span></span>
+<span id="cb44-29"><a href="#cb44-29" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_limits(<span class="st">&#39;sql_http&#39;</span>, <span class="dv">16</span>:<span class="ch">:UBIGINT</span>);</span>
+<span id="cb44-30"><a href="#cb44-30" tabindex="-1"></a></span>
+<span id="cb44-31"><a href="#cb44-31" tabindex="-1"></a><span class="co">-- Add a flexible SQL callback when policy depends on request context.</span></span>
+<span id="cb44-32"><a href="#cb44-32" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_set_service_authorizer(</span>
+<span id="cb44-33"><a href="#cb44-33" tabindex="-1"></a>  <span class="st">&#39;sql_http&#39;</span>,</span>
+<span id="cb44-34"><a href="#cb44-34" tabindex="-1"></a>  <span class="st">&#39;SELECT remote_ip = </span><span class="ch">&#39;&#39;</span><span class="st">127.0.0.1</span><span class="ch">&#39;&#39;</span><span class="st"> AND rpc_method = </span><span class="ch">&#39;&#39;</span><span class="st">manifest</span><span class="ch">&#39;&#39;</span><span class="st"> AS allow,</span></span>
+<span id="cb44-35"><a href="#cb44-35" tabindex="-1"></a><span class="st">          403 AS status,</span></span>
+<span id="cb44-36"><a href="#cb44-36" tabindex="-1"></a><span class="st">          </span><span class="ch">&#39;&#39;</span><span class="st">not authorized</span><span class="ch">&#39;&#39;</span><span class="st"> AS reason</span></span>
+<span id="cb44-37"><a href="#cb44-37" tabindex="-1"></a><span class="st">   FROM ducknng_auth_context()&#39;</span></span>
+<span id="cb44-38"><a href="#cb44-38" tabindex="-1"></a>);</span></code></pre></div>
 <p>Transport-specific deployment notes:</p>
 <table>
 <thead>
@@ -3144,9 +3136,9 @@ active deny-all.</p>
 <td><code>tls+tcp://</code>, <code>wss://</code></td>
 </tr>
 <tr class="odd">
-<td><code>ducknng_start_http_server(...)</code>,
-<code>ducknng_ncurl(...)</code>, <code>ducknng_ncurl_aio(...)</code>,
-<code>ducknng_ncurl_table(...)</code></td>
+<td>HTTP client helpers (<code>ducknng_ncurl(...)</code>,
+<code>ducknng_ncurl_aio(...)</code>,
+<code>ducknng_ncurl_table(...)</code>)</td>
 <td><code>http://</code>, <code>https://</code></td>
 <td><code>https://</code></td>
 </tr>

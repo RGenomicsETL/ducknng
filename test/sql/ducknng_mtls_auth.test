@@ -110,9 +110,10 @@ SELECT CASE WHEN ducknng_stop_server('mtls_rpc') THEN 1 ELSE 0 END
 
 query I
 SELECT CASE
-  WHEN ducknng_start_http_server(
+  WHEN ducknng_start_server(
     'mtls_http',
     'https://127.0.0.1:0/_ducknng',
+    1,
     134217728,
     300000,
     getvariable('mtls_tls_config_id')::UBIGINT

@@ -14,6 +14,11 @@ SELECT ducknng_start_server('bad_contexts', 'ipc:///tmp/ducknng_bad_contexts.ipc
 ----
 ducknng: contexts must be >= 1
 
+statement error
+SELECT ducknng_start_server('bad_http_contexts', 'http://127.0.0.1:45446/_ducknng', 2, 134217728, 300000, 0)
+----
+ducknng: contexts must be 1 for http:// and https:// services
+
 query I
 SELECT CASE
   WHEN ducknng_start_server('tcp0', 'tcp://0.0.0.0:0', 1, 134217728, 300000, 0)

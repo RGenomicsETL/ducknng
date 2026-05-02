@@ -45,9 +45,10 @@ SELECT CASE WHEN ducknng_stop_server('ip_allow_rpc') THEN 1 ELSE 0 END
 
 query I
 SELECT CASE
-  WHEN ducknng_start_http_server(
+  WHEN ducknng_start_server(
     'ip_allow_http',
     'http://127.0.0.1:45461/_ducknng',
+    1,
     134217728,
     300000,
     0::UBIGINT,

@@ -6,7 +6,7 @@ This is a design document for a future broader HTTP server framework. It is not 
 
 The current HTTP/HTTPS server surface is deliberately narrow:
 
-- `ducknng_start_http_server(...)` exposes the framed RPC endpoint.
+- `ducknng_start_server(...)` exposes the framed RPC endpoint when the listen URL is `http://` or `https://`.
 - The endpoint accepts `POST` only.
 - The content type is `application/vnd.ducknng.frame` with optional parameters.
 - The body is one complete `ducknng` frame.

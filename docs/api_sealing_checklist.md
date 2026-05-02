@@ -14,7 +14,7 @@ This checklist is narrower than `docs/design_review_checklist.md`. It tracks wha
 - the first raw unary RPC aio wrappers
 - query-session control helpers
 - TLS config handles
-- an HTTP/HTTPS server helper plus URL-routed synchronous request/RPC/session helpers
+- a scheme-routed server helper plus URL-routed synchronous request/RPC/session helpers
 - NNG WebSocket transport schemes through `ws://` and `wss://`
 - a low-level HTTP/HTTPS client helper
 - built-in content-type driven body codec helpers for raw/text/JSON/Arrow IPC/frame bodies, with CSV/TSV/Parquet recognized and using the generic `body BLOB` fallback pending a memory-backed reader path
@@ -42,15 +42,16 @@ Fetched Arrow payloads are decodable today through the body codec table path: st
 
 The HTTP transport direction is now in place:
 
-- `ducknng_start_http_server(...)` is implemented
+- `ducknng_start_server(...)` now covers `http://` and `https://` listeners with `contexts = 1`
 - the existing synchronous request/RPC/session helpers route over `http://` and `https://`
+- the raw RPC aio helpers also route over `http://` and `https://`
 - `ducknng_ncurl_aio(...)` and `ducknng_ncurl_aio_collect(...)` provide the raw asynchronous HTTP/HTTPS client counterpart to `ducknng_ncurl(...)`
 
 A broader nanonext-style HTTP web-route framework is intentionally deferred past v1: the current server is a non-blocking NNG HTTP server that mounts exactly one framed RPC handler, and that single-handler shape is the sealed HTTP surface. Any later web-toolkit layer that adds explicit route handlers, static responses, or SQL-backed handlers must remain a separate, additively designed surface and must not create path-specific copies of existing RPC methods. The key constraint remains unchanged: HTTP must stay a carrier for the same manifest methods, session lifecycle, and Arrow-versus-JSON payload rules unless a separate web-framework surface is designed and documented.
 
 ### 5. Transport matrix stance
 
-The generic socket dial surface accepts an explicit `tls_config_id`, which makes `tls+tcp://` and `wss://` usable through the existing handle model. The stable scheme matrix is documented in `docs/transports.md` and summarized in the README: NNG service/socket surfaces accept NNG schemes, HTTP helper surfaces accept HTTP/HTTPS schemes, synchronous RPC/session helpers route across both families, raw RPC AIO remains NNG-scheme-only, and non-zero TLS handles are accepted only on TLS-capable schemes.
+The generic socket dial surface accepts an explicit `tls_config_id`, which makes `tls+tcp://` and `wss://` usable through the existing handle model. The stable scheme matrix is documented in `docs/transports.md` and summarized in the README: the shared server surface accepts both NNG and HTTP families, generic socket surfaces remain NNG-only, synchronous RPC/session helpers and raw RPC AIO helpers route across both families, and non-zero TLS handles are accepted only on TLS-capable schemes.
 
 ### 6. Final async surface scope
 
