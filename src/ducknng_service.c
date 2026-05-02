@@ -44,6 +44,7 @@ int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *s
     if (!dst || !src) return -1;
     memset(dst, 0, sizeof(*dst));
     dst->route_id = src->route_id;
+    dst->match_kind = src->match_kind;
     dst->request_max_bytes = src->request_max_bytes;
     dst->method = src->method ? ducknng_strdup(src->method) : NULL;
     dst->path = src->path ? ducknng_strdup(src->path) : NULL;
@@ -54,6 +55,18 @@ int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *s
         return -1;
     }
     return 0;
+}
+
+const char *ducknng_http_route_match_kind_name(uint8_t match_kind) {
+    switch (match_kind) {
+    case DUCKNNG_HTTP_ROUTE_MATCH_PREFIX:
+        return "prefix";
+    case DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE:
+        return "template";
+    case DUCKNNG_HTTP_ROUTE_MATCH_EXACT:
+    default:
+        return "exact";
+    }
 }
 
 void ducknng_http_route_reply_init(ducknng_http_route_reply *reply) {
@@ -83,13 +96,13 @@ static void ducknng_service_clear_http_routes(ducknng_service *svc) {
 
 void ducknng_service_enter_request_sql(ducknng_service *svc) {
     if (!svc || !svc->rt) return;
-    ducknng_runtime_init_con_lock(svc->rt);
+    ducknng_runtime_execution_lane_lock(svc->rt);
     ducknng_runtime_current_request_service_set(svc->rt, svc);
 }
 
 void ducknng_service_leave_request_sql(ducknng_service *svc) {
     if (!svc || !svc->rt) return;
-    ducknng_runtime_init_con_unlock(svc->rt);
+    ducknng_runtime_execution_lane_unlock(svc->rt);
 }
 
 void ducknng_service_enter_http_route_sql(ducknng_service *svc,
@@ -801,13 +814,15 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
     int rc = -1;
     char *parse_err = NULL;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !svc->rt || !svc->rt->init_con || !authorizer_sql || !decision) {
+    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) ||
+        !authorizer_sql || !decision) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing SQL authorizer state");
         return -1;
     }
     memset(&result, 0, sizeof(result));
     ducknng_service_enter_authorizer_sql(svc, auth_ctx);
-    if (duckdb_query(svc->rt->init_con, authorizer_sql, &result) == DuckDBError) {
+    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt),
+            authorizer_sql, &result) == DuckDBError) {
         const char *detail = duckdb_result_error(&result);
         char *msg = NULL;
         if (detail && detail[0]) {
@@ -948,7 +963,7 @@ int ducknng_service_handle_http_route(ducknng_service *svc,
     duckdb_result result;
     int rc = -1;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !svc->rt || !svc->rt->init_con || !request_ctx || !reply ||
+    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !request_ctx || !reply ||
         !request_ctx->route.handler_sql || !request_ctx->route.handler_sql[0]) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
         return -1;
@@ -956,7 +971,8 @@ int ducknng_service_handle_http_route(ducknng_service *svc,
     memset(&result, 0, sizeof(result));
     ducknng_mutex_lock(&svc->mu);
     ducknng_service_enter_http_route_sql(svc, request_ctx);
-    if (duckdb_query(svc->rt->init_con, request_ctx->route.handler_sql, &result) == DuckDBError) {
+    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt),
+            request_ctx->route.handler_sql, &result) == DuckDBError) {
         const char *detail = duckdb_result_error(&result);
         size_t need = detail && detail[0] ? strlen(detail) + 40 : 0;
         if (detail && detail[0] && errmsg) {
@@ -1796,6 +1812,244 @@ static const char *ducknng_service_http_mount_path(const ducknng_service *svc) {
     return mount_path;
 }
 
+static int ducknng_http_route_match_kind_parse(const char *match_kind, uint8_t *out_kind, char **errmsg) {
+    if (errmsg) *errmsg = NULL;
+    if (!out_kind) return -1;
+    if (!match_kind || !match_kind[0] || ducknng_ascii_ieq(match_kind, "exact")) {
+        *out_kind = DUCKNNG_HTTP_ROUTE_MATCH_EXACT;
+        return 0;
+    }
+    if (ducknng_ascii_ieq(match_kind, "prefix")) {
+        *out_kind = DUCKNNG_HTTP_ROUTE_MATCH_PREFIX;
+        return 0;
+    }
+    if (ducknng_ascii_ieq(match_kind, "template")) {
+        *out_kind = DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE;
+        return 0;
+    }
+    if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route match_kind must be exact, prefix, or template");
+    return -1;
+}
+
+static int ducknng_http_route_template_param_name_valid(const char *name, size_t len) {
+    size_t i;
+    if (!name || len == 0) return 0;
+    if (!((name[0] >= 'a' && name[0] <= 'z') ||
+            (name[0] >= 'A' && name[0] <= 'Z') || name[0] == '_')) {
+        return 0;
+    }
+    for (i = 1; i < len; i++) {
+        char ch = name[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '_')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int ducknng_http_route_template_valid(const char *path, char **errmsg) {
+    const char *seg = path + 1;
+    int saw_param = 0;
+    if (errmsg) *errmsg = NULL;
+    while (1) {
+        const char *slash = strchr(seg, '/');
+        size_t seg_len = slash ? (size_t)(slash - seg) : strlen(seg);
+        if (seg_len == 0) {
+            if (!slash) break;
+            seg = slash + 1;
+            continue;
+        }
+        if (seg[0] == '{' || seg[seg_len - 1] == '}') {
+            const char *close = memchr(seg, '}', seg_len);
+            if (seg[0] != '{' || !close || close != seg + seg_len - 1 || seg_len < 3 ||
+                memchr(seg + 1, '{', seg_len - 2) || memchr(seg + 1, '}', seg_len - 2)) {
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route template segments must use {name} and occupy a whole path segment");
+                return 0;
+            }
+            if (!ducknng_http_route_template_param_name_valid(seg + 1, seg_len - 2)) {
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route template parameter names must match [A-Za-z_][A-Za-z0-9_]*");
+                return 0;
+            }
+            saw_param = 1;
+        }
+        if (!slash) break;
+        seg = slash + 1;
+    }
+    if (!saw_param) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: template routes must include at least one {name} segment");
+        return 0;
+    }
+    return 1;
+}
+
+static int ducknng_http_route_pattern_valid(uint8_t match_kind, const char *path, char **errmsg) {
+    if (errmsg) *errmsg = NULL;
+    if (!ducknng_http_route_path_valid(path)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route path must be an absolute path without query or fragment");
+        return 0;
+    }
+    if (match_kind == DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE) {
+        return ducknng_http_route_template_valid(path, errmsg);
+    }
+    return 1;
+}
+
+static int ducknng_http_route_prefix_matches(const char *pattern, const char *path) {
+    size_t len;
+    if (!pattern || !path) return 0;
+    len = strlen(pattern);
+    if (len == 0) return 0;
+    if (strncmp(pattern, path, len) != 0) return 0;
+    if (path[len] == '\0') return 1;
+    if (pattern[len - 1] == '/') return 1;
+    return path[len] == '/';
+}
+
+static int ducknng_http_route_json_buf_append(char **buf, size_t *len, size_t *cap,
+    const char *src, size_t src_len) {
+    char *next;
+    size_t new_cap;
+    if (!buf || !len || !cap) return -1;
+    if (*cap < *len + src_len + 1) {
+        new_cap = *cap ? *cap * 2 : 64;
+        while (new_cap < *len + src_len + 1) new_cap *= 2;
+        next = (char *)duckdb_malloc(new_cap);
+        if (!next) return -1;
+        if (*buf && *len) memcpy(next, *buf, *len);
+        if (*buf) duckdb_free(*buf);
+        *buf = next;
+        *cap = new_cap;
+    }
+    if (src_len) memcpy(*buf + *len, src, src_len);
+    *len += src_len;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+static int ducknng_http_route_json_append_string(char **buf, size_t *len, size_t *cap,
+    const char *src, size_t src_len) {
+    size_t i;
+    if (ducknng_http_route_json_buf_append(buf, len, cap, "\"", 1) != 0) return -1;
+    for (i = 0; i < src_len; i++) {
+        unsigned char ch = (unsigned char)src[i];
+        switch (ch) {
+        case '"':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\\"", 2) != 0) return -1;
+            break;
+        case '\\':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\\\", 2) != 0) return -1;
+            break;
+        case '\b':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\b", 2) != 0) return -1;
+            break;
+        case '\f':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\f", 2) != 0) return -1;
+            break;
+        case '\n':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\n", 2) != 0) return -1;
+            break;
+        case '\r':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\r", 2) != 0) return -1;
+            break;
+        case '\t':
+            if (ducknng_http_route_json_buf_append(buf, len, cap, "\\t", 2) != 0) return -1;
+            break;
+        default:
+            if (ch < 0x20) {
+                char esc[7];
+                snprintf(esc, sizeof(esc), "\\u%04x", (unsigned)ch);
+                if (ducknng_http_route_json_buf_append(buf, len, cap, esc, 6) != 0) return -1;
+            } else if (ducknng_http_route_json_buf_append(buf, len, cap, (const char *)&src[i], 1) != 0) {
+                return -1;
+            }
+        }
+    }
+    if (ducknng_http_route_json_buf_append(buf, len, cap, "\"", 1) != 0) return -1;
+    return 0;
+}
+
+static int ducknng_http_route_template_matches(const char *pattern, const char *path,
+    char **out_params_json) {
+    const char *pat = pattern;
+    const char *req = path;
+    char *params_json = NULL;
+    size_t json_len = 0;
+    size_t json_cap = 0;
+    int first = 1;
+    if (out_params_json) *out_params_json = NULL;
+    if (!pattern || !path) return 0;
+    while (1) {
+        const char *pat_next;
+        const char *req_next;
+        size_t pat_len;
+        size_t req_len;
+        if (*pat == '/') pat++;
+        if (*req == '/') req++;
+        pat_next = strchr(pat, '/');
+        req_next = strchr(req, '/');
+        pat_len = pat_next ? (size_t)(pat_next - pat) : strlen(pat);
+        req_len = req_next ? (size_t)(req_next - req) : strlen(req);
+        if (pat_len == 0 && req_len == 0) break;
+        if (pat_len == 0 || req_len == 0) goto fail_nomatch;
+        if (pat[0] == '{' && pat[pat_len - 1] == '}') {
+            if (!params_json &&
+                ducknng_http_route_json_buf_append(&params_json, &json_len, &json_cap, "{", 1) != 0) {
+                goto fail_error;
+            }
+            if (!first &&
+                ducknng_http_route_json_buf_append(&params_json, &json_len, &json_cap, ",", 1) != 0) {
+                goto fail_error;
+            }
+            if (ducknng_http_route_json_append_string(&params_json, &json_len, &json_cap,
+                    pat + 1, pat_len - 2) != 0 ||
+                ducknng_http_route_json_buf_append(&params_json, &json_len, &json_cap, ":", 1) != 0 ||
+                ducknng_http_route_json_append_string(&params_json, &json_len, &json_cap,
+                    req, req_len) != 0) {
+                goto fail_error;
+            }
+            first = 0;
+        } else if (pat_len != req_len || strncmp(pat, req, pat_len) != 0) {
+            goto fail_nomatch;
+        }
+        pat = pat_next ? pat_next : pat + pat_len;
+        req = req_next ? req_next : req + req_len;
+        if (!pat_next && !req_next) break;
+        if (!pat_next || !req_next) goto fail_nomatch;
+    }
+    if (params_json) {
+        if (ducknng_http_route_json_buf_append(&params_json, &json_len, &json_cap, "}", 1) != 0) {
+            goto fail_error;
+        }
+    } else {
+        params_json = ducknng_strdup("{}");
+        if (!params_json) goto fail_error;
+    }
+    if (out_params_json) *out_params_json = params_json;
+    else duckdb_free(params_json);
+    return 1;
+fail_error:
+    if (params_json) duckdb_free(params_json);
+    return -1;
+fail_nomatch:
+    if (params_json) duckdb_free(params_json);
+    return 0;
+}
+
+static int ducknng_http_route_pattern_matches(uint8_t match_kind, const char *pattern,
+    const char *path, char **out_params_json) {
+    if (out_params_json) *out_params_json = NULL;
+    switch (match_kind) {
+    case DUCKNNG_HTTP_ROUTE_MATCH_PREFIX:
+        return ducknng_http_route_prefix_matches(pattern, path);
+    case DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE:
+        return ducknng_http_route_template_matches(pattern, path, out_params_json);
+    case DUCKNNG_HTTP_ROUTE_MATCH_EXACT:
+    default:
+        return (pattern && path && strcmp(pattern, path) == 0) ? 1 : 0;
+    }
+}
+
 static int ducknng_service_http_routes_reserve(ducknng_service *svc, size_t want, char **errmsg) {
     ducknng_http_route *next;
     size_t new_cap = svc && svc->http_route_cap ? svc->http_route_cap * 2 : 4;
@@ -1818,12 +2072,14 @@ static int ducknng_service_http_routes_reserve(ducknng_service *svc, size_t want
     return 0;
 }
 
-int ducknng_service_register_http_route(ducknng_service *svc, const char *method, const char *path,
-    const char *handler_sql, uint64_t request_max_bytes, char **errmsg) {
+static int ducknng_service_register_http_route_inner(ducknng_service *svc, const char *method,
+    uint8_t match_kind, const char *path, const char *handler_sql, uint64_t request_max_bytes,
+    char **errmsg) {
     size_t i;
     char *norm_method = NULL;
     ducknng_http_route route;
     const char *mount_path;
+    int mount_match_rc;
     ducknng_transport_url parsed;
     char *parse_err = NULL;
     if (errmsg) *errmsg = NULL;
@@ -1839,12 +2095,17 @@ int ducknng_service_register_http_route(ducknng_service *svc, const char *method
         return -1;
     }
     if (parse_err) duckdb_free(parse_err);
-    if (!ducknng_http_route_path_valid(path)) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route path must be an absolute path without query or fragment");
+    if (!ducknng_http_route_pattern_valid(match_kind, path, errmsg)) {
         return -1;
     }
     mount_path = ducknng_service_http_mount_path(svc);
-    if (mount_path && strcmp(path, mount_path) == 0) {
+    mount_match_rc = mount_path ?
+        ducknng_http_route_pattern_matches(match_kind, path, mount_path, NULL) : 0;
+    if (mount_match_rc < 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory matching HTTP route pattern");
+        return -1;
+    }
+    if (mount_match_rc > 0) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route path conflicts with the framed RPC mount");
         return -1;
     }
@@ -1856,6 +2117,7 @@ int ducknng_service_register_http_route(ducknng_service *svc, const char *method
     if (!norm_method) return -1;
     memset(&route, 0, sizeof(route));
     route.route_id = svc->next_http_route_id++;
+    route.match_kind = match_kind;
     route.request_max_bytes = request_max_bytes;
     route.method = norm_method;
     route.path = ducknng_strdup(path);
@@ -1867,7 +2129,8 @@ int ducknng_service_register_http_route(ducknng_service *svc, const char *method
     }
     ducknng_mutex_lock(&svc->mu);
     for (i = 0; i < svc->http_route_count; i++) {
-        if (strcmp(svc->http_routes[i].method, route.method) == 0 &&
+        if (svc->http_routes[i].match_kind == route.match_kind &&
+            strcmp(svc->http_routes[i].method, route.method) == 0 &&
             strcmp(svc->http_routes[i].path, route.path) == 0) {
             ducknng_mutex_unlock(&svc->mu);
             ducknng_http_route_reset(&route);
@@ -1885,8 +2148,23 @@ int ducknng_service_register_http_route(ducknng_service *svc, const char *method
     return 0;
 }
 
-int ducknng_service_unregister_http_route(ducknng_service *svc, const char *method,
-    const char *path, char **errmsg) {
+int ducknng_service_register_http_route(ducknng_service *svc, const char *method, const char *path,
+    const char *handler_sql, uint64_t request_max_bytes, char **errmsg) {
+    return ducknng_service_register_http_route_inner(svc, method,
+        DUCKNNG_HTTP_ROUTE_MATCH_EXACT, path, handler_sql, request_max_bytes, errmsg);
+}
+
+int ducknng_service_register_http_route_pattern(ducknng_service *svc, const char *method,
+    const char *match_kind, const char *path_pattern, const char *handler_sql,
+    uint64_t request_max_bytes, char **errmsg) {
+    uint8_t parsed_kind = DUCKNNG_HTTP_ROUTE_MATCH_EXACT;
+    if (ducknng_http_route_match_kind_parse(match_kind, &parsed_kind, errmsg) != 0) return -1;
+    return ducknng_service_register_http_route_inner(svc, method, parsed_kind,
+        path_pattern, handler_sql, request_max_bytes, errmsg);
+}
+
+static int ducknng_service_unregister_http_route_inner(ducknng_service *svc, const char *method,
+    uint8_t match_kind, const char *path, char **errmsg) {
     size_t i;
     char *norm_method = NULL;
     if (errmsg) *errmsg = NULL;
@@ -1898,7 +2176,8 @@ int ducknng_service_unregister_http_route(ducknng_service *svc, const char *meth
     if (!norm_method) return -1;
     ducknng_mutex_lock(&svc->mu);
     for (i = 0; i < svc->http_route_count; i++) {
-        if (strcmp(svc->http_routes[i].method, norm_method) == 0 &&
+        if (svc->http_routes[i].match_kind == match_kind &&
+            strcmp(svc->http_routes[i].method, norm_method) == 0 &&
             strcmp(svc->http_routes[i].path, path) == 0) {
             ducknng_http_route_reset(&svc->http_routes[i]);
             for (; i + 1 < svc->http_route_count; i++) svc->http_routes[i] = svc->http_routes[i + 1];
@@ -1916,12 +2195,29 @@ int ducknng_service_unregister_http_route(ducknng_service *svc, const char *meth
     return 0;
 }
 
+int ducknng_service_unregister_http_route(ducknng_service *svc, const char *method,
+    const char *path, char **errmsg) {
+    return ducknng_service_unregister_http_route_inner(svc, method,
+        DUCKNNG_HTTP_ROUTE_MATCH_EXACT, path, errmsg);
+}
+
+int ducknng_service_unregister_http_route_pattern(ducknng_service *svc, const char *method,
+    const char *match_kind, const char *path_pattern, char **errmsg) {
+    uint8_t parsed_kind = DUCKNNG_HTTP_ROUTE_MATCH_EXACT;
+    if (ducknng_http_route_match_kind_parse(match_kind, &parsed_kind, errmsg) != 0) return -1;
+    return ducknng_service_unregister_http_route_inner(svc, method, parsed_kind,
+        path_pattern, errmsg);
+}
+
 int ducknng_service_lookup_http_route(ducknng_service *svc, const char *method,
-    const char *path, ducknng_http_route *out_route, char **errmsg) {
+    const char *path, ducknng_http_route *out_route, char **out_path_params_json, char **errmsg) {
     size_t i;
     char *norm_method = NULL;
     int rc = 0;
+    uint64_t best_score = 0;
+    char *best_path_params_json = NULL;
     if (errmsg) *errmsg = NULL;
+    if (out_path_params_json) *out_path_params_json = NULL;
     if (!svc || !method || !path || !out_route) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route lookup arguments");
         return -1;
@@ -1931,16 +2227,50 @@ int ducknng_service_lookup_http_route(ducknng_service *svc, const char *method,
     memset(out_route, 0, sizeof(*out_route));
     ducknng_mutex_lock(&svc->mu);
     for (i = 0; i < svc->http_route_count; i++) {
-        if (strcmp(svc->http_routes[i].method, norm_method) == 0 &&
-            strcmp(svc->http_routes[i].path, path) == 0) {
+        char *candidate_path_params_json = NULL;
+        int matched;
+        uint64_t score;
+        if (strcmp(svc->http_routes[i].method, norm_method) != 0) continue;
+        matched = ducknng_http_route_pattern_matches(svc->http_routes[i].match_kind,
+            svc->http_routes[i].path, path, &candidate_path_params_json);
+        if (matched < 0) {
+            ducknng_mutex_unlock(&svc->mu);
+            duckdb_free(norm_method);
+            if (best_path_params_json) duckdb_free(best_path_params_json);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory matching HTTP route");
+            return -1;
+        }
+        if (!matched) continue;
+        score = ((uint64_t)(
+            svc->http_routes[i].match_kind == DUCKNNG_HTTP_ROUTE_MATCH_EXACT ? 3 :
+            svc->http_routes[i].match_kind == DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE ? 2 : 1
+        ) << 32) + (uint64_t)strlen(svc->http_routes[i].path);
+        if (score >= best_score) {
+            ducknng_http_route_reset(out_route);
+            if (best_path_params_json) {
+                duckdb_free(best_path_params_json);
+                best_path_params_json = NULL;
+            }
             rc = ducknng_http_route_copy(out_route, &svc->http_routes[i]) == 0 ? 1 : -1;
-            break;
+            if (rc < 0) {
+                if (candidate_path_params_json) duckdb_free(candidate_path_params_json);
+                break;
+            }
+            best_path_params_json = candidate_path_params_json;
+            best_score = score;
+        } else if (candidate_path_params_json) {
+            duckdb_free(candidate_path_params_json);
         }
     }
     ducknng_mutex_unlock(&svc->mu);
     duckdb_free(norm_method);
     if (rc < 0 && errmsg && !*errmsg) {
+        if (best_path_params_json) duckdb_free(best_path_params_json);
         *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route");
+    } else if (rc > 0 && out_path_params_json) {
+        *out_path_params_json = best_path_params_json;
+    } else if (best_path_params_json) {
+        duckdb_free(best_path_params_json);
     }
     return rc;
 }
@@ -2032,8 +2362,8 @@ uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *s
 }
 
 const char *ducknng_service_execution_model(const ducknng_service *svc) {
-    (void)svc;
-    return DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
+    return svc && svc->rt ? ducknng_runtime_execution_model(svc->rt) :
+        DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
 }
 
 const char *ducknng_service_peer_identity_format(const ducknng_service *svc) {

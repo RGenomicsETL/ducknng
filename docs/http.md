@@ -6,7 +6,7 @@ The governing rule is the same one stated in `docs/protocol.md` and `docs/transp
 
 ## Scope
 
-The initial HTTP adapter is deliberately narrow. Its primary job is still framed RPC carriage for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. A separate low-level exact-path route layer now exists beside that framed RPC mount, but it remains deliberately small and is documented separately in `docs/http_server_framework.md`.
+The initial HTTP adapter is deliberately narrow. Its primary job is still framed RPC carriage for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. A separate low-level route layer now exists beside that framed RPC mount, covering exact, prefix, and template patterns while remaining deliberately small and documented separately in `docs/http_server_framework.md`.
 
 The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, while `ducknng_start_server(...)` mounts the HTTP/HTTPS carrier when the listen URL uses those schemes and the existing request, RPC, and session helpers route by URL scheme on top of that adapter.
 
@@ -74,11 +74,13 @@ The matching stop and introspection path remains generic rather than adding HTTP
 
 ## Companion route framework
 
-HTTP and HTTPS services can now also register additional exact-path routes beside the framed RPC mount:
+HTTP and HTTPS services can now also register additional routes beside the framed RPC mount:
 
 ```sql
 ducknng_register_http_route(service_name, method, path, handler_sql[, request_max_bytes])
+ducknng_register_http_route_pattern(service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes])
 ducknng_unregister_http_route(service_name, method, path)
+ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pattern)
 ducknng_list_http_routes()
 ducknng_http_request()
 ducknng_http_request_body()
@@ -95,9 +97,15 @@ When a route needs per-request dynamic backend session control, use the raw sync
 
 and inspect the returned frames with:
 
+- `ducknng_frame_version(...)`
+- `ducknng_frame_type(...)`
+- `ducknng_frame_flags(...)`
+- `ducknng_frame_type_name(...)`
+- `ducknng_frame_name(...)`
 - `ducknng_frame_payload(...)`
 - `ducknng_frame_payload_text(...)`
 - `ducknng_frame_error_text(...)`
+- `ducknng_frame_end_of_stream(...)`
 
 The structured table helpers remain the ergonomic client-facing surface. The raw scalar helpers are the correct route-layer surface when parameters come from request-body columns or continuation-token columns.
 
@@ -185,4 +193,4 @@ Human-friendly convenience routes such as `GET /manifest` are deferred. They may
 
 HTTP-carrier WebSocket, SSE, NDJSON, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG `ws://` and `wss://` transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.
 
-The low-level exact-path route layer is now part of the public SQL surface, but richer web-toolkit features are still deferred. Prefix routing, path parameters, static asset serving, HTTP-carrier WebSocket/SSE/NDJSON work, and any higher-level route helpers must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.
+The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching, but richer web-toolkit features are still deferred. Automatic query-parameter parsing, static asset serving, HTTP-carrier WebSocket/SSE/NDJSON work, and any higher-level route helpers must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.

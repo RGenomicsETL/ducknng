@@ -117,40 +117,6 @@ static const char *ducknng_rpc_type_name(uint8_t type) {
     default: return "unknown";
     }
 }
-static int ducknng_ascii_tolower_int(int c) {
-    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
-}
-
-static int ducknng_ascii_ieq(const char *a, const char *b) {
-    if (!a || !b) return 0;
-    while (*a && *b) {
-        if (ducknng_ascii_tolower_int((unsigned char)*a) != ducknng_ascii_tolower_int((unsigned char)*b)) return 0;
-        a++;
-        b++;
-    }
-    return *a == '\0' && *b == '\0';
-}
-
-static int ducknng_ascii_istarts_with(const char *s, const char *prefix) {
-    if (!s || !prefix) return 0;
-    while (*prefix) {
-        if (!*s || ducknng_ascii_tolower_int((unsigned char)*s) != ducknng_ascii_tolower_int((unsigned char)*prefix)) return 0;
-        s++;
-        prefix++;
-    }
-    return 1;
-}
-
-static int ducknng_ascii_iends_with(const char *s, const char *suffix) {
-    size_t slen;
-    size_t suffix_len;
-    if (!s || !suffix) return 0;
-    slen = strlen(s);
-    suffix_len = strlen(suffix);
-    if (suffix_len > slen) return 0;
-    return ducknng_ascii_ieq(s + slen - suffix_len, suffix);
-}
-
 static char *ducknng_normalize_media_type(const char *content_type) {
     const char *start;
     const char *end;
@@ -643,6 +609,140 @@ static void ducknng_frame_error_text_scalar(duckdb_function_info info, duckdb_da
     }
 }
 
+static void ducknng_frame_version_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    uint8_t *out = (uint8_t *)duckdb_vector_get_data(output);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        out[row] = frame.version;
+        duckdb_free(frame_bytes);
+    }
+}
+
+static void ducknng_frame_type_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    uint8_t *out = (uint8_t *)duckdb_vector_get_data(output);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        out[row] = frame.type;
+        duckdb_free(frame_bytes);
+    }
+}
+
+static void ducknng_frame_flags_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    uint32_t *out = (uint32_t *)duckdb_vector_get_data(output);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        out[row] = frame.flags;
+        duckdb_free(frame_bytes);
+    }
+}
+
+static void ducknng_frame_type_name_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        const char *type_name = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        type_name = ducknng_rpc_type_name(frame.type);
+        if (!type_name || !type_name[0]) {
+            duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        duckdb_vector_assign_string_element(output, row, type_name);
+        duckdb_free(frame_bytes);
+    }
+}
+
+static void ducknng_frame_name_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        char *name = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0 ||
+            frame.name_len == 0 || !frame.name) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        name = ducknng_dup_bytes(frame.name, (size_t)frame.name_len);
+        if (!name) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            duckdb_scalar_function_set_error(info, "ducknng: out of memory copying frame name");
+            return;
+        }
+        duckdb_vector_assign_string_element(output, row, name);
+        duckdb_free(name);
+        duckdb_free(frame_bytes);
+    }
+}
+
+static void ducknng_frame_end_of_stream_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame, &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        out[row] = (frame.flags & DUCKNNG_RPC_FLAG_END_OF_STREAM) != 0;
+        duckdb_free(frame_bytes);
+    }
+}
+
 static void ducknng_body_parse_add_frame_columns(duckdb_bind_info info) {
     duckdb_logical_type type;
     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
@@ -717,7 +817,7 @@ static int ducknng_body_parse_run_duckdb_reader(ducknng_sql_context *ctx,
     int tried_array_struct = 0;
     int rc = -1;
     if (errmsg) *errmsg = NULL;
-    if (!ctx || !ctx->rt || !ctx->rt->init_con || !bind) {
+    if (!ctx || !ctx->rt || !ducknng_runtime_execution_connection(ctx->rt) || !bind) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for body parser");
         return -1;
     }
@@ -762,9 +862,10 @@ retry_build:
         if (errmsg) *errmsg = ducknng_strdup("ducknng: DuckDB-reader body codecs cannot run inside service-owned SQL yet");
         goto cleanup;
     }
-    ducknng_runtime_init_con_lock(ctx->rt);
-    if (ducknng_query_to_ipc_stream(ctx->rt->init_con, sql, &payload, &payload_len, errmsg) != 0) {
-        ducknng_runtime_init_con_unlock(ctx->rt);
+    ducknng_runtime_execution_lane_lock(ctx->rt);
+    if (ducknng_query_to_ipc_stream(ducknng_runtime_execution_connection(ctx->rt),
+            sql, &payload, &payload_len, errmsg) != 0) {
+        ducknng_runtime_execution_lane_unlock(ctx->rt);
         if (tried_array_struct) {
             if (errmsg && *errmsg) { duckdb_free(*errmsg); *errmsg = NULL; }
             tried_array_struct = 0;
@@ -776,7 +877,7 @@ retry_build:
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: JSON body parser query failed");
         goto cleanup;
     }
-    ducknng_runtime_init_con_unlock(ctx->rt);
+    ducknng_runtime_execution_lane_unlock(ctx->rt);
     if (ducknng_decode_ipc_table_payload(payload, payload_len, &bind->schema, &bind->array, errmsg) != 0) goto cleanup;
     bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
     bind->row_count = (idx_t)bind->array.length;
@@ -814,7 +915,7 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
     int rc = -1;
     memset(&result, 0, sizeof(result));
     if (errmsg) *errmsg = NULL;
-    if (!ctx || !ctx->rt || !ctx->rt->init_con) {
+    if (!ctx || !ctx->rt || !ducknng_runtime_execution_connection(ctx->rt)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for user codec");
         return -1;
     }
@@ -836,8 +937,8 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
         return -1;
     }
     snprintf(sql, sql_len, "SELECT %s(?::BLOB) AS value", function_name);
-    ducknng_runtime_init_con_lock(ctx->rt);
-    if (duckdb_prepare(ctx->rt->init_con, sql, &stmt) == DuckDBError) {
+    ducknng_runtime_execution_lane_lock(ctx->rt);
+    if (duckdb_prepare(ducknng_runtime_execution_connection(ctx->rt), sql, &stmt) == DuckDBError) {
         prep_err = stmt ? duckdb_prepare_error(stmt) : NULL;
         if (errmsg) *errmsg = ducknng_strdup(prep_err && prep_err[0] ? prep_err : "ducknng: failed to prepare user codec query");
         goto cleanup;
@@ -898,7 +999,7 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
 cleanup:
     if (result.internal_data) duckdb_destroy_result(&result);
     if (stmt) duckdb_destroy_prepare(&stmt);
-    ducknng_runtime_init_con_unlock(ctx->rt);
+    ducknng_runtime_execution_lane_unlock(ctx->rt);
     if (sql) duckdb_free(sql);
     return rc;
 }
@@ -1449,6 +1550,18 @@ int ducknng_register_sql_body(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_frame_payload_text_scalar, ctx, frame_types, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_error_text", 1,
             ducknng_frame_error_text_scalar, ctx, frame_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_version", 1,
+            ducknng_frame_version_scalar, ctx, frame_types, DUCKDB_TYPE_UTINYINT)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_type", 1,
+            ducknng_frame_type_scalar, ctx, frame_types, DUCKDB_TYPE_UTINYINT)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_flags", 1,
+            ducknng_frame_flags_scalar, ctx, frame_types, DUCKDB_TYPE_UINTEGER)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_type_name", 1,
+            ducknng_frame_type_name_scalar, ctx, frame_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_name", 1,
+            ducknng_frame_name_scalar, ctx, frame_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_end_of_stream", 1,
+            ducknng_frame_end_of_stream_scalar, ctx, frame_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_codec", 2,
             ducknng_register_codec_scalar, ctx, register_codec_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_codec", 1,

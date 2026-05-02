@@ -782,6 +782,25 @@
       ]
     },
     {
+      "name": "ducknng_register_http_route_pattern",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_register_http_route_pattern(service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes])",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Register one low-level HTTP route pattern beside the framed RPC mount using exact, prefix, or template matching.",
+      "notes": [
+        "match_kind must be exact, prefix, or template.",
+        "Template patterns use whole-segment {name} captures and expose them later through ducknng_http_request().path_params_json.",
+        "Routes may not conflict with the framed RPC mount path encoded in the service listen URL.",
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers."
+      ],
+      "examples": [
+        "SELECT ducknng_register_http_route_pattern('api', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}', 'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text');"
+      ]
+    },
+    {
       "name": "ducknng_unregister_http_route",
       "kind": "scalar",
       "category": "HTTP Routes",
@@ -799,20 +818,38 @@
       ]
     },
     {
+      "name": "ducknng_unregister_http_route_pattern",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pattern)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Remove one previously registered prefix, template, or explicit exact route pattern from a service.",
+      "notes": [
+        "Returns TRUE when a matching route was removed and FALSE when no matching route existed.",
+        "match_kind must match the originally registered route kind.",
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers."
+      ],
+      "examples": [
+        "SELECT ducknng_unregister_http_route_pattern('api', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}');"
+      ]
+    },
+    {
       "name": "ducknng_list_http_routes",
       "kind": "table",
       "category": "HTTP Routes",
       "signature": "ducknng_list_http_routes()",
-      "returns": "TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)",
+      "returns": "TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
-      "description": "List the currently registered exact-path HTTP routes across running services.",
+      "description": "List the currently registered HTTP routes across running services, including their match kind and stored path pattern.",
       "notes": [
         "Rows are service-local route configuration, not manifest-derived RPC methods.",
         "This helper is rejected inside SQL authorizer callbacks and inside active request handlers so the shared execution lane is not re-entered recursively."
       ],
       "examples": [
-        "SELECT service_name, method, path FROM ducknng_list_http_routes() ORDER BY service_name, path;"
+        "SELECT service_name, method, match_kind, path FROM ducknng_list_http_routes() ORDER BY service_name, match_kind, path;"
       ]
     },
     {
@@ -820,14 +857,15 @@
       "kind": "table",
       "category": "HTTP Routes",
       "signature": "ducknng_http_request()",
-      "returns": "TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)",
+      "returns": "TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Expose the current HTTP request context while SQL runs inside an active route handler.",
       "notes": [
         "Outside an active route handler this table emits zero rows rather than raising an error.",
         "headers_json uses the same canonical array-of-objects form as ducknng_ncurl().",
-        "route_method, route_path, and route_id identify the matched registered route rather than the framed RPC mount."
+        "route_method, route_match_kind, route_path, and route_id identify the matched registered route rather than the framed RPC mount.",
+        "path_params_json is populated for template routes and NULL for exact or prefix routes."
       ],
       "examples": [
         "SELECT method, path, body_bytes FROM ducknng_http_request();"
@@ -1084,6 +1122,24 @@
       ],
       "examples": [
         "SELECT * FROM ducknng_aio_collect(list_value(1::UBIGINT, 2::UBIGINT), 1000);"
+      ]
+    },
+    {
+      "name": "ducknng_aio_collect_decoded",
+      "kind": "table",
+      "category": "Async I/O",
+      "signature": "ducknng_aio_collect_decoded(aio_ids, wait_ms)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly.",
+      "notes": [
+        "This is the first structured async convenience wrapper layered over ducknng_aio_collect(); it does not introduce a new async protocol.",
+        "ok and error report transport-level aio completion, while frame_ok and frame_error report frame decoding and protocol-envelope validity.",
+        "Use ducknng_aio_drop() after collection, just as with the raw collect helper."
+      ],
+      "examples": [
+        "SELECT aio_id, type_name, name FROM ducknng_aio_collect_decoded(list_value(1::UBIGINT), 1000);"
       ]
     },
     {
@@ -1482,6 +1538,108 @@
       ],
       "examples": [
         "SELECT ducknng_frame_error_text(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('00'), 1000, 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_version",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_version(frame)",
+      "returns": "UTINYINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the protocol version field from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames.",
+        "Use this when you want scalar envelope inspection without joining ducknng_decode_frame()."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_version(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_type",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_type(frame)",
+      "returns": "UTINYINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the numeric reply type field from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames.",
+        "Pair this with ducknng_frame_type_name() when you need both the numeric and named view."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_type(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_flags",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_flags(frame)",
+      "returns": "UINTEGER",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the reply flags bitset from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames.",
+        "Use this when you need the raw flag bits instead of only the derived ducknng_frame_end_of_stream() boolean."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_flags(ducknng_fetch_query_raw('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, 'token', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_type_name",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_type_name(frame)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the symbolic reply type name from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames.",
+        "The current names match the decoded table output such as result, error, manifest, and call."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_type_name(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_name",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_name(frame)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Extract the method or reply name field from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames and for frames without a name field.",
+        "This is useful in route SQL and aio inspection when you want the method/reply name without a table decode."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_name(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_end_of_stream",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_end_of_stream(frame)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Report whether one raw ducknng frame carries the end-of-stream reply flag.",
+      "notes": [
+        "Returns NULL for invalid frames.",
+        "This is the scalar helper to use in low-level session routing when you need to decide whether a continuation token is still meaningful."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_end_of_stream(ducknng_fetch_query_raw('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, 'token', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT));"
       ]
     }
   ]

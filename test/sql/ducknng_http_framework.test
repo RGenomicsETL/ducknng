@@ -120,6 +120,84 @@ FROM ducknng_ncurl(
 ----
 1	1	1
 
+statement ok
+SET VARIABLE http_route_prefix_sql =
+'SELECT 202 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' || route_path || '' -> '' || path
+          FROM ducknng_http_request()
+        ) AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'prefix',
+  '/prefix',
+  getvariable('http_route_prefix_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 202, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/prefix/deeper',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	prefix /prefix -> /prefix/deeper
+
+statement ok
+SET VARIABLE http_route_template_sql =
+'SELECT 203 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' ||
+                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
+                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+          FROM ducknng_http_request()
+        ) AS body_text'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'template',
+  '/tenant/{tenant_id}/items/{item_id}',
+  getvariable('http_route_template_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 203, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/tenant/alice/items/42',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	template alice:42
+
+query IIII
+SELECT count(*)::INTEGER,
+       sum(CASE WHEN match_kind = 'exact' THEN 1 ELSE 0 END)::INTEGER,
+       sum(CASE WHEN match_kind = 'prefix' THEN 1 ELSE 0 END)::INTEGER,
+       sum(CASE WHEN match_kind = 'template' THEN 1 ELSE 0 END)::INTEGER
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_route_api'
+----
+5	3	1	1
+
 query III
 SELECT ok, status = 413, error IS NULL
 FROM ducknng_ncurl(
@@ -132,6 +210,11 @@ FROM ducknng_ncurl(
 )
 ----
 1	1	1
+
+query I
+SELECT CASE WHEN ducknng_unregister_http_route_pattern('http_route_api', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}') THEN 1 ELSE 0 END
+----
+1
 
 query I
 SELECT CASE WHEN ducknng_unregister_http_route('http_route_api', 'GET', '/healthz') THEN 1 ELSE 0 END

@@ -265,15 +265,32 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
     duckdb_free(rt);
 }
 
-void ducknng_runtime_init_con_lock(ducknng_runtime *rt) {
+duckdb_connection ducknng_runtime_execution_connection(ducknng_runtime *rt) {
+    return rt ? rt->init_con : NULL;
+}
+
+const char *ducknng_runtime_execution_model(ducknng_runtime *rt) {
+    (void)rt;
+    return DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
+}
+
+void ducknng_runtime_execution_lane_lock(ducknng_runtime *rt) {
     if (!rt || !rt->init_con_mu_initialized) return;
     ducknng_mutex_lock(&rt->init_con_mu);
 }
 
-void ducknng_runtime_init_con_unlock(ducknng_runtime *rt) {
+void ducknng_runtime_execution_lane_unlock(ducknng_runtime *rt) {
     if (!rt || !rt->init_con_mu_initialized) return;
     ducknng_runtime_current_request_service_set(rt, NULL);
     ducknng_mutex_unlock(&rt->init_con_mu);
+}
+
+void ducknng_runtime_init_con_lock(ducknng_runtime *rt) {
+    ducknng_runtime_execution_lane_lock(rt);
+}
+
+void ducknng_runtime_init_con_unlock(ducknng_runtime *rt) {
+    ducknng_runtime_execution_lane_unlock(rt);
 }
 
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc) {

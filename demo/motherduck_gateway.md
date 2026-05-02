@@ -240,9 +240,9 @@ wrong_close <- ncurl(
 )
 ```
 
-| status | body                                                     |
-|-------:|:---------------------------------------------------------|
-|    403 | {“closed”:false,“error”:“token is not valid for caller”} |
+| status | body                                                                                 |
+|-------:|:-------------------------------------------------------------------------------------|
+|    403 | {“closed”:false,“error”:“continuation token belongs to another tenant or principal”} |
 
 That `403` is the important ownership boundary: a gateway token is not a
 cross-tenant escape hatch.

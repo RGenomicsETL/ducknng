@@ -817,6 +817,25 @@ DROP TABLE rpc_aio_collect
 statement ok
 DROP TABLE rpc_aio_launch
 
+statement ok
+CREATE TEMP TABLE rpc_aio_decode_launch AS
+SELECT ducknng_get_rpc_manifest_raw_aio('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT) AS manifest_aio
+
+query TTT
+SELECT type_name, name, payload_text IS NOT NULL
+FROM ducknng_aio_collect_decoded((SELECT list_value(manifest_aio) FROM rpc_aio_decode_launch), 1000)
+----
+result	manifest	1
+
+query I
+SELECT ducknng_aio_drop(manifest_aio)
+FROM rpc_aio_decode_launch
+----
+1
+
+statement ok
+DROP TABLE rpc_aio_decode_launch
+
 query II
 SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT DISTINCT i, i > 8 AS gt_8 FROM remote_t WHERE i IN (7, 8, 9) ORDER BY i', 0::UBIGINT)
 ----

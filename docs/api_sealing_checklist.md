@@ -17,7 +17,7 @@ This checklist is narrower than `docs/design_review_checklist.md`. It tracks wha
 - a scheme-routed server helper plus URL-routed synchronous request/RPC/session helpers
 - NNG WebSocket transport schemes through `ws://` and `wss://`
 - a low-level HTTP/HTTPS client helper
-- a low-level exact-path HTTP route framework beside the framed RPC mount
+- a low-level HTTP route framework beside the framed RPC mount
 - built-in content-type driven body codec helpers for raw/text/JSON/Arrow IPC/frame bodies, with CSV/TSV/Parquet recognized and using the generic `body BLOB` fallback pending a memory-backed reader path
 - user-extensible body codec hooks via `ducknng_register_codec(content_type, function_name)` and `ducknng_unregister_codec(content_type)`, gated to a plain-identifier allowlist and dispatched through a fixed `SELECT <fn>(?::BLOB) AS value` shape
 
@@ -48,9 +48,9 @@ The HTTP transport direction is now in place:
 - the raw RPC aio helpers also route over `http://` and `https://`
 - `ducknng_ncurl_aio(...)` and `ducknng_ncurl_aio_collect(...)` provide the raw asynchronous HTTP/HTTPS client counterpart to `ducknng_ncurl(...)`
 
-The low-level exact-path HTTP route framework is now also part of the public SQL surface: `ducknng_register_http_route(...)`, `ducknng_unregister_http_route(...)`, `ducknng_list_http_routes()`, `ducknng_http_request()`, and `ducknng_http_request_body()` let an `http://` or `https://` service expose additional routes beside the framed RPC mount. That route layer remains deliberately separate from the manifest-derived RPC surface: registered routes are not manifest methods, they do not mint `http_exec` or `http_fetch`, and they inherit the same service admission stack and `shared_serialized_connection` execution model as the rest of the service.
+The low-level HTTP route framework is now also part of the public SQL surface: `ducknng_register_http_route(...)`, `ducknng_register_http_route_pattern(...)`, `ducknng_unregister_http_route(...)`, `ducknng_unregister_http_route_pattern(...)`, `ducknng_list_http_routes()`, `ducknng_http_request()`, and `ducknng_http_request_body()` let an `http://` or `https://` service expose additional exact, prefix, or template routes beside the framed RPC mount. That route layer remains deliberately separate from the manifest-derived RPC surface: registered routes are not manifest methods, they do not mint `http_exec` or `http_fetch`, and they inherit the same service admission stack and `shared_serialized_connection` execution model as the rest of the service.
 
-The remaining HTTP deferments are richer web-toolkit features rather than the existence of a route layer itself: prefix or parameterized routing, static assets, HTTP-carrier streaming features, and higher-level route helpers remain additive future work.
+The remaining HTTP deferments are richer web-toolkit features rather than the existence of a route layer itself: automatic query-parameter helpers, static assets, HTTP-carrier streaming features, and higher-level route helpers remain additive future work.
 
 ### 5. Transport matrix stance
 
@@ -58,7 +58,7 @@ The generic socket dial surface accepts an explicit `tls_config_id`, which makes
 
 ### 6. Final async surface scope
 
-The stable async contract is raw-result-first. NNG/RPC aio helpers collect raw frames through `ducknng_aio_collect(...)`, including the raw session-family launchers `ducknng_open_query_raw_aio(...)`, `ducknng_fetch_query_raw_aio(...)`, `ducknng_close_query_raw_aio(...)`, and `ducknng_cancel_query_raw_aio(...)`. HTTP aio helpers collect raw HTTP status/header/body rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. The synchronous raw session twins now exist too: `ducknng_open_query_raw(...)`, `ducknng_fetch_query_raw(...)`, `ducknng_close_query_raw(...)`, and `ducknng_cancel_query_raw(...)` return one reply frame directly, while `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, and `ducknng_frame_error_text(...)` expose the route-safe scalar decode path for dynamic SQL such as HTTP handlers. AIO launch timeout bounds one pending operation; `ducknng_aio_collect(..., wait_ms)` and `ducknng_ncurl_aio_collect(..., wait_ms)` only control how long a later collection call waits. Additional structured async wrappers may be added later as convenience APIs, but they are additive and must not become a second background-job or streaming protocol.
+The stable async contract is raw-result-first. NNG/RPC aio helpers collect raw frames through `ducknng_aio_collect(...)`, including the raw session-family launchers `ducknng_open_query_raw_aio(...)`, `ducknng_fetch_query_raw_aio(...)`, `ducknng_close_query_raw_aio(...)`, and `ducknng_cancel_query_raw_aio(...)`. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper layered over that same substrate: it still waits on the same terminal frame results, but it projects the decoded envelope columns directly for callers that want a table-shaped result without manual `ducknng_decode_frame(...)` joins. HTTP aio helpers collect raw HTTP status/header/body rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. The synchronous raw session twins now exist too: `ducknng_open_query_raw(...)`, `ducknng_fetch_query_raw(...)`, `ducknng_close_query_raw(...)`, and `ducknng_cancel_query_raw(...)` return one reply frame directly, while the scalar frame accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, `ducknng_frame_end_of_stream(...)`) expose the route-safe decode path for dynamic SQL such as HTTP handlers. AIO launch timeout bounds one pending operation; `ducknng_aio_collect(..., wait_ms)` and `ducknng_ncurl_aio_collect(..., wait_ms)` only control how long a later collection call waits.
 
 ### 7. Final type contract stance
 
@@ -105,6 +105,6 @@ These items were worth resolving before the API hardens further and should stay 
 
 These are still important, but they do not need to be finished before the API can be considered sealed if the above items are settled:
 
-- richer HTTP route-framework features such as prefix matching, path parameters, static assets, or HTTP-carrier streaming, because the sealed current layer is the low-level exact-path route surface beside the framed RPC endpoint
+- richer HTTP route-framework features such as automatic query-parameter helpers, static assets, or HTTP-carrier streaming, because the sealed current layer is the low-level route surface beside the framed RPC endpoint
 - scalarfs-style in-memory filesystem/provider research for CSV/TSV/Parquet body parsing, because the generic `body BLOB` fallback is an acceptable stable behavior until a clean provider exists
 - a future DuckDB-native Arrow re-plumb, if one ever becomes viable without unstable or deprecated APIs

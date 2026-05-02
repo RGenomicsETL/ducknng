@@ -75,8 +75,15 @@ typedef struct ducknng_pipe_monitor_stats {
     uint64_t max_active_pipes;
 } ducknng_pipe_monitor_stats;
 
+enum {
+    DUCKNNG_HTTP_ROUTE_MATCH_EXACT = 1,
+    DUCKNNG_HTTP_ROUTE_MATCH_PREFIX = 2,
+    DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE = 3
+};
+
 typedef struct ducknng_http_route {
     uint64_t route_id;
+    uint8_t match_kind;
     char *method;
     char *path;
     char *handler_sql;
@@ -93,6 +100,7 @@ typedef struct ducknng_http_request_context {
     const char *headers_json;
     const uint8_t *body;
     size_t body_len;
+    const char *path_params_json;
     const char *caller_identity;
     const nng_sockaddr *remote_addr;
     ducknng_http_route route;
@@ -233,14 +241,20 @@ void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
 void ducknng_service_leave_authorizer_sql(ducknng_service *svc);
 void ducknng_http_route_reset(ducknng_http_route *route);
 int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *src);
+const char *ducknng_http_route_match_kind_name(uint8_t match_kind);
 void ducknng_http_route_reply_init(ducknng_http_route_reply *reply);
 void ducknng_http_route_reply_reset(ducknng_http_route_reply *reply);
 int ducknng_service_register_http_route(ducknng_service *svc, const char *method, const char *path,
     const char *handler_sql, uint64_t request_max_bytes, char **errmsg);
+int ducknng_service_register_http_route_pattern(ducknng_service *svc, const char *method,
+    const char *match_kind, const char *path_pattern, const char *handler_sql,
+    uint64_t request_max_bytes, char **errmsg);
 int ducknng_service_unregister_http_route(ducknng_service *svc, const char *method,
     const char *path, char **errmsg);
+int ducknng_service_unregister_http_route_pattern(ducknng_service *svc, const char *method,
+    const char *match_kind, const char *path_pattern, char **errmsg);
 int ducknng_service_lookup_http_route(ducknng_service *svc, const char *method,
-    const char *path, ducknng_http_route *out_route, char **errmsg);
+    const char *path, ducknng_http_route *out_route, char **out_path_params_json, char **errmsg);
 int ducknng_service_http_routes_snapshot(ducknng_service *svc, ducknng_http_route **out_routes,
     size_t *out_count, char **errmsg);
 void ducknng_service_http_routes_free(ducknng_http_route *routes, size_t count);

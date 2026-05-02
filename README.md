@@ -182,25 +182,31 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Primitive Transport
 
-| name                         | kind   | arguments                                       | returns                                                                                                                                                         | description                                                                                         |
-|------------------------------|--------|-------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `ducknng_open_socket`        | scalar | `protocol`                                      | `UBIGINT`                                                                                                                                                       | Open a client socket handle for a supported NNG protocol.                                           |
-| `ducknng_dial_socket`        | scalar | `socket_id, url, timeout_ms, tls_config_id`     | `BOOLEAN`                                                                                                                                                       | Dial a URL using an opened socket handle.                                                           |
-| `ducknng_listen_socket`      | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `BOOLEAN`                                                                                                                                                       | Bind a socket handle to a listen URL and start its NNG listener.                                    |
-| `ducknng_close_socket`       | scalar | `socket_id`                                     | `BOOLEAN`                                                                                                                                                       | Close a client socket handle.                                                                       |
-| `ducknng_send_socket_raw`    | scalar | `socket_id, frame, timeout_ms`                  | `BOOLEAN`                                                                                                                                                       | Send one raw frame through an active socket handle.                                                 |
-| `ducknng_recv_socket_raw`    | scalar | `socket_id, timeout_ms`                         | `BLOB`                                                                                                                                                          | Receive one raw frame from an active socket handle.                                                 |
-| `ducknng_subscribe_socket`   | scalar | `socket_id, topic`                              | `BOOLEAN`                                                                                                                                                       | Register a raw topic prefix on a sub socket.                                                        |
-| `ducknng_unsubscribe_socket` | scalar | `socket_id, topic`                              | `BOOLEAN`                                                                                                                                                       | Remove a raw topic prefix from a sub socket.                                                        |
-| `ducknng_list_sockets`       | table  |                                                 | `TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)` | List client socket handles in the runtime.                                                          |
-| `ducknng_request`            | table  | `url, payload, timeout_ms, tls_config_id`       | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)`                                                                                                                | Perform a one-shot raw request and return a structured result row.                                  |
-| `ducknng_request_socket`     | table  | `socket_id, payload, timeout_ms`                | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)`                                                                                                                | Perform a raw request through a previously dialed socket handle and return a structured result row. |
-| `ducknng_request_raw`        | scalar | `url, payload, timeout_ms, tls_config_id`       | `BLOB`                                                                                                                                                          | Perform a one-shot raw request and return the raw reply frame bytes.                                |
-| `ducknng_request_socket_raw` | scalar | `socket_id, payload, timeout_ms`                | `BLOB`                                                                                                                                                          | Perform a raw request through a dialed socket handle and return the raw reply frame bytes.          |
-| `ducknng_decode_frame`       | table  | `frame`                                         | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)`        | Decode a raw ducknng frame into envelope fields and extracted payload columns.                      |
-| `ducknng_frame_payload`      | scalar | `frame`                                         | `BLOB`                                                                                                                                                          | Extract the payload bytes from one raw ducknng frame.                                               |
-| `ducknng_frame_payload_text` | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.               |
-| `ducknng_frame_error_text`   | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the protocol-level error text from a raw ducknng error frame.                               |
+| name                          | kind   | arguments                                       | returns                                                                                                                                                         | description                                                                                         |
+|-------------------------------|--------|-------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| `ducknng_open_socket`         | scalar | `protocol`                                      | `UBIGINT`                                                                                                                                                       | Open a client socket handle for a supported NNG protocol.                                           |
+| `ducknng_dial_socket`         | scalar | `socket_id, url, timeout_ms, tls_config_id`     | `BOOLEAN`                                                                                                                                                       | Dial a URL using an opened socket handle.                                                           |
+| `ducknng_listen_socket`       | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `BOOLEAN`                                                                                                                                                       | Bind a socket handle to a listen URL and start its NNG listener.                                    |
+| `ducknng_close_socket`        | scalar | `socket_id`                                     | `BOOLEAN`                                                                                                                                                       | Close a client socket handle.                                                                       |
+| `ducknng_send_socket_raw`     | scalar | `socket_id, frame, timeout_ms`                  | `BOOLEAN`                                                                                                                                                       | Send one raw frame through an active socket handle.                                                 |
+| `ducknng_recv_socket_raw`     | scalar | `socket_id, timeout_ms`                         | `BLOB`                                                                                                                                                          | Receive one raw frame from an active socket handle.                                                 |
+| `ducknng_subscribe_socket`    | scalar | `socket_id, topic`                              | `BOOLEAN`                                                                                                                                                       | Register a raw topic prefix on a sub socket.                                                        |
+| `ducknng_unsubscribe_socket`  | scalar | `socket_id, topic`                              | `BOOLEAN`                                                                                                                                                       | Remove a raw topic prefix from a sub socket.                                                        |
+| `ducknng_list_sockets`        | table  |                                                 | `TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)` | List client socket handles in the runtime.                                                          |
+| `ducknng_request`             | table  | `url, payload, timeout_ms, tls_config_id`       | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)`                                                                                                                | Perform a one-shot raw request and return a structured result row.                                  |
+| `ducknng_request_socket`      | table  | `socket_id, payload, timeout_ms`                | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)`                                                                                                                | Perform a raw request through a previously dialed socket handle and return a structured result row. |
+| `ducknng_request_raw`         | scalar | `url, payload, timeout_ms, tls_config_id`       | `BLOB`                                                                                                                                                          | Perform a one-shot raw request and return the raw reply frame bytes.                                |
+| `ducknng_request_socket_raw`  | scalar | `socket_id, payload, timeout_ms`                | `BLOB`                                                                                                                                                          | Perform a raw request through a dialed socket handle and return the raw reply frame bytes.          |
+| `ducknng_decode_frame`        | table  | `frame`                                         | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)`        | Decode a raw ducknng frame into envelope fields and extracted payload columns.                      |
+| `ducknng_frame_payload`       | scalar | `frame`                                         | `BLOB`                                                                                                                                                          | Extract the payload bytes from one raw ducknng frame.                                               |
+| `ducknng_frame_payload_text`  | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.               |
+| `ducknng_frame_error_text`    | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the protocol-level error text from a raw ducknng error frame.                               |
+| `ducknng_frame_version`       | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                      | Extract the protocol version field from one raw ducknng frame.                                      |
+| `ducknng_frame_type`          | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                      | Extract the numeric reply type field from one raw ducknng frame.                                    |
+| `ducknng_frame_flags`         | scalar | `frame`                                         | `UINTEGER`                                                                                                                                                      | Extract the reply flags bitset from one raw ducknng frame.                                          |
+| `ducknng_frame_type_name`     | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the symbolic reply type name from one raw ducknng frame.                                    |
+| `ducknng_frame_name`          | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                       | Extract the method or reply name field from one raw ducknng frame.                                  |
+| `ducknng_frame_end_of_stream` | scalar | `frame`                                         | `BOOLEAN`                                                                                                                                                       | Report whether one raw ducknng frame carries the end-of-stream reply flag.                          |
 
 ## Transport Security
 
@@ -238,33 +244,36 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## HTTP Routes
 
-| name                            | kind   | arguments                                                      | returns                                                                                                                                                                                                                                                                                                                             | description                                                                                                    |
-|---------------------------------|--------|----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| `ducknng_register_http_route`   | scalar | `service_name, method, path, handler_sql[, request_max_bytes]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                           | Register one exact-path HTTP route beside the framed RPC mount of an existing <http://> or <https://> service. |
-| `ducknng_unregister_http_route` | scalar | `service_name, method, path`                                   | `BOOLEAN`                                                                                                                                                                                                                                                                                                                           | Remove one previously registered exact-path HTTP route from a service.                                         |
-| `ducknng_list_http_routes`      | table  |                                                                | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)`                                                                                                                                                                                   | List the currently registered exact-path HTTP routes across running services.                                  |
-| `ducknng_http_request`          | table  |                                                                | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler.                         |
-| `ducknng_http_request_body`     | table  |                                                                | `TABLE(body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                               | Expose the current HTTP request body while SQL runs inside an active route handler.                            |
+| name                                    | kind   | arguments                                                                          | returns                                                                                                                                                                                                                                                                                                                                                                                 | description                                                                                                            |
+|-----------------------------------------|--------|------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_register_http_route`           | scalar | `service_name, method, path, handler_sql[, request_max_bytes]`                     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register one exact-path HTTP route beside the framed RPC mount of an existing <http://> or <https://> service.         |
+| `ducknng_register_http_route_pattern`   | scalar | `service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register one low-level HTTP route pattern beside the framed RPC mount using exact, prefix, or template matching.       |
+| `ducknng_unregister_http_route`         | scalar | `service_name, method, path`                                                       | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Remove one previously registered exact-path HTTP route from a service.                                                 |
+| `ducknng_unregister_http_route_pattern` | scalar | `service_name, method, match_kind, path_pattern`                                   | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Remove one previously registered prefix, template, or explicit exact route pattern from a service.                     |
+| `ducknng_list_http_routes`              | table  |                                                                                    | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)`                                                                                                                                                                                                                   | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
+| `ducknng_http_request`                  | table  |                                                                                    | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler.                                 |
+| `ducknng_http_request_body`             | table  |                                                                                    | `TABLE(body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                                                                                   | Expose the current HTTP request body while SQL runs inside an active route handler.                                    |
 
 ## Async I/O
 
-| name                               | kind   | arguments                                                                            | returns                                                                                                                                                                                                               | description                                                                                                   |
-|------------------------------------|--------|--------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| `ducknng_request_raw_aio`          | scalar | `url, frame, timeout_ms, tls_config_id`                                              | `UBIGINT`                                                                                                                                                                                                             | Launch one raw req/rep roundtrip asynchronously and return a future-like aio handle id.                       |
-| `ducknng_get_rpc_manifest_raw_aio` | scalar | `url, timeout_ms, tls_config_id`                                                     | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous manifest RPC request and return an aio handle id for the raw reply frame.             |
-| `ducknng_run_rpc_raw_aio`          | scalar | `url, sql, timeout_ms, tls_config_id`                                                | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous metadata-only exec RPC request and return an aio handle id for the raw reply frame.   |
-| `ducknng_open_query_raw_aio`       | scalar | `url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id`                       | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous query_open request and return an aio handle id for the raw reply frame.               |
-| `ducknng_fetch_query_raw_aio`      | scalar | `url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id` | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous fetch request and return an aio handle id for the raw reply frame.                    |
-| `ducknng_close_query_raw_aio`      | scalar | `url, session_id, session_token, timeout_ms, tls_config_id`                          | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous close request and return an aio handle id for the raw reply frame.                    |
-| `ducknng_cancel_query_raw_aio`     | scalar | `url, session_id, session_token, timeout_ms, tls_config_id`                          | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous cancel request and return an aio handle id for the raw reply frame.                   |
-| `ducknng_request_socket_raw_aio`   | scalar | `socket_id, frame, timeout_ms`                                                       | `UBIGINT`                                                                                                                                                                                                             | Launch one raw req/rep roundtrip asynchronously on an existing req socket handle and return an aio handle id. |
-| `ducknng_send_socket_raw_aio`      | scalar | `socket_id, frame, timeout_ms`                                                       | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket send asynchronously and return an aio handle id.                                        |
-| `ducknng_recv_socket_raw_aio`      | scalar | `socket_id, timeout_ms`                                                              | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket receive asynchronously and return an aio handle id.                                     |
-| `ducknng_aio_ready`                | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Return whether an aio handle has reached a terminal state.                                                    |
-| `ducknng_aio_status`               | table  | `aio_id`                                                                             | `TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR)` | Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion.     |
-| `ducknng_aio_collect`              | table  | `aio_ids, wait_ms`                                                                   | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB)`                                                                                                                                                        | Wait for any requested aio handles to finish and return one row per newly collected terminal result.          |
-| `ducknng_aio_cancel`               | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Request cancellation of a pending aio handle.                                                                 |
-| `ducknng_aio_drop`                 | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Release a terminal aio handle from the runtime registry.                                                      |
+| name                               | kind   | arguments                                                                            | returns                                                                                                                                                                                                               | description                                                                                                        |
+|------------------------------------|--------|--------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `ducknng_request_raw_aio`          | scalar | `url, frame, timeout_ms, tls_config_id`                                              | `UBIGINT`                                                                                                                                                                                                             | Launch one raw req/rep roundtrip asynchronously and return a future-like aio handle id.                            |
+| `ducknng_get_rpc_manifest_raw_aio` | scalar | `url, timeout_ms, tls_config_id`                                                     | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous manifest RPC request and return an aio handle id for the raw reply frame.                  |
+| `ducknng_run_rpc_raw_aio`          | scalar | `url, sql, timeout_ms, tls_config_id`                                                | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous metadata-only exec RPC request and return an aio handle id for the raw reply frame.        |
+| `ducknng_open_query_raw_aio`       | scalar | `url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id`                       | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous query_open request and return an aio handle id for the raw reply frame.                    |
+| `ducknng_fetch_query_raw_aio`      | scalar | `url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id` | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous fetch request and return an aio handle id for the raw reply frame.                         |
+| `ducknng_close_query_raw_aio`      | scalar | `url, session_id, session_token, timeout_ms, tls_config_id`                          | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous close request and return an aio handle id for the raw reply frame.                         |
+| `ducknng_cancel_query_raw_aio`     | scalar | `url, session_id, session_token, timeout_ms, tls_config_id`                          | `UBIGINT`                                                                                                                                                                                                             | Launch one asynchronous cancel request and return an aio handle id for the raw reply frame.                        |
+| `ducknng_request_socket_raw_aio`   | scalar | `socket_id, frame, timeout_ms`                                                       | `UBIGINT`                                                                                                                                                                                                             | Launch one raw req/rep roundtrip asynchronously on an existing req socket handle and return an aio handle id.      |
+| `ducknng_send_socket_raw_aio`      | scalar | `socket_id, frame, timeout_ms`                                                       | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket send asynchronously and return an aio handle id.                                             |
+| `ducknng_recv_socket_raw_aio`      | scalar | `socket_id, timeout_ms`                                                              | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket receive asynchronously and return an aio handle id.                                          |
+| `ducknng_aio_ready`                | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Return whether an aio handle has reached a terminal state.                                                         |
+| `ducknng_aio_status`               | table  | `aio_id`                                                                             | `TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR)` | Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion.          |
+| `ducknng_aio_collect`              | table  | `aio_ids, wait_ms`                                                                   | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB)`                                                                                                                                                        | Wait for any requested aio handles to finish and return one row per newly collected terminal result.               |
+| `ducknng_aio_collect_decoded`      | table  | `aio_ids, wait_ms`                                                                   | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)`       | Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly. |
+| `ducknng_aio_cancel`               | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Request cancellation of a pending aio handle.                                                                      |
+| `ducknng_aio_drop`                 | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Release a terminal aio handle from the runtime registry.                                                           |
 
 ## RPC Helper
 
@@ -823,10 +832,10 @@ SELECT ducknng_stop_server('http_demo');
 ### Register low-level HTTP routes beside the framed RPC mount
 
 The framed RPC mount stays exactly where the listen URL says it lives,
-but HTTP and HTTPS services can now register additional exact-path
-routes beside that mount. Route handlers are ordinary SQL queries that
-return exactly one response row, and they can inspect the in-flight
-request through `ducknng_http_request()` and
+but HTTP and HTTPS services can now register additional exact, prefix,
+or template routes beside that mount. Route handlers are ordinary SQL
+queries that return exactly one response row, and they can inspect the
+in-flight request through `ducknng_http_request()` and
 `ducknng_http_request_body()`.
 
 ``` sql
@@ -850,6 +859,16 @@ SET VARIABLE http_route_echo_sql =
           FROM ducknng_http_request(), ducknng_http_request_body()
         ) AS body_text';
 
+SET VARIABLE http_route_template_sql =
+'SELECT 202 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' ||
+                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
+                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+          FROM ducknng_http_request()
+        ) AS body_text';
+
 SELECT ducknng_register_http_route(
   'http_route_demo',
   'GET',
@@ -862,6 +881,14 @@ SELECT ducknng_register_http_route(
   'POST',
   '/echo',
   getvariable('http_route_echo_sql')::VARCHAR
+);
+
+SELECT ducknng_register_http_route_pattern(
+  'http_route_demo',
+  'GET',
+  'template',
+  '/tenant/{tenant_id}/items/{item_id}',
+  getvariable('http_route_template_sql')::VARCHAR
 );
 
 SELECT ok, status = 200, body_text
@@ -884,10 +911,20 @@ FROM ducknng_ncurl(
   0::UBIGINT
 );
 
-SELECT service_name, method, path
+SELECT ok, status = 202, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/tenant/alice/items/42',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+);
+
+SELECT service_name, method, match_kind, path
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_route_demo'
-ORDER BY path;
+ORDER BY match_kind, path;
 
 SELECT ducknng_stop_server('http_route_demo');
 ```
@@ -907,6 +944,11 @@ SELECT ducknng_stop_server('http_route_demo');
     +----------------------------------------------------------------------------------------------------------------------+
     | true                                                                                                                 |
     +----------------------------------------------------------------------------------------------------------------------+
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ducknng_register_http_route_pattern('http_route_demo', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}', CAST(getvariable('http_route_template_sql') AS VARCHAR)) |
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                                                                                      |
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     +------+----------------+-----------+
     |  ok  | (status = 200) | body_text |
     +------+----------------+-----------+
@@ -917,12 +959,18 @@ SELECT ducknng_stop_server('http_route_demo');
     +------+----------------+---------------------------------+
     | true | true           | POST /echo?x=1 text/plain hello |
     +------+----------------+---------------------------------+
-    +-----------------+--------+----------+
-    |  service_name   | method |   path   |
-    +-----------------+--------+----------+
-    | http_route_demo | POST   | /echo    |
-    | http_route_demo | GET    | /healthz |
-    +-----------------+--------+----------+
+    +------+----------------+-------------------+
+    |  ok  | (status = 202) |     body_text     |
+    +------+----------------+-------------------+
+    | true | true           | template alice:42 |
+    +------+----------------+-------------------+
+    +-----------------+--------+------------+-------------------------------------+
+    |  service_name   | method | match_kind |                path                 |
+    +-----------------+--------+------------+-------------------------------------+
+    | http_route_demo | POST   | exact      | /echo                               |
+    | http_route_demo | GET    | exact      | /healthz                            |
+    | http_route_demo | GET    | template   | /tenant/{tenant_id}/items/{item_id} |
+    +-----------------+--------+------------+-------------------------------------+
     +----------------------------------------+
     | ducknng_stop_server('http_route_demo') |
     +----------------------------------------+
@@ -931,7 +979,11 @@ SELECT ducknng_stop_server('http_route_demo');
 
 These route handlers still run inside the service-owned DuckDB execution
 lane, so keep them short and explicit. They are a good fit for health
-checks, thin JSON APIs, and gateway-style fixed operations. They are not
+checks, thin JSON APIs, and gateway-style fixed operations. Prefix and
+template routes stay low-level on purpose: the current request helper
+exposes `route_match_kind`, `route_path`, and `path_params_json`, and
+the handler decides what to do with them. That keeps the route framework
+additive instead of turning it into a second RPC namespace. They are not
 a safe excuse to expose arbitrary SQL to the public internet, and they
 should not synchronously call back into another `ducknng` service in the
 same runtime when that backend also needs the shared serialized
@@ -1257,12 +1309,20 @@ The stable async contract is raw-result-first. Framed RPC aio helpers
 collect raw reply frames through `ducknng_aio_collect(...)`, low-level
 HTTP aio helpers collect HTTP-shaped rows through
 `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames
-or bodies afterward. URL-launched request aio helpers keep the same
-operation-oriented routing as the synchronous helpers: NNG URLs use
-NNG’s background dial path, HTTP/HTTPS URLs use NNG’s asynchronous HTTP
-client path, and both still terminate as one collected reply frame or
-one terminal error. Structured async wrappers may be added later as
-conveniences, but they remain additive; aio handles represent one
+or bodies afterward. `ducknng_aio_collect_decoded(...)` is the first
+structured convenience wrapper on top of that same frame substrate: it
+still waits on the same terminal aio handles, but it projects the
+decoded envelope columns directly through the same low-level frame
+scalar accessors (`ducknng_frame_version(...)`,
+`ducknng_frame_type(...)`, `ducknng_frame_flags(...)`,
+`ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`,
+`ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`,
+`ducknng_frame_error_text(...)`, and
+`ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers
+keep the same operation-oriented routing as the synchronous helpers: NNG
+URLs use NNG’s background dial path, HTTP/HTTPS URLs use NNG’s
+asynchronous HTTP client path, and both still terminate as one collected
+reply frame or one terminal error. Aio handles still represent one
 pending operation, not a background job or streaming protocol.
 
 ``` sql
@@ -1415,8 +1475,20 @@ FROM ducknng_decode_frame(getvariable('manifest_frame'));
 SELECT ok, type_name, name
 FROM ducknng_decode_frame(getvariable('exec_frame'));
 
+-- A higher-level convenience wrapper can decode the collected frame rows directly.
+SET VARIABLE manifest_aio_decoded = ducknng_get_rpc_manifest_raw_aio(
+  'ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc',
+  1000,
+  0::UBIGINT
+);
+
+SELECT aio_id, ok, frame_ok, type_name, name
+FROM ducknng_aio_collect_decoded(list_value(getvariable('manifest_aio_decoded')), 1000);
+
 -- Drop the terminal aio handles, remove the temp state, and stop the demo server.
-SELECT ducknng_aio_drop(getvariable('manifest_aio')) AND ducknng_aio_drop(getvariable('exec_aio')) AS dropped;
+SELECT ducknng_aio_drop(getvariable('manifest_aio')) AND
+       ducknng_aio_drop(getvariable('exec_aio')) AND
+       ducknng_aio_drop(getvariable('manifest_aio_decoded')) AS dropped;
 DROP TABLE rpc_aio_collect;
 SELECT ducknng_stop_server('sql_rpc_aio_demo');
 ```
@@ -1446,6 +1518,11 @@ SELECT ducknng_stop_server('sql_rpc_aio_demo');
     +------+-----------+------+
     | true | result    | exec |
     +------+-----------+------+
+    +--------+------+----------+-----------+----------+
+    | aio_id |  ok  | frame_ok | type_name |   name   |
+    +--------+------+----------+-----------+----------+
+    | 3      | true | true     | result    | manifest |
+    +--------+------+----------+-----------+----------+
     +---------+
     | dropped |
     +---------+
@@ -1606,6 +1683,13 @@ SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
   0::UBIGINT
 );
 
+SELECT ducknng_frame_version(getvariable('raw_session_fetch_frame')::BLOB) AS version,
+       ducknng_frame_type(getvariable('raw_session_fetch_frame')::BLOB) AS type,
+       ducknng_frame_type_name(getvariable('raw_session_fetch_frame')::BLOB) AS type_name,
+       ducknng_frame_name(getvariable('raw_session_fetch_frame')::BLOB) AS name,
+       ducknng_frame_end_of_stream(getvariable('raw_session_fetch_frame')::BLOB) AS end_of_stream,
+       ducknng_frame_flags(getvariable('raw_session_fetch_frame')::BLOB) > 0 AS has_flags;
+
 SELECT *
 FROM ducknng_parse_body(
   ducknng_frame_payload(getvariable('raw_session_fetch_frame')::BLOB),
@@ -1635,6 +1719,11 @@ SELECT ducknng_stop_server('sql_session_raw_demo');
     +------------+----------------+
     | NULL       | true           |
     +------------+----------------+
+    +---------+------+-----------+-------+---------------+-----------+
+    | version | type | type_name | name  | end_of_stream | has_flags |
+    +---------+------+-----------+-------+---------------+-----------+
+    | 1       | 2    | result    | fetch | false         | true      |
+    +---------+------+-----------+-------+---------------+-----------+
     +----+
     | id |
     +----+
@@ -2577,9 +2666,9 @@ framed RPC wire protocol.
 What is sealed and runnable in v1: NNG transports and socket patterns;
 first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary
 RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions);
-low-level exact-path HTTP routes with SQL response rows and
-request-context/body helpers; fast C admission (mTLS, exact
-peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
+low-level HTTP routes with exact, prefix, or template matching plus SQL
+response rows and request-context/body helpers; fast C admission (mTLS,
+exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
 authorizer callbacks; bounded per-service pipe-event monitor and
 active-pipe snapshot; body codec layer with built-in providers and
 user-registered codec hooks. See `function_catalog/functions.md` for the
@@ -2587,9 +2676,9 @@ exact surface and `NEWS.md` for landed changes.
 
 Intentionally deferred:
 
-- Prefix/path-parameter HTTP routing, route-local auth policies, and
-  richer web-toolkit conveniences beyond the current exact-path
-  low-level framework.
+- Route-local auth policies, automatic query-parameter helpers, and
+  richer web-toolkit conveniences beyond the current low-level route
+  framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
   table-function path.

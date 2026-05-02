@@ -1010,6 +1010,52 @@ textual payload.</td>
 <td>Extract the protocol-level error text from a raw ducknng error
 frame.</td>
 </tr>
+<tr class="even">
+<td><code>ducknng_frame_version</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>UTINYINT</code></td>
+<td>Extract the protocol version field from one raw ducknng frame.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_frame_type</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>UTINYINT</code></td>
+<td>Extract the numeric reply type field from one raw ducknng
+frame.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_frame_flags</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>UINTEGER</code></td>
+<td>Extract the reply flags bitset from one raw ducknng frame.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_frame_type_name</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>VARCHAR</code></td>
+<td>Extract the symbolic reply type name from one raw ducknng
+frame.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_frame_name</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>VARCHAR</code></td>
+<td>Extract the method or reply name field from one raw ducknng
+frame.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_frame_end_of_stream</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Report whether one raw ducknng frame carries the end-of-stream reply
+flag.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="transport-security">Transport Security</h2>
@@ -1224,6 +1270,14 @@ type.</td>
 existing <a href="http://">http://</a> or <a href="https://">https://</a> service.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_register_http_route_pattern</code></td>
+<td>scalar</td>
+<td><code>service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes]</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Register one low-level HTTP route pattern beside the framed RPC
+mount using exact, prefix, or template matching.</td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_unregister_http_route</code></td>
 <td>scalar</td>
 <td><code>service_name, method, path</code></td>
@@ -1231,19 +1285,27 @@ existing <a href="http://">http://</a> or <a href="https://">https://</a> servic
 <td>Remove one previously registered exact-path HTTP route from a
 service.</td>
 </tr>
+<tr class="even">
+<td><code>ducknng_unregister_http_route_pattern</code></td>
+<td>scalar</td>
+<td><code>service_name, method, match_kind, path_pattern</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Remove one previously registered prefix, template, or explicit exact
+route pattern from a service.</td>
+</tr>
 <tr class="odd">
 <td><code>ducknng_list_http_routes</code></td>
 <td>table</td>
 <td></td>
-<td><code>TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)</code></td>
-<td>List the currently registered exact-path HTTP routes across running
-services.</td>
+<td><code>TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)</code></td>
+<td>List the currently registered HTTP routes across running services,
+including their match kind and stored path pattern.</td>
 </tr>
 <tr class="even">
 <td><code>ducknng_http_request</code></td>
 <td>table</td>
 <td></td>
-<td><code>TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)</code></td>
+<td><code>TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)</code></td>
 <td>Expose the current HTTP request context while SQL runs inside an
 active route handler.</td>
 </tr>
@@ -1373,13 +1435,21 @@ send-phase and recv-phase completion.</td>
 newly collected terminal result.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_aio_collect_decoded</code></td>
+<td>table</td>
+<td><code>aio_ids, wait_ms</code></td>
+<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)</code></td>
+<td>Wait for framed aio handles, collect their terminal frame rows, and
+project the decoded envelope columns directly.</td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_aio_cancel</code></td>
 <td>scalar</td>
 <td><code>aio_id</code></td>
 <td><code>BOOLEAN</code></td>
 <td>Request cancellation of a pending aio handle.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_aio_drop</code></td>
 <td>scalar</td>
 <td><code>aio_id</code></td>
@@ -2037,10 +2107,11 @@ automatically from the scheme. For <code>http://</code> and
 <h3 id="register-low-level-http-routes-beside-the-framed-rpc-mount">Register
 low-level HTTP routes beside the framed RPC mount</h3>
 <p>The framed RPC mount stays exactly where the listen URL says it
-lives, but HTTP and HTTPS services can now register additional
-exact-path routes beside that mount. Route handlers are ordinary SQL
-queries that return exactly one response row, and they can inspect the
-in-flight request through <code>ducknng_http_request()</code> and
+lives, but HTTP and HTTPS services can now register additional exact,
+prefix, or template routes beside that mount. Route handlers are
+ordinary SQL queries that return exactly one response row, and they can
+inspect the in-flight request through
+<code>ducknng_http_request()</code> and
 <code>ducknng_http_request_body()</code>.</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
@@ -2062,46 +2133,74 @@ in-flight request through <code>ducknng_http_request()</code> and
 <span id="cb15-18"><a href="#cb15-18" tabindex="-1"></a><span class="st">          FROM ducknng_http_request(), ducknng_http_request_body()</span></span>
 <span id="cb15-19"><a href="#cb15-19" tabindex="-1"></a><span class="st">        ) AS body_text&#39;</span>;</span>
 <span id="cb15-20"><a href="#cb15-20" tabindex="-1"></a></span>
-<span id="cb15-21"><a href="#cb15-21" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
-<span id="cb15-22"><a href="#cb15-22" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
-<span id="cb15-23"><a href="#cb15-23" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-24"><a href="#cb15-24" tabindex="-1"></a>  <span class="st">&#39;/healthz&#39;</span>,</span>
-<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a>  <span class="st">&#39;SELECT 200 AS status, </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type, </span><span class="ch">&#39;&#39;</span><span class="st">ok</span><span class="ch">&#39;&#39;</span><span class="st"> AS body_text&#39;</span></span>
-<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a>);</span>
-<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a></span>
-<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
-<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
-<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a>  <span class="st">&#39;/echo&#39;</span>,</span>
-<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_echo_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
-<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a>);</span>
-<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a></span>
-<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">200</span>, body_text</span>
-<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/healthz&#39;</span>,</span>
-<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-21"><a href="#cb15-21" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_route_template_sql <span class="op">=</span></span>
+<span id="cb15-22"><a href="#cb15-22" tabindex="-1"></a><span class="st">&#39;SELECT 202 AS status,</span></span>
+<span id="cb15-23"><a href="#cb15-23" tabindex="-1"></a><span class="st">        </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type,</span></span>
+<span id="cb15-24"><a href="#cb15-24" tabindex="-1"></a><span class="st">        (</span></span>
+<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a><span class="st">          SELECT route_match_kind || </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
+<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a><span class="st">                 json_extract_string(path_params_json::JSON, </span><span class="ch">&#39;&#39;</span><span class="st">$.tenant_id</span><span class="ch">&#39;&#39;</span><span class="st">) || </span><span class="ch">&#39;&#39;</span><span class="st">:</span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
+<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a><span class="st">                 json_extract_string(path_params_json::JSON, </span><span class="ch">&#39;&#39;</span><span class="st">$.item_id</span><span class="ch">&#39;&#39;</span><span class="st">)</span></span>
+<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a><span class="st">          FROM ducknng_http_request()</span></span>
+<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a><span class="st">        ) AS body_text&#39;</span>;</span>
+<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a></span>
+<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
+<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a>  <span class="st">&#39;/healthz&#39;</span>,</span>
+<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a>  <span class="st">&#39;SELECT 200 AS status, </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type, </span><span class="ch">&#39;&#39;</span><span class="st">ok</span><span class="ch">&#39;&#39;</span><span class="st"> AS body_text&#39;</span></span>
+<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a>);</span>
+<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a></span>
+<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
+<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a>  <span class="st">&#39;/echo&#39;</span>,</span>
+<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_echo_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
 <span id="cb15-43"><a href="#cb15-43" tabindex="-1"></a>);</span>
 <span id="cb15-44"><a href="#cb15-44" tabindex="-1"></a></span>
-<span id="cb15-45"><a href="#cb15-45" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">201</span>, body_text</span>
-<span id="cb15-46"><a href="#cb15-46" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb15-47"><a href="#cb15-47" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/echo?x=1&#39;</span>,</span>
-<span id="cb15-48"><a href="#cb15-48" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb15-49"><a href="#cb15-49" tabindex="-1"></a>  <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/plain&quot;}]&#39;</span>,</span>
-<span id="cb15-50"><a href="#cb15-50" tabindex="-1"></a>  <span class="st">&#39;hello&#39;</span>:<span class="ch">:BLOB</span>,</span>
-<span id="cb15-51"><a href="#cb15-51" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb15-52"><a href="#cb15-52" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb15-53"><a href="#cb15-53" tabindex="-1"></a>);</span>
-<span id="cb15-54"><a href="#cb15-54" tabindex="-1"></a></span>
-<span id="cb15-55"><a href="#cb15-55" tabindex="-1"></a><span class="kw">SELECT</span> service_name, <span class="kw">method</span>, path</span>
-<span id="cb15-56"><a href="#cb15-56" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_http_routes()</span>
-<span id="cb15-57"><a href="#cb15-57" tabindex="-1"></a><span class="kw">WHERE</span> service_name <span class="op">=</span> <span class="st">&#39;http_route_demo&#39;</span></span>
-<span id="cb15-58"><a href="#cb15-58" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> path;</span>
-<span id="cb15-59"><a href="#cb15-59" tabindex="-1"></a></span>
-<span id="cb15-60"><a href="#cb15-60" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_route_demo&#39;</span>);</span></code></pre></div>
+<span id="cb15-45"><a href="#cb15-45" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route_pattern(</span>
+<span id="cb15-46"><a href="#cb15-46" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-47"><a href="#cb15-47" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-48"><a href="#cb15-48" tabindex="-1"></a>  <span class="st">&#39;template&#39;</span>,</span>
+<span id="cb15-49"><a href="#cb15-49" tabindex="-1"></a>  <span class="st">&#39;/tenant/{tenant_id}/items/{item_id}&#39;</span>,</span>
+<span id="cb15-50"><a href="#cb15-50" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_template_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
+<span id="cb15-51"><a href="#cb15-51" tabindex="-1"></a>);</span>
+<span id="cb15-52"><a href="#cb15-52" tabindex="-1"></a></span>
+<span id="cb15-53"><a href="#cb15-53" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">200</span>, body_text</span>
+<span id="cb15-54"><a href="#cb15-54" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-55"><a href="#cb15-55" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/healthz&#39;</span>,</span>
+<span id="cb15-56"><a href="#cb15-56" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-57"><a href="#cb15-57" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-58"><a href="#cb15-58" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-59"><a href="#cb15-59" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-60"><a href="#cb15-60" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-61"><a href="#cb15-61" tabindex="-1"></a>);</span>
+<span id="cb15-62"><a href="#cb15-62" tabindex="-1"></a></span>
+<span id="cb15-63"><a href="#cb15-63" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">201</span>, body_text</span>
+<span id="cb15-64"><a href="#cb15-64" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-65"><a href="#cb15-65" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/echo?x=1&#39;</span>,</span>
+<span id="cb15-66"><a href="#cb15-66" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb15-67"><a href="#cb15-67" tabindex="-1"></a>  <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/plain&quot;}]&#39;</span>,</span>
+<span id="cb15-68"><a href="#cb15-68" tabindex="-1"></a>  <span class="st">&#39;hello&#39;</span>:<span class="ch">:BLOB</span>,</span>
+<span id="cb15-69"><a href="#cb15-69" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-70"><a href="#cb15-70" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-71"><a href="#cb15-71" tabindex="-1"></a>);</span>
+<span id="cb15-72"><a href="#cb15-72" tabindex="-1"></a></span>
+<span id="cb15-73"><a href="#cb15-73" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">202</span>, body_text</span>
+<span id="cb15-74"><a href="#cb15-74" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-75"><a href="#cb15-75" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/tenant/alice/items/42&#39;</span>,</span>
+<span id="cb15-76"><a href="#cb15-76" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-77"><a href="#cb15-77" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-78"><a href="#cb15-78" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-79"><a href="#cb15-79" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-80"><a href="#cb15-80" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-81"><a href="#cb15-81" tabindex="-1"></a>);</span>
+<span id="cb15-82"><a href="#cb15-82" tabindex="-1"></a></span>
+<span id="cb15-83"><a href="#cb15-83" tabindex="-1"></a><span class="kw">SELECT</span> service_name, <span class="kw">method</span>, match_kind, path</span>
+<span id="cb15-84"><a href="#cb15-84" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_http_routes()</span>
+<span id="cb15-85"><a href="#cb15-85" tabindex="-1"></a><span class="kw">WHERE</span> service_name <span class="op">=</span> <span class="st">&#39;http_route_demo&#39;</span></span>
+<span id="cb15-86"><a href="#cb15-86" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> match_kind, path;</span>
+<span id="cb15-87"><a href="#cb15-87" tabindex="-1"></a></span>
+<span id="cb15-88"><a href="#cb15-88" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_route_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+------------------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;http_route_demo&#39;, &#39;http://127.0.0.1:18445/_ducknng&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
 +------------------------------------------------------------------------------------------------------------------------+
@@ -2117,6 +2216,11 @@ in-flight request through <code>ducknng_http_request()</code> and
 +----------------------------------------------------------------------------------------------------------------------+
 | true                                                                                                                 |
 +----------------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_register_http_route_pattern(&#39;http_route_demo&#39;, &#39;GET&#39;, &#39;template&#39;, &#39;/tenant/{tenant_id}/items/{item_id}&#39;, CAST(getvariable(&#39;http_route_template_sql&#39;) AS VARCHAR)) |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                                                      |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 +------+----------------+-----------+
 |  ok  | (status = 200) | body_text |
 +------+----------------+-----------+
@@ -2127,12 +2231,18 @@ in-flight request through <code>ducknng_http_request()</code> and
 +------+----------------+---------------------------------+
 | true | true           | POST /echo?x=1 text/plain hello |
 +------+----------------+---------------------------------+
-+-----------------+--------+----------+
-|  service_name   | method |   path   |
-+-----------------+--------+----------+
-| http_route_demo | POST   | /echo    |
-| http_route_demo | GET    | /healthz |
-+-----------------+--------+----------+
++------+----------------+-------------------+
+|  ok  | (status = 202) |     body_text     |
++------+----------------+-------------------+
+| true | true           | template alice:42 |
++------+----------------+-------------------+
++-----------------+--------+------------+-------------------------------------+
+|  service_name   | method | match_kind |                path                 |
++-----------------+--------+------------+-------------------------------------+
+| http_route_demo | POST   | exact      | /echo                               |
+| http_route_demo | GET    | exact      | /healthz                            |
+| http_route_demo | GET    | template   | /tenant/{tenant_id}/items/{item_id} |
++-----------------+--------+------------+-------------------------------------+
 +----------------------------------------+
 | ducknng_stop_server(&#39;http_route_demo&#39;) |
 +----------------------------------------+
@@ -2140,11 +2250,16 @@ in-flight request through <code>ducknng_http_request()</code> and
 +----------------------------------------+</code></pre>
 <p>These route handlers still run inside the service-owned DuckDB
 execution lane, so keep them short and explicit. They are a good fit for
-health checks, thin JSON APIs, and gateway-style fixed operations. They
-are not a safe excuse to expose arbitrary SQL to the public internet,
-and they should not synchronously call back into another
-<code>ducknng</code> service in the same runtime when that backend also
-needs the shared serialized execution lane.</p>
+health checks, thin JSON APIs, and gateway-style fixed operations.
+Prefix and template routes stay low-level on purpose: the current
+request helper exposes <code>route_match_kind</code>,
+<code>route_path</code>, and <code>path_params_json</code>, and the
+handler decides what to do with them. That keeps the route framework
+additive instead of turning it into a second RPC namespace. They are not
+a safe excuse to expose arbitrary SQL to the public internet, and they
+should not synchronously call back into another <code>ducknng</code>
+service in the same runtime when that backend also needs the shared
+serialized execution lane.</p>
 <p>A MotherDuck-style public gateway is still a good fit for this layer,
 but it should use separate backend DuckDB processes or runtime
 boundaries. The main README still stays single-session, so the
@@ -2446,13 +2561,25 @@ raw requests asynchronously and collect the reply frames later</h3>
 collect raw reply frames through <code>ducknng_aio_collect(...)</code>,
 low-level HTTP aio helpers collect HTTP-shaped rows through
 <code>ducknng_ncurl_aio_collect(...)</code>, and callers explicitly
-decode frames or bodies afterward. URL-launched request aio helpers keep
-the same operation-oriented routing as the synchronous helpers: NNG URLs
-use NNG’s background dial path, HTTP/HTTPS URLs use NNG’s asynchronous
-HTTP client path, and both still terminate as one collected reply frame
-or one terminal error. Structured async wrappers may be added later as
-conveniences, but they remain additive; aio handles represent one
-pending operation, not a background job or streaming protocol.</p>
+decode frames or bodies afterward.
+<code>ducknng_aio_collect_decoded(...)</code> is the first structured
+convenience wrapper on top of that same frame substrate: it still waits
+on the same terminal aio handles, but it projects the decoded envelope
+columns directly through the same low-level frame scalar accessors
+(<code>ducknng_frame_version(...)</code>,
+<code>ducknng_frame_type(...)</code>,
+<code>ducknng_frame_flags(...)</code>,
+<code>ducknng_frame_type_name(...)</code>,
+<code>ducknng_frame_name(...)</code>,
+<code>ducknng_frame_payload(...)</code>,
+<code>ducknng_frame_payload_text(...)</code>,
+<code>ducknng_frame_error_text(...)</code>, and
+<code>ducknng_frame_end_of_stream(...)</code>). URL-launched request aio
+helpers keep the same operation-oriented routing as the synchronous
+helpers: NNG URLs use NNG’s background dial path, HTTP/HTTPS URLs use
+NNG’s asynchronous HTTP client path, and both still terminate as one
+collected reply frame or one terminal error. Aio handles still represent
+one pending operation, not a background job or streaming protocol.</p>
 <div class="sourceCode" id="cb27"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb27-1"><a href="#cb27-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb27-2"><a href="#cb27-2" tabindex="-1"></a><span class="co">-- Start a local listener that the aio requests will target.</span></span>
 <span id="cb27-3"><a href="#cb27-3" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(</span>
@@ -2597,10 +2724,22 @@ later, so decoding remains explicit and honest.</p>
 <span id="cb29-56"><a href="#cb29-56" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
 <span id="cb29-57"><a href="#cb29-57" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(getvariable(<span class="st">&#39;exec_frame&#39;</span>));</span>
 <span id="cb29-58"><a href="#cb29-58" tabindex="-1"></a></span>
-<span id="cb29-59"><a href="#cb29-59" tabindex="-1"></a><span class="co">-- Drop the terminal aio handles, remove the temp state, and stop the demo server.</span></span>
-<span id="cb29-60"><a href="#cb29-60" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;manifest_aio&#39;</span>)) <span class="kw">AND</span> ducknng_aio_drop(getvariable(<span class="st">&#39;exec_aio&#39;</span>)) <span class="kw">AS</span> dropped;</span>
-<span id="cb29-61"><a href="#cb29-61" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> rpc_aio_collect;</span>
-<span id="cb29-62"><a href="#cb29-62" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_rpc_aio_demo&#39;</span>);</span></code></pre></div>
+<span id="cb29-59"><a href="#cb29-59" tabindex="-1"></a><span class="co">-- A higher-level convenience wrapper can decode the collected frame rows directly.</span></span>
+<span id="cb29-60"><a href="#cb29-60" tabindex="-1"></a><span class="kw">SET</span> VARIABLE manifest_aio_decoded <span class="op">=</span> ducknng_get_rpc_manifest_raw_aio(</span>
+<span id="cb29-61"><a href="#cb29-61" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc&#39;</span>,</span>
+<span id="cb29-62"><a href="#cb29-62" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
+<span id="cb29-63"><a href="#cb29-63" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb29-64"><a href="#cb29-64" tabindex="-1"></a>);</span>
+<span id="cb29-65"><a href="#cb29-65" tabindex="-1"></a></span>
+<span id="cb29-66"><a href="#cb29-66" tabindex="-1"></a><span class="kw">SELECT</span> aio_id, ok, frame_ok, type_name, name</span>
+<span id="cb29-67"><a href="#cb29-67" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect_decoded(list_value(getvariable(<span class="st">&#39;manifest_aio_decoded&#39;</span>)), <span class="dv">1000</span>);</span>
+<span id="cb29-68"><a href="#cb29-68" tabindex="-1"></a></span>
+<span id="cb29-69"><a href="#cb29-69" tabindex="-1"></a><span class="co">-- Drop the terminal aio handles, remove the temp state, and stop the demo server.</span></span>
+<span id="cb29-70"><a href="#cb29-70" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(getvariable(<span class="st">&#39;manifest_aio&#39;</span>)) <span class="kw">AND</span></span>
+<span id="cb29-71"><a href="#cb29-71" tabindex="-1"></a>       ducknng_aio_drop(getvariable(<span class="st">&#39;exec_aio&#39;</span>)) <span class="kw">AND</span></span>
+<span id="cb29-72"><a href="#cb29-72" tabindex="-1"></a>       ducknng_aio_drop(getvariable(<span class="st">&#39;manifest_aio_decoded&#39;</span>)) <span class="kw">AS</span> dropped;</span>
+<span id="cb29-73"><a href="#cb29-73" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> rpc_aio_collect;</span>
+<span id="cb29-74"><a href="#cb29-74" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_rpc_aio_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+--------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;sql_rpc_aio_demo&#39;, &#39;ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc&#39;, 1, 134217728, 300000, 0) |
 +--------------------------------------------------------------------------------------------------------------+
@@ -2626,6 +2765,11 @@ later, so decoding remains explicit and honest.</p>
 +------+-----------+------+
 | true | result    | exec |
 +------+-----------+------+
++--------+------+----------+-----------+----------+
+| aio_id |  ok  | frame_ok | type_name |   name   |
++--------+------+----------+-----------+----------+
+| 3      | true | true     | result    | manifest |
++--------+------+----------+-----------+----------+
 +---------+
 | dropped |
 +---------+
@@ -2780,23 +2924,30 @@ same session lifecycle through raw frames</h3>
 <span id="cb33-39"><a href="#cb33-39" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
 <span id="cb33-40"><a href="#cb33-40" tabindex="-1"></a>);</span>
 <span id="cb33-41"><a href="#cb33-41" tabindex="-1"></a></span>
-<span id="cb33-42"><a href="#cb33-42" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
-<span id="cb33-43"><a href="#cb33-43" tabindex="-1"></a><span class="kw">FROM</span> ducknng_parse_body(</span>
-<span id="cb33-44"><a href="#cb33-44" tabindex="-1"></a>  ducknng_frame_payload(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>),</span>
-<span id="cb33-45"><a href="#cb33-45" tabindex="-1"></a>  <span class="st">&#39;application/vnd.apache.arrow.stream&#39;</span></span>
-<span id="cb33-46"><a href="#cb33-46" tabindex="-1"></a>);</span>
-<span id="cb33-47"><a href="#cb33-47" tabindex="-1"></a></span>
-<span id="cb33-48"><a href="#cb33-48" tabindex="-1"></a><span class="co">-- Close the raw session explicitly and inspect the control payload.</span></span>
-<span id="cb33-49"><a href="#cb33-49" tabindex="-1"></a><span class="kw">SET</span> VARIABLE raw_session_close_frame <span class="op">=</span> ducknng_close_query_raw(</span>
-<span id="cb33-50"><a href="#cb33-50" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_raw_demo.ipc&#39;</span>,</span>
-<span id="cb33-51"><a href="#cb33-51" tabindex="-1"></a>  getvariable(<span class="st">&#39;raw_session_id&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
-<span id="cb33-52"><a href="#cb33-52" tabindex="-1"></a>  getvariable(<span class="st">&#39;raw_session_token&#39;</span>):<span class="ch">:VARCHAR</span>,</span>
-<span id="cb33-53"><a href="#cb33-53" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb33-54"><a href="#cb33-54" tabindex="-1"></a>);</span>
-<span id="cb33-55"><a href="#cb33-55" tabindex="-1"></a></span>
-<span id="cb33-56"><a href="#cb33-56" tabindex="-1"></a><span class="kw">SELECT</span> position(<span class="st">&#39;&quot;state&quot;:&quot;closed&quot;&#39;</span> <span class="kw">IN</span> ducknng_frame_payload_text(getvariable(<span class="st">&#39;raw_session_close_frame&#39;</span>):<span class="ch">:BLOB</span>)) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> is_closed;</span>
-<span id="cb33-57"><a href="#cb33-57" tabindex="-1"></a></span>
-<span id="cb33-58"><a href="#cb33-58" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_session_raw_demo&#39;</span>);</span></code></pre></div>
+<span id="cb33-42"><a href="#cb33-42" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_frame_version(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="kw">AS</span> version,</span>
+<span id="cb33-43"><a href="#cb33-43" tabindex="-1"></a>       ducknng_frame_type(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="kw">AS</span> <span class="kw">type</span>,</span>
+<span id="cb33-44"><a href="#cb33-44" tabindex="-1"></a>       ducknng_frame_type_name(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="kw">AS</span> type_name,</span>
+<span id="cb33-45"><a href="#cb33-45" tabindex="-1"></a>       ducknng_frame_name(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="kw">AS</span> name,</span>
+<span id="cb33-46"><a href="#cb33-46" tabindex="-1"></a>       ducknng_frame_end_of_stream(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="kw">AS</span> end_of_stream,</span>
+<span id="cb33-47"><a href="#cb33-47" tabindex="-1"></a>       ducknng_frame_flags(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_flags;</span>
+<span id="cb33-48"><a href="#cb33-48" tabindex="-1"></a></span>
+<span id="cb33-49"><a href="#cb33-49" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
+<span id="cb33-50"><a href="#cb33-50" tabindex="-1"></a><span class="kw">FROM</span> ducknng_parse_body(</span>
+<span id="cb33-51"><a href="#cb33-51" tabindex="-1"></a>  ducknng_frame_payload(getvariable(<span class="st">&#39;raw_session_fetch_frame&#39;</span>):<span class="ch">:BLOB</span>),</span>
+<span id="cb33-52"><a href="#cb33-52" tabindex="-1"></a>  <span class="st">&#39;application/vnd.apache.arrow.stream&#39;</span></span>
+<span id="cb33-53"><a href="#cb33-53" tabindex="-1"></a>);</span>
+<span id="cb33-54"><a href="#cb33-54" tabindex="-1"></a></span>
+<span id="cb33-55"><a href="#cb33-55" tabindex="-1"></a><span class="co">-- Close the raw session explicitly and inspect the control payload.</span></span>
+<span id="cb33-56"><a href="#cb33-56" tabindex="-1"></a><span class="kw">SET</span> VARIABLE raw_session_close_frame <span class="op">=</span> ducknng_close_query_raw(</span>
+<span id="cb33-57"><a href="#cb33-57" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_session_raw_demo.ipc&#39;</span>,</span>
+<span id="cb33-58"><a href="#cb33-58" tabindex="-1"></a>  getvariable(<span class="st">&#39;raw_session_id&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb33-59"><a href="#cb33-59" tabindex="-1"></a>  getvariable(<span class="st">&#39;raw_session_token&#39;</span>):<span class="ch">:VARCHAR</span>,</span>
+<span id="cb33-60"><a href="#cb33-60" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb33-61"><a href="#cb33-61" tabindex="-1"></a>);</span>
+<span id="cb33-62"><a href="#cb33-62" tabindex="-1"></a></span>
+<span id="cb33-63"><a href="#cb33-63" tabindex="-1"></a><span class="kw">SELECT</span> position(<span class="st">&#39;&quot;state&quot;:&quot;closed&quot;&#39;</span> <span class="kw">IN</span> ducknng_frame_payload_text(getvariable(<span class="st">&#39;raw_session_close_frame&#39;</span>):<span class="ch">:BLOB</span>)) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> is_closed;</span>
+<span id="cb33-64"><a href="#cb33-64" tabindex="-1"></a></span>
+<span id="cb33-65"><a href="#cb33-65" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_session_raw_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+----------------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;sql_session_raw_demo&#39;, &#39;ipc:///tmp/ducknng_sql_session_raw_demo.ipc&#39;, 1, 134217728, 300000, 0) |
 +----------------------------------------------------------------------------------------------------------------------+
@@ -2807,6 +2958,11 @@ same session lifecycle through raw frames</h3>
 +------------+----------------+
 | NULL       | true           |
 +------------+----------------+
++---------+------+-----------+-------+---------------+-----------+
+| version | type | type_name | name  | end_of_stream | has_flags |
++---------+------+-----------+-------+---------------+-----------+
+| 1       | 2    | result    | fetch | false         | true      |
++---------+------+-----------+-------+---------------+-----------+
 +----+
 | id |
 +----+
@@ -3756,18 +3912,19 @@ framed RPC wire protocol.</p>
 <p>What is sealed and runnable in v1: NNG transports and socket
 patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP,
 and unary RPC; framed RPC (<code>manifest</code>, opt-in
-<code>exec</code>, raw unary, query sessions); low-level exact-path HTTP
-routes with SQL response rows and request-context/body helpers; fast C
-admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists,
-service limits); SQL authorizer callbacks; bounded per-service
-pipe-event monitor and active-pipe snapshot; body codec layer with
-built-in providers and user-registered codec hooks. See
+<code>exec</code>, raw unary, query sessions); low-level HTTP routes
+with exact, prefix, or template matching plus SQL response rows and
+request-context/body helpers; fast C admission (mTLS, exact
+peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
+authorizer callbacks; bounded per-service pipe-event monitor and
+active-pipe snapshot; body codec layer with built-in providers and
+user-registered codec hooks. See
 <code>function_catalog/functions.md</code> for the exact surface and
 <code>NEWS.md</code> for landed changes.</p>
 <p>Intentionally deferred:</p>
 <ul>
-<li>Prefix/path-parameter HTTP routing, route-local auth policies, and
-richer web-toolkit conveniences beyond the current exact-path low-level
+<li>Route-local auth policies, automatic query-parameter helpers, and
+richer web-toolkit conveniences beyond the current low-level route
 framework.</li>
 <li>CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.</li>
 <li>Full SQL-side decoding of session <code>fetch</code> Arrow batch

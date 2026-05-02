@@ -96,39 +96,6 @@ static const char *ducknng_rpc_type_name(uint8_t type) {
     default: return "unknown";
     }
 }
-static int ducknng_ascii_tolower_int(int c) {
-    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
-}
-
-static int ducknng_ascii_ieq(const char *a, const char *b) {
-    if (!a || !b) return 0;
-    while (*a && *b) {
-        if (ducknng_ascii_tolower_int((unsigned char)*a) != ducknng_ascii_tolower_int((unsigned char)*b)) return 0;
-        a++;
-        b++;
-    }
-    return *a == '\0' && *b == '\0';
-}
-
-static int ducknng_ascii_istarts_with(const char *s, const char *prefix) {
-    if (!s || !prefix) return 0;
-    while (*prefix) {
-        if (!*s || ducknng_ascii_tolower_int((unsigned char)*s) != ducknng_ascii_tolower_int((unsigned char)*prefix)) return 0;
-        s++;
-        prefix++;
-    }
-    return 1;
-}
-
-static int ducknng_ascii_iends_with(const char *s, const char *suffix) {
-    size_t slen;
-    size_t suffix_len;
-    if (!s || !suffix) return 0;
-    slen = strlen(s);
-    suffix_len = strlen(suffix);
-    if (suffix_len > slen) return 0;
-    return ducknng_ascii_ieq(s + slen - suffix_len, suffix);
-}
 
 static char *ducknng_normalize_media_type(const char *content_type) {
     const char *start;

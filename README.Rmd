@@ -480,7 +480,7 @@ SELECT ducknng_stop_server('http_demo');
 
 ### Register low-level HTTP routes beside the framed RPC mount
 
-The framed RPC mount stays exactly where the listen URL says it lives, but HTTP and HTTPS services can now register additional exact-path routes beside that mount. Route handlers are ordinary SQL queries that return exactly one response row, and they can inspect the in-flight request through `ducknng_http_request()` and `ducknng_http_request_body()`.
+The framed RPC mount stays exactly where the listen URL says it lives, but HTTP and HTTPS services can now register additional exact, prefix, or template routes beside that mount. Route handlers are ordinary SQL queries that return exactly one response row, and they can inspect the in-flight request through `ducknng_http_request()` and `ducknng_http_request_body()`.
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 SELECT ducknng_start_server(
@@ -502,6 +502,16 @@ SET VARIABLE http_route_echo_sql =
           FROM ducknng_http_request(), ducknng_http_request_body()
         ) AS body_text';
 
+SET VARIABLE http_route_template_sql =
+'SELECT 202 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT route_match_kind || '' '' ||
+                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
+                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+          FROM ducknng_http_request()
+        ) AS body_text';
+
 SELECT ducknng_register_http_route(
   'http_route_demo',
   'GET',
@@ -514,6 +524,14 @@ SELECT ducknng_register_http_route(
   'POST',
   '/echo',
   getvariable('http_route_echo_sql')::VARCHAR
+);
+
+SELECT ducknng_register_http_route_pattern(
+  'http_route_demo',
+  'GET',
+  'template',
+  '/tenant/{tenant_id}/items/{item_id}',
+  getvariable('http_route_template_sql')::VARCHAR
 );
 
 SELECT ok, status = 200, body_text
@@ -536,15 +554,25 @@ FROM ducknng_ncurl(
   0::UBIGINT
 );
 
-SELECT service_name, method, path
+SELECT ok, status = 202, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/tenant/alice/items/42',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+);
+
+SELECT service_name, method, match_kind, path
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_route_demo'
-ORDER BY path;
+ORDER BY match_kind, path;
 
 SELECT ducknng_stop_server('http_route_demo');
 ```
 
-These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
+These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. Prefix and template routes stay low-level on purpose: the current request helper exposes `route_match_kind`, `route_path`, and `path_params_json`, and the handler decides what to do with them. That keeps the route framework additive instead of turning it into a second RPC namespace. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
 
 A MotherDuck-style public gateway is still a good fit for this layer, but it should use separate backend DuckDB processes or runtime boundaries. The main README still stays single-session, so the multi-process walkthrough lives separately: `docs/motherduck_style_demo.md` explains the topology, `demo/motherduck_gateway.py` is the live helper, `make motherduck_demo` runs the end-to-end check, and `make motherduck_rdm` renders a dedicated `demo/motherduck_gateway.Rmd` walkthrough with hidden worker setup and live HTTP requests.
 
@@ -799,7 +827,7 @@ SET VARIABLE bus_close_a = ducknng_close_socket(getvariable('bus_a')::UBIGINT);
 
 ### Launch raw requests asynchronously and collect the reply frames later
 
-The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Structured async wrappers may be added later as conveniences, but they remain additive; aio handles represent one pending operation, not a background job or streaming protocol.
+The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper on top of that same frame substrate: it still waits on the same terminal aio handles, but it projects the decoded envelope columns directly through the same low-level frame scalar accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Aio handles still represent one pending operation, not a background job or streaming protocol.
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Start a local listener that the aio requests will target.
@@ -914,8 +942,20 @@ FROM ducknng_decode_frame(getvariable('manifest_frame'));
 SELECT ok, type_name, name
 FROM ducknng_decode_frame(getvariable('exec_frame'));
 
+-- A higher-level convenience wrapper can decode the collected frame rows directly.
+SET VARIABLE manifest_aio_decoded = ducknng_get_rpc_manifest_raw_aio(
+  'ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc',
+  1000,
+  0::UBIGINT
+);
+
+SELECT aio_id, ok, frame_ok, type_name, name
+FROM ducknng_aio_collect_decoded(list_value(getvariable('manifest_aio_decoded')), 1000);
+
 -- Drop the terminal aio handles, remove the temp state, and stop the demo server.
-SELECT ducknng_aio_drop(getvariable('manifest_aio')) AND ducknng_aio_drop(getvariable('exec_aio')) AS dropped;
+SELECT ducknng_aio_drop(getvariable('manifest_aio')) AND
+       ducknng_aio_drop(getvariable('exec_aio')) AND
+       ducknng_aio_drop(getvariable('manifest_aio_decoded')) AS dropped;
 DROP TABLE rpc_aio_collect;
 SELECT ducknng_stop_server('sql_rpc_aio_demo');
 ```
@@ -1034,6 +1074,13 @@ SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
   0::UBIGINT,
   0::UBIGINT
 );
+
+SELECT ducknng_frame_version(getvariable('raw_session_fetch_frame')::BLOB) AS version,
+       ducknng_frame_type(getvariable('raw_session_fetch_frame')::BLOB) AS type,
+       ducknng_frame_type_name(getvariable('raw_session_fetch_frame')::BLOB) AS type_name,
+       ducknng_frame_name(getvariable('raw_session_fetch_frame')::BLOB) AS name,
+       ducknng_frame_end_of_stream(getvariable('raw_session_fetch_frame')::BLOB) AS end_of_stream,
+       ducknng_frame_flags(getvariable('raw_session_fetch_frame')::BLOB) > 0 AS has_flags;
 
 SELECT *
 FROM ducknng_parse_body(
@@ -1651,11 +1698,11 @@ The same pipe-event family is useful beyond admission. NNG exposes `ADD_PRE`, `A
 
 ## Status
 
-What is sealed and runnable in v1: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level exact-path HTTP routes with SQL response rows and request-context/body helpers; fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
+What is sealed and runnable in v1: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level HTTP routes with exact, prefix, or template matching plus SQL response rows and request-context/body helpers; fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
 
 Intentionally deferred:
 
-- Prefix/path-parameter HTTP routing, route-local auth policies, and richer web-toolkit conveniences beyond the current exact-path low-level framework.
+- Route-local auth policies, automatic query-parameter helpers, and richer web-toolkit conveniences beyond the current low-level route framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a table-function path.
 - Routing/forwarding and mesh scheduling as sealed APIs — the pipe monitor and active-pipe snapshot are the membership/telemetry foundation that comes first.

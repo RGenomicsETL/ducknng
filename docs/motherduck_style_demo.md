@@ -43,9 +43,15 @@ The route demo therefore uses the raw synchronous session helpers instead:
 
 and then inspects the returned frames with:
 
+- `ducknng_frame_version(...)`
+- `ducknng_frame_type(...)`
+- `ducknng_frame_flags(...)`
+- `ducknng_frame_type_name(...)`
+- `ducknng_frame_name(...)`
 - `ducknng_frame_payload(...)`
 - `ducknng_frame_payload_text(...)`
 - `ducknng_frame_error_text(...)`
+- `ducknng_frame_end_of_stream(...)`
 
 That keeps the gateway route layer generic. The route can carry tenant affinity, subscriber affinity, backend `session_id`, backend `session_token`, and fetch hints in a gateway-owned token without depending on bind-time table-function behavior.
 
@@ -121,7 +127,7 @@ It returns the first Arrow batch as the HTTP body when rows are available. If mo
 
 This demo is a good foundation for a real product edge because it proves the pieces that matter:
 
-- exact-path HTTP routes can be the public edge
+- low-level HTTP routes can be the public edge
 - the backend query plane can stay private
 - route SQL can do dynamic session control without transport-specific RPC copies
 - continuation tokens can remain gateway-owned instead of leaking raw backend state as the public API

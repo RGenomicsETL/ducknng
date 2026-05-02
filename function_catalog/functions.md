@@ -49,6 +49,12 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_frame_payload` | scalar | `frame` | `BLOB` | Extract the payload bytes from one raw ducknng frame. |
 | `ducknng_frame_payload_text` | scalar | `frame` | `VARCHAR` | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload. |
 | `ducknng_frame_error_text` | scalar | `frame` | `VARCHAR` | Extract the protocol-level error text from a raw ducknng error frame. |
+| `ducknng_frame_version` | scalar | `frame` | `UTINYINT` | Extract the protocol version field from one raw ducknng frame. |
+| `ducknng_frame_type` | scalar | `frame` | `UTINYINT` | Extract the numeric reply type field from one raw ducknng frame. |
+| `ducknng_frame_flags` | scalar | `frame` | `UINTEGER` | Extract the reply flags bitset from one raw ducknng frame. |
+| `ducknng_frame_type_name` | scalar | `frame` | `VARCHAR` | Extract the symbolic reply type name from one raw ducknng frame. |
+| `ducknng_frame_name` | scalar | `frame` | `VARCHAR` | Extract the method or reply name field from one raw ducknng frame. |
+| `ducknng_frame_end_of_stream` | scalar | `frame` | `BOOLEAN` | Report whether one raw ducknng frame carries the end-of-stream reply flag. |
 
 ## Transport Security
 
@@ -89,9 +95,11 @@ This file is generated from `function_catalog/functions.yaml`.
 | name | kind | arguments | returns | description |
 |---|---|---|---|---|
 | `ducknng_register_http_route` | scalar | `service_name, method, path, handler_sql[, request_max_bytes]` | `BOOLEAN` | Register one exact-path HTTP route beside the framed RPC mount of an existing http:// or https:// service. |
+| `ducknng_register_http_route_pattern` | scalar | `service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes]` | `BOOLEAN` | Register one low-level HTTP route pattern beside the framed RPC mount using exact, prefix, or template matching. |
 | `ducknng_unregister_http_route` | scalar | `service_name, method, path` | `BOOLEAN` | Remove one previously registered exact-path HTTP route from a service. |
-| `ducknng_list_http_routes` | table |  | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)` | List the currently registered exact-path HTTP routes across running services. |
-| `ducknng_http_request` | table |  | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler. |
+| `ducknng_unregister_http_route_pattern` | scalar | `service_name, method, match_kind, path_pattern` | `BOOLEAN` | Remove one previously registered prefix, template, or explicit exact route pattern from a service. |
+| `ducknng_list_http_routes` | table |  | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)` | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
+| `ducknng_http_request` | table |  | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler. |
 | `ducknng_http_request_body` | table |  | `TABLE(body BLOB, body_text VARCHAR)` | Expose the current HTTP request body while SQL runs inside an active route handler. |
 
 ## Async I/O
@@ -111,6 +119,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_aio_ready` | scalar | `aio_id` | `BOOLEAN` | Return whether an aio handle has reached a terminal state. |
 | `ducknng_aio_status` | table | `aio_id` | `TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR)` | Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion. |
 | `ducknng_aio_collect` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB)` | Wait for any requested aio handles to finish and return one row per newly collected terminal result. |
+| `ducknng_aio_collect_decoded` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly. |
 | `ducknng_aio_cancel` | scalar | `aio_id` | `BOOLEAN` | Request cancellation of a pending aio handle. |
 | `ducknng_aio_drop` | scalar | `aio_id` | `BOOLEAN` | Release a terminal aio handle from the runtime registry. |
 

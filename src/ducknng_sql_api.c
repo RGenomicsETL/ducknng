@@ -298,7 +298,7 @@ int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_s
 int ducknng_register_sql_api(duckdb_connection connection, ducknng_runtime *rt) {
     ducknng_sql_context ctx;
     ctx.rt = rt;
-    ctx.is_init_connection = rt && connection == rt->init_con;
+    ctx.is_init_connection = rt && connection == ducknng_runtime_execution_connection(rt);
     if (!ducknng_register_sql_service(connection, &ctx)) return 0;
     if (!ducknng_register_sql_http(connection, &ctx)) return 0;
     if (!ducknng_register_sql_auth(connection, &ctx)) return 0;

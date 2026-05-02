@@ -191,7 +191,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     (void)method;
     memset(&open_req, 0, sizeof(open_req));
     memset(&result, 0, sizeof(result));
-    if (!svc || !svc->rt || !svc->rt->init_con || !req || !req->frame || !reply) {
+    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !req || !req->frame || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing query_open execution context");
         return -1;
     }
@@ -202,7 +202,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     }
     ducknng_mutex_lock(&svc->mu);
     ducknng_service_enter_request_sql(svc);
-    if (duckdb_query(svc->rt->init_con, open_req.sql, &result) == DuckDBError) {
+    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt), open_req.sql, &result) == DuckDBError) {
         char *detail = ducknng_strdup(duckdb_result_error(&result));
         ducknng_service_leave_request_sql(svc);
         duckdb_destroy_result(&result);
@@ -405,7 +405,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
 
     memset(&exec_req, 0, sizeof(exec_req));
     memset(&result, 0, sizeof(result));
-    if (!svc || !svc->rt || !svc->rt->init_con || !req || !req->frame || !reply) {
+    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !req || !req->frame || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
             "ducknng: missing execution context");
         return -1;
@@ -421,7 +421,8 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     if (exec_req.want_result) {
         ducknng_mutex_lock(&svc->mu);
         ducknng_service_enter_request_sql(svc);
-        if (ducknng_query_to_ipc_stream(svc->rt->init_con, exec_req.sql, &payload, &payload_len, &errmsg) != 0) {
+        if (ducknng_query_to_ipc_stream(ducknng_runtime_execution_connection(svc->rt),
+                exec_req.sql, &payload, &payload_len, &errmsg) != 0) {
             ducknng_service_leave_request_sql(svc);
             ducknng_mutex_unlock(&svc->mu);
             ducknng_exec_request_destroy(&exec_req);
@@ -439,7 +440,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     } else {
         ducknng_mutex_lock(&svc->mu);
         ducknng_service_enter_request_sql(svc);
-        if (duckdb_query(svc->rt->init_con, exec_req.sql, &result) == DuckDBError) {
+        if (duckdb_query(ducknng_runtime_execution_connection(svc->rt), exec_req.sql, &result) == DuckDBError) {
             char *exec_err = ducknng_strdup(duckdb_result_error(&result));
             ducknng_service_leave_request_sql(svc);
             duckdb_destroy_result(&result);

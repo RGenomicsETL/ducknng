@@ -1,6 +1,6 @@
 # ducknng HTTP route framework
 
-This document defines the landed low-level HTTP route layer that lives beside the framed RPC mount described in `docs/http.md`. It is intentionally narrower than a full web toolkit. The purpose of the layer is to let a service expose exact-path HTTP handlers without minting HTTP-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`.
+This document defines the landed low-level HTTP route layer that lives beside the framed RPC mount described in `docs/http.md`. It is intentionally narrower than a full web toolkit. The purpose of the layer is to let a service expose additive exact, prefix, or template HTTP handlers without minting HTTP-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`.
 
 The route layer is part of the public SQL surface, but it is not part of the manifest-derived RPC surface. A registered HTTP route is a local service configuration entry. It is not a registry method, it does not appear in the `manifest` method list, and it does not change the frame-over-HTTP contract at the RPC mount.
 
@@ -11,13 +11,16 @@ The current route surface is:
 ```sql
 ducknng_register_http_route(service_name, method, path, handler_sql)
 ducknng_register_http_route(service_name, method, path, handler_sql, request_max_bytes)
+ducknng_register_http_route_pattern(service_name, method, match_kind, path_pattern, handler_sql)
+ducknng_register_http_route_pattern(service_name, method, match_kind, path_pattern, handler_sql, request_max_bytes)
 ducknng_unregister_http_route(service_name, method, path)
+ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pattern)
 ducknng_list_http_routes()
 ducknng_http_request()
 ducknng_http_request_body()
 ```
 
-`ducknng_register_http_route(...)` installs one exact method/path match on an existing `http://` or `https://` service. `ducknng_unregister_http_route(...)` removes one installed route and returns `FALSE` when no matching route exists. `ducknng_list_http_routes()` exposes the current route registry as a table. `ducknng_http_request()` and `ducknng_http_request_body()` are request-context helpers that only emit a row while SQL is running inside an active route handler.
+`ducknng_register_http_route(...)` installs one exact method/path match on an existing `http://` or `https://` service. `ducknng_register_http_route_pattern(...)` is the additive generic form for richer low-level routing and currently supports `match_kind = 'exact' | 'prefix' | 'template'`. `ducknng_unregister_http_route(...)` and `ducknng_unregister_http_route_pattern(...)` remove installed routes and return `FALSE` when no matching route exists. `ducknng_list_http_routes()` exposes the current route registry as a table. `ducknng_http_request()` and `ducknng_http_request_body()` are request-context helpers that only emit a row while SQL is running inside an active route handler.
 
 ## Route registration rules
 
@@ -25,12 +28,19 @@ Registration is deliberately strict:
 
 - the target service must already exist and must use `http://` or `https://`
 - `method` is normalized to uppercase and must be a valid HTTP token
-- `path` must be an absolute path and must not contain a query string or fragment
+- `path` / `path_pattern` must be an absolute path and must not contain a query string or fragment
+- `match_kind = 'template'` requires one or more whole-segment `{name}` captures, where `name` matches `[A-Za-z_][A-Za-z0-9_]*`
 - the route path must not conflict with the framed RPC mount path from the service listen URL
 - `request_max_bytes`, when non-zero, must be less than or equal to the service `recv_max_bytes`
-- one service cannot register the same normalized `method` plus `path` twice
+- one service cannot register the same normalized `method` plus `match_kind` plus `path` twice
 
 Route registration and route listing are rejected inside SQL authorizer callbacks and inside active request handlers. That avoids recursive service-owned SQL entry and lock-order problems on the shared execution lane.
+
+When several registered routes could match one request, the current selection order is deliberate and stable:
+
+- exact beats template
+- template beats prefix
+- within the same match kind, the longer stored path pattern wins
 
 ## Request context
 
@@ -48,7 +58,9 @@ Inside an active route handler, `ducknng_http_request()` returns exactly one row
 - `remote_addr`
 - `remote_ip`
 - `route_method`
+- `route_match_kind`
 - `route_path`
+- `path_params_json`
 - `body_bytes`
 - `route_id`
 - `remote_port`
@@ -61,6 +73,8 @@ Inside an active route handler, `ducknng_http_request()` returns exactly one row
 `body_text` is populated only when the request body looks like valid text under the same UTF-8 check used by the other SQL-visible body helpers. Outside an active route handler, both tables emit zero rows instead of raising an error.
 
 `headers_json` uses the same canonical array-of-objects form as `ducknng_ncurl(...)`, for example `[{"name":"Content-Type","value":"application/json"}]`.
+
+`route_match_kind` and `route_path` identify the matched registered route pattern. For `template` routes, `path_params_json` exposes the extracted captures as a JSON object such as `{"tenant_id":"alice","item_id":"42"}`. Exact and prefix routes leave `path_params_json` as `NULL`.
 
 ## Response contract
 
@@ -142,8 +156,6 @@ SELECT ducknng_register_http_route(
 
 The landed layer is intentionally low-level. These are still deferred:
 
-- prefix or wildcard route matching
-- path-parameter extraction
 - automatic query-parameter parsing helpers
 - static asset serving
 - HTTP-carrier WebSocket, SSE, or NDJSON streaming

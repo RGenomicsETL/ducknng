@@ -1790,6 +1790,26 @@ static int register_aio_collect_macro(duckdb_connection con) {
     return execute_sql(con, sql);
 }
 
+static int register_aio_collect_decoded_macro(duckdb_connection con) {
+    const char *sql =
+        "CREATE OR REPLACE MACRO ducknng_aio_collect_decoded(aio_ids, wait_ms) AS TABLE "
+        "WITH collected AS (SELECT * FROM ducknng_aio_collect(aio_ids, wait_ms)) "
+        "SELECT c.aio_id AS aio_id, "
+        "       c.ok AS ok, "
+        "       c.error AS error, "
+        "       ducknng_frame_version(c.frame) IS NOT NULL AS frame_ok, "
+        "       ducknng_frame_error_text(c.frame) AS frame_error, "
+        "       ducknng_frame_version(c.frame) AS version, "
+        "       ducknng_frame_type(c.frame) AS type, "
+        "       ducknng_frame_flags(c.frame) AS flags, "
+        "       ducknng_frame_type_name(c.frame) AS type_name, "
+        "       ducknng_frame_name(c.frame) AS name, "
+        "       ducknng_frame_payload(c.frame) AS payload, "
+        "       ducknng_frame_payload_text(c.frame) AS payload_text "
+        "FROM collected AS c";
+    return execute_sql(con, sql);
+}
+
 static int register_ncurl_aio_collect_macro(duckdb_connection con) {
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_ncurl_aio_collect(aio_ids, wait_ms) AS TABLE "
@@ -1849,6 +1869,7 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!register_aio_status_scalar_named(con, ctx, "ducknng__aio_status_row")) return 0;
     if (!register_aio_status_macro(con)) return 0;
     if (!register_aio_collect_macro(con)) return 0;
+    if (!register_aio_collect_decoded_macro(con)) return 0;
     if (!register_ncurl_aio_collect_macro(con)) return 0;
     return 1;
 }

@@ -97,6 +97,46 @@ void ducknng_sleep_ms(uint64_t ms) {
 #endif
 }
 
+int ducknng_ascii_tolower_int(int c) {
+    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+}
+
+int ducknng_ascii_ieq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (ducknng_ascii_tolower_int((unsigned char)*a) !=
+                ducknng_ascii_tolower_int((unsigned char)*b)) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+int ducknng_ascii_istarts_with(const char *s, const char *prefix) {
+    if (!s || !prefix) return 0;
+    while (*prefix) {
+        if (!*s || ducknng_ascii_tolower_int((unsigned char)*s) !=
+                ducknng_ascii_tolower_int((unsigned char)*prefix)) {
+            return 0;
+        }
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
+int ducknng_ascii_iends_with(const char *s, const char *suffix) {
+    size_t slen;
+    size_t suffix_len;
+    if (!s || !suffix) return 0;
+    slen = strlen(s);
+    suffix_len = strlen(suffix);
+    if (suffix_len > slen) return 0;
+    return ducknng_ascii_ieq(s + slen - suffix_len, suffix);
+}
+
 uint16_t ducknng_le16_read(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
 uint32_t ducknng_le32_read(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 uint64_t ducknng_le64_read(const uint8_t *p) { return (uint64_t)ducknng_le32_read(p) | ((uint64_t)ducknng_le32_read(p + 4) << 32); }

@@ -4,6 +4,10 @@
 
 ### Latest additions
 
+- Split the subscriber gateway demo into dedicated support modules while keeping `demo/motherduck_gateway.py` as the stable public entrypoint for `make motherduck_demo` and the rendered Rmd walkthrough.
+- Added additive low-level HTTP route patterns with `ducknng_register_http_route_pattern(...)` and `ducknng_unregister_http_route_pattern(...)`, covering `exact`, `prefix`, and `template` matching, plus `route_match_kind` and `path_params_json` in `ducknng_http_request()` and `match_kind` in `ducknng_list_http_routes()`.
+- Added `ducknng_aio_collect_decoded(...)` as the first structured async convenience wrapper over the existing raw-frame aio substrate, projecting decoded envelope columns directly without changing the underlying one-operation aio contract.
+- Centralized the remaining duplicated ASCII case-folding helpers and introduced an explicit internal runtime execution-lane abstraction over the current `shared_serialized_connection` model, so the code no longer hard-codes `init_con` as the only future execution-policy boundary.
 - Added `make check_news` plus `scripts/check_news.py` so user-visible changes in `src/`, `docs/`, `demo/`, `README.Rmd`, and the main build workflow now fail locally unless `NEWS.md` is updated too; `BASE=<ref>` makes the same check usable on commit ranges in CI.
 - Added `make docs` as the umbrella documentation target over the rendered README and the dedicated subscriber-gateway walkthrough, instead of keeping those render paths as separate ad hoc commands.
 - Removed the temporary `ducknng_start_http_server(...)` alias and made `ducknng_start_server(...)` the single scheme-routed server entrypoint across NNG and HTTP/HTTPS, with `contexts = 1` as the explicit HTTP carrier rule.

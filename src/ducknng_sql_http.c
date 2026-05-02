@@ -11,6 +11,7 @@ typedef struct {
     char *service_name;
     uint64_t route_id;
     char *method;
+    char *match_kind;
     char *path;
     uint64_t request_max_bytes;
     char *handler_sql;
@@ -44,7 +45,9 @@ typedef struct {
     int32_t remote_port;
     uint64_t route_id;
     char *route_method;
+    char *route_match_kind;
     char *route_path;
+    char *path_params_json;
 } ducknng_http_request_bind_data;
 
 typedef struct {
@@ -65,6 +68,7 @@ static void destroy_http_routes_bind_data(void *ptr) {
     for (i = 0; i < data->row_count; i++) {
         if (data->rows[i].service_name) duckdb_free(data->rows[i].service_name);
         if (data->rows[i].method) duckdb_free(data->rows[i].method);
+        if (data->rows[i].match_kind) duckdb_free(data->rows[i].match_kind);
         if (data->rows[i].path) duckdb_free(data->rows[i].path);
         if (data->rows[i].handler_sql) duckdb_free(data->rows[i].handler_sql);
     }
@@ -110,7 +114,9 @@ static void destroy_http_request_bind_data(void *ptr) {
     if (data->remote_addr) duckdb_free(data->remote_addr);
     if (data->remote_ip) duckdb_free(data->remote_ip);
     if (data->route_method) duckdb_free(data->route_method);
+    if (data->route_match_kind) duckdb_free(data->route_match_kind);
     if (data->route_path) duckdb_free(data->route_path);
+    if (data->path_params_json) duckdb_free(data->path_params_json);
     duckdb_free(data);
 }
 
@@ -236,6 +242,110 @@ static void ducknng_unregister_http_route_scalar(duckdb_function_info info, duck
     }
 }
 
+static void ducknng_register_http_route_pattern_scalar(duckdb_function_info info, duckdb_data_chunk input,
+    duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t ncols = duckdb_data_chunk_get_column_count(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (ducknng_http_sql_reject_inside_request_handler(info, ctx,
+            "ducknng: cannot register HTTP routes from a request handler")) return;
+    for (row = 0; row < count; row++) {
+        char *service_name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *method = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        char *match_kind = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        char *path_pattern = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 3), row);
+        char *handler_sql = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 4), row);
+        uint64_t request_max_bytes = ncols > 5 ? arg_u64(duckdb_data_chunk_get_vector(input, 5), row, 0) : 0;
+        ducknng_service *svc;
+        char *errmsg = NULL;
+        if (!ctx || !ctx->rt || !service_name || !method || !match_kind ||
+            !path_pattern || !handler_sql) {
+            if (service_name) duckdb_free(service_name);
+            if (method) duckdb_free(method);
+            if (match_kind) duckdb_free(match_kind);
+            if (path_pattern) duckdb_free(path_pattern);
+            if (handler_sql) duckdb_free(handler_sql);
+            duckdb_scalar_function_set_error(info,
+                "ducknng: service_name, method, match_kind, path_pattern, and handler_sql are required");
+            return;
+        }
+        svc = ducknng_runtime_find_service(ctx->rt, service_name);
+        if (!svc || ducknng_service_register_http_route_pattern(svc, method, match_kind,
+                path_pattern, handler_sql, request_max_bytes, &errmsg) != 0) {
+            if (service_name) duckdb_free(service_name);
+            if (method) duckdb_free(method);
+            if (match_kind) duckdb_free(match_kind);
+            if (path_pattern) duckdb_free(path_pattern);
+            if (handler_sql) duckdb_free(handler_sql);
+            duckdb_scalar_function_set_error(info,
+                errmsg ? errmsg : "ducknng: failed to register HTTP route pattern");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        duckdb_free(service_name);
+        duckdb_free(method);
+        duckdb_free(match_kind);
+        duckdb_free(path_pattern);
+        duckdb_free(handler_sql);
+        out[row] = true;
+    }
+}
+
+static void ducknng_unregister_http_route_pattern_scalar(duckdb_function_info info, duckdb_data_chunk input,
+    duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (ducknng_http_sql_reject_inside_request_handler(info, ctx,
+            "ducknng: cannot unregister HTTP routes from a request handler")) return;
+    for (row = 0; row < count; row++) {
+        char *service_name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *method = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        char *match_kind = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        char *path_pattern = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 3), row);
+        ducknng_service *svc;
+        char *errmsg = NULL;
+        int removed;
+        if (!ctx || !ctx->rt || !service_name || !method || !match_kind || !path_pattern) {
+            if (service_name) duckdb_free(service_name);
+            if (method) duckdb_free(method);
+            if (match_kind) duckdb_free(match_kind);
+            if (path_pattern) duckdb_free(path_pattern);
+            duckdb_scalar_function_set_error(info,
+                "ducknng: service_name, method, match_kind, and path_pattern are required");
+            return;
+        }
+        svc = ducknng_runtime_find_service(ctx->rt, service_name);
+        if (!svc) {
+            duckdb_free(service_name);
+            duckdb_free(method);
+            duckdb_free(match_kind);
+            duckdb_free(path_pattern);
+            duckdb_scalar_function_set_error(info, "ducknng: service not found");
+            return;
+        }
+        removed = ducknng_service_unregister_http_route_pattern(svc, method, match_kind,
+            path_pattern, &errmsg);
+        duckdb_free(service_name);
+        duckdb_free(method);
+        duckdb_free(match_kind);
+        duckdb_free(path_pattern);
+        if (removed < 0) {
+            duckdb_scalar_function_set_error(info,
+                errmsg ? errmsg : "ducknng: failed to unregister HTTP route pattern");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        if (errmsg) duckdb_free(errmsg);
+        out[row] = removed ? true : false;
+    }
+}
+
 static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     ducknng_http_routes_bind_data *bind;
@@ -281,10 +391,13 @@ static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
             bind->rows[row].request_max_bytes = routes[j].request_max_bytes;
             bind->rows[row].service_name = svc->name ? ducknng_strdup(svc->name) : NULL;
             bind->rows[row].method = routes[j].method ? ducknng_strdup(routes[j].method) : NULL;
+            bind->rows[row].match_kind = ducknng_strdup(
+                ducknng_http_route_match_kind_name(routes[j].match_kind));
             bind->rows[row].path = routes[j].path ? ducknng_strdup(routes[j].path) : NULL;
             bind->rows[row].handler_sql = routes[j].handler_sql ? ducknng_strdup(routes[j].handler_sql) : NULL;
             if ((svc->name && !bind->rows[row].service_name) ||
                 (routes[j].method && !bind->rows[row].method) ||
+                !bind->rows[row].match_kind ||
                 (routes[j].path && !bind->rows[row].path) ||
                 (routes[j].handler_sql && !bind->rows[row].handler_sql)) {
                 ducknng_mutex_unlock(&ctx->rt->mu);
@@ -307,6 +420,7 @@ static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "service_name", type);
     duckdb_bind_add_result_column(info, "method", type);
+    duckdb_bind_add_result_column(info, "match_kind", type);
     duckdb_bind_add_result_column(info, "path", type);
     duckdb_bind_add_result_column(info, "handler_sql", type);
     duckdb_destroy_logical_type(&type);
@@ -358,10 +472,12 @@ static void ducknng_list_http_routes_scan(duckdb_function_info info, duckdb_data
         else set_null(duckdb_data_chunk_get_vector(output, 3), i);
         if (row->method) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), i, row->method);
         else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->path) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->path);
+        if (row->match_kind) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->match_kind);
         else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->handler_sql) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->handler_sql);
+        if (row->path) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->path);
         else set_null(duckdb_data_chunk_get_vector(output, 6), i);
+        if (row->handler_sql) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), i, row->handler_sql);
+        else set_null(duckdb_data_chunk_get_vector(output, 7), i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -399,7 +515,11 @@ static void ducknng_http_request_bind(duckdb_bind_info info) {
         bind->remote_addr = ducknng_sql_sockaddr_addr_dup(request_ctx->remote_addr, &bind->remote_ip, &bind->remote_port);
         bind->route_id = request_ctx->route.route_id;
         bind->route_method = request_ctx->route.method ? ducknng_strdup(request_ctx->route.method) : NULL;
+        bind->route_match_kind = ducknng_strdup(
+            ducknng_http_route_match_kind_name(request_ctx->route.match_kind));
         bind->route_path = request_ctx->route.path ? ducknng_strdup(request_ctx->route.path) : NULL;
+        bind->path_params_json = request_ctx->path_params_json ?
+            ducknng_strdup(request_ctx->path_params_json) : NULL;
     }
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "service_name", type);
@@ -414,7 +534,9 @@ static void ducknng_http_request_bind(duckdb_bind_info info) {
     duckdb_bind_add_result_column(info, "remote_addr", type);
     duckdb_bind_add_result_column(info, "remote_ip", type);
     duckdb_bind_add_result_column(info, "route_method", type);
+    duckdb_bind_add_result_column(info, "route_match_kind", type);
     duckdb_bind_add_result_column(info, "route_path", type);
+    duckdb_bind_add_result_column(info, "path_params_json", type);
     duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "body_bytes", type);
@@ -513,10 +635,12 @@ static void ducknng_http_request_scan(duckdb_function_info info, duckdb_data_chu
     ASSIGN_REQ_STRING(9, bind->remote_addr);
     ASSIGN_REQ_STRING(10, bind->remote_ip);
     ASSIGN_REQ_STRING(11, bind->route_method);
-    ASSIGN_REQ_STRING(12, bind->route_path);
-    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 13)))[0] = bind->body_bytes;
-    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 14)))[0] = bind->route_id;
-    ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 15)))[0] = bind->remote_port;
+    ASSIGN_REQ_STRING(12, bind->route_match_kind);
+    ASSIGN_REQ_STRING(13, bind->route_path);
+    ASSIGN_REQ_STRING(14, bind->path_params_json);
+    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 15)))[0] = bind->body_bytes;
+    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 16)))[0] = bind->route_id;
+    ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 17)))[0] = bind->remote_port;
 #undef ASSIGN_REQ_STRING
     init->emitted = 1;
     duckdb_data_chunk_set_size(output, 1);
@@ -543,13 +667,22 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
     duckdb_type route_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     duckdb_type route_types_with_limit[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     duckdb_type unregister_types[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+    duckdb_type route_pattern_types[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+    duckdb_type route_pattern_types_with_limit[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
+    duckdb_type unregister_pattern_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route", 4,
             ducknng_register_http_route_scalar, ctx, route_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route", 5,
             ducknng_register_http_route_scalar, ctx, route_types_with_limit, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route_pattern", 5,
+            ducknng_register_http_route_pattern_scalar, ctx, route_pattern_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route_pattern", 6,
+            ducknng_register_http_route_pattern_scalar, ctx, route_pattern_types_with_limit, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_route", 3,
             ducknng_unregister_http_route_scalar, ctx, unregister_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_route_pattern", 4,
+            ducknng_unregister_http_route_pattern_scalar, ctx, unregister_pattern_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_http_routes", ctx, 0, NULL,
             ducknng_list_http_routes_bind, ducknng_list_http_routes_init, ducknng_list_http_routes_scan)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_http_request", ctx, 0, NULL,

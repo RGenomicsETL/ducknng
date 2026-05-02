@@ -49,7 +49,23 @@ emit_sql_result <- function(display_code, run_code = display_code, autoload = TR
   cat("```text\n", paste(out, collapse = "\n"), "\n```\n\n", sep = "")
 }
 
-raw_hex <- function(x) paste(sprintf("%02X", as.integer(x)), collapse = "")
+body_raw <- function(x) {
+  if (is.null(x) || !length(x)) {
+    return(raw())
+  }
+  if (typeof(x) == "raw") {
+    return(x)
+  }
+  if (is.integer(x) || is.numeric(x)) {
+    return(as.raw(as.integer(x) %% 256L))
+  }
+  if (is.character(x)) {
+    return(charToRaw(x))
+  }
+  stop("unsupported response body type")
+}
+
+raw_hex <- function(x) paste(sprintf("%02X", as.integer(body_raw(x))), collapse = "")
 
 decode_arrow_output <- function(raw_body) {
   run_duckdb_sql(
@@ -93,7 +109,7 @@ json_body <- function(resp) {
   if (is.null(resp$data) || !length(resp$data)) {
     return(list())
   }
-  fromJSON(rawToChar(resp$data))
+  fromJSON(rawToChar(body_raw(resp$data)))
 }
 
 free_port <- function() {

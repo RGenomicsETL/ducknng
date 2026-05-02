@@ -983,6 +983,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
     size_t body_len = 0;
     char *request_path = NULL;
     char *headers_json = NULL;
+    char *path_params_json = NULL;
     char *caller_identity = NULL;
     nng_sockaddr remote_addr;
     int have_remote_addr = 0;
@@ -1047,7 +1048,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
     {
         char *route_err = NULL;
         int route_found = ducknng_service_lookup_http_route(state->svc,
-            method ? method : "GET", request_path, &route, &route_err);
+            method ? method : "GET", request_path, &route, &path_params_json, &route_err);
         if (route_found < 0) {
             rv = ducknng_http_alloc_text_response(&res, 500,
                 route_err ? route_err : "ducknng: failed to resolve HTTP route");
@@ -1116,6 +1117,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
         request_ctx.headers_json = headers_json;
         request_ctx.body = (const uint8_t *)body;
         request_ctx.body_len = body_len;
+        request_ctx.path_params_json = path_params_json;
         request_ctx.caller_identity = caller_identity;
         request_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
         if (ducknng_http_route_copy(&request_ctx.route, &route) != 0) {
@@ -1147,6 +1149,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
 done:
     if (request_path) duckdb_free(request_path);
     if (headers_json) duckdb_free(headers_json);
+    if (path_params_json) duckdb_free(path_params_json);
     if (caller_identity) duckdb_free(caller_identity);
     ducknng_http_route_reset(&request_ctx.route);
     ducknng_http_route_reset(&route);
