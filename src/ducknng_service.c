@@ -32,6 +32,55 @@ static void ducknng_service_clear_authorizer(ducknng_service *svc) {
     svc->authorizer_active = 0;
 }
 
+void ducknng_http_route_reset(ducknng_http_route *route) {
+    if (!route) return;
+    if (route->method) duckdb_free(route->method);
+    if (route->path) duckdb_free(route->path);
+    if (route->handler_sql) duckdb_free(route->handler_sql);
+    memset(route, 0, sizeof(*route));
+}
+
+int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *src) {
+    if (!dst || !src) return -1;
+    memset(dst, 0, sizeof(*dst));
+    dst->route_id = src->route_id;
+    dst->request_max_bytes = src->request_max_bytes;
+    dst->method = src->method ? ducknng_strdup(src->method) : NULL;
+    dst->path = src->path ? ducknng_strdup(src->path) : NULL;
+    dst->handler_sql = src->handler_sql ? ducknng_strdup(src->handler_sql) : NULL;
+    if ((src->method && !dst->method) || (src->path && !dst->path) ||
+        (src->handler_sql && !dst->handler_sql)) {
+        ducknng_http_route_reset(dst);
+        return -1;
+    }
+    return 0;
+}
+
+void ducknng_http_route_reply_init(ducknng_http_route_reply *reply) {
+    if (!reply) return;
+    memset(reply, 0, sizeof(*reply));
+    reply->status = 200;
+}
+
+void ducknng_http_route_reply_reset(ducknng_http_route_reply *reply) {
+    if (!reply) return;
+    if (reply->headers_json) duckdb_free(reply->headers_json);
+    if (reply->content_type) duckdb_free(reply->content_type);
+    if (reply->body) duckdb_free(reply->body);
+    if (reply->body_text) duckdb_free(reply->body_text);
+    ducknng_http_route_reply_init(reply);
+}
+
+static void ducknng_service_clear_http_routes(ducknng_service *svc) {
+    size_t i;
+    if (!svc || !svc->http_routes) return;
+    for (i = 0; i < svc->http_route_count; i++) ducknng_http_route_reset(&svc->http_routes[i]);
+    duckdb_free(svc->http_routes);
+    svc->http_routes = NULL;
+    svc->http_route_count = 0;
+    svc->http_route_cap = 0;
+}
+
 void ducknng_service_enter_request_sql(ducknng_service *svc) {
     if (!svc || !svc->rt) return;
     ducknng_runtime_init_con_lock(svc->rt);
@@ -41,6 +90,19 @@ void ducknng_service_enter_request_sql(ducknng_service *svc) {
 void ducknng_service_leave_request_sql(ducknng_service *svc) {
     if (!svc || !svc->rt) return;
     ducknng_runtime_init_con_unlock(svc->rt);
+}
+
+void ducknng_service_enter_http_route_sql(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx) {
+    if (!svc || !svc->rt) return;
+    ducknng_service_enter_request_sql(svc);
+    ducknng_runtime_current_http_request_context_set(svc->rt, request_ctx);
+}
+
+void ducknng_service_leave_http_route_sql(ducknng_service *svc) {
+    if (!svc || !svc->rt) return;
+    ducknng_runtime_current_http_request_context_set(svc->rt, NULL);
+    ducknng_service_leave_request_sql(svc);
 }
 
 void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
@@ -636,6 +698,26 @@ static int ducknng_chunk_uint64_value(duckdb_data_chunk chunk, int col, idx_t ro
     return 0;
 }
 
+static uint8_t *ducknng_chunk_blob_dup(duckdb_data_chunk chunk, int col, idx_t row, size_t *out_len) {
+    duckdb_vector vec;
+    duckdb_string_t *data;
+    const char *src;
+    uint32_t len;
+    uint8_t *out;
+    if (out_len) *out_len = 0;
+    if (!chunk || col < 0) return NULL;
+    vec = duckdb_data_chunk_get_vector(chunk, (idx_t)col);
+    if (ducknng_chunk_value_is_null(vec, row)) return NULL;
+    data = (duckdb_string_t *)duckdb_vector_get_data(vec);
+    src = duckdb_string_t_data(&data[row]);
+    len = duckdb_string_t_length(data[row]);
+    out = (uint8_t *)duckdb_malloc((size_t)len);
+    if (!out && len > 0) return NULL;
+    if (len > 0) memcpy(out, src, len);
+    if (out_len) *out_len = (size_t)len;
+    return out;
+}
+
 static int ducknng_parse_authorizer_result(duckdb_result *result,
     ducknng_authorizer_decision *decision, char **errmsg) {
     duckdb_data_chunk chunk = NULL;
@@ -749,6 +831,148 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
     duckdb_destroy_result(&result);
     if (rc != 0 && errmsg) *errmsg = parse_err ? parse_err : ducknng_strdup(decision->reason ? decision->reason : "ducknng: SQL authorizer denied request");
     else if (parse_err) duckdb_free(parse_err);
+    return rc;
+}
+
+static int ducknng_parse_http_route_result(duckdb_result *result,
+    ducknng_http_route_reply *reply, char **errmsg) {
+    duckdb_data_chunk chunk = NULL;
+    duckdb_data_chunk extra = NULL;
+    idx_t rows;
+    int status_col;
+    int headers_col;
+    int content_type_col;
+    int body_col;
+    int body_text_col;
+    int32_t status_value = 0;
+    int rc = -1;
+    if (errmsg) *errmsg = NULL;
+    if (!result || !reply) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route result");
+        return -1;
+    }
+    chunk = duckdb_fetch_chunk(*result);
+    rows = chunk ? duckdb_data_chunk_get_size(chunk) : 0;
+    if (rows != 1) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route handler must return exactly one row");
+        goto done;
+    }
+    extra = duckdb_fetch_chunk(*result);
+    if (extra && duckdb_data_chunk_get_size(extra) > 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route handler must return exactly one row");
+        goto done;
+    }
+    status_col = ducknng_result_column_index(result, "status");
+    if (status_col >= 0) {
+        if (duckdb_column_type(result, (idx_t)status_col) != DUCKDB_TYPE_INTEGER ||
+            ducknng_chunk_int32_value(chunk, status_col, 0, &status_value) != 0 ||
+            status_value < 100 || status_value > 599) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route status column must be INTEGER between 100 and 599");
+            goto done;
+        }
+        reply->status = status_value;
+    }
+    headers_col = ducknng_result_column_index(result, "headers_json");
+    if (headers_col >= 0) {
+        if (duckdb_column_type(result, (idx_t)headers_col) != DUCKDB_TYPE_VARCHAR) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route headers_json column must be VARCHAR");
+            goto done;
+        }
+        reply->headers_json = ducknng_chunk_varchar_dup(chunk, headers_col, 0);
+        if (!reply->headers_json && !ducknng_chunk_value_is_null(duckdb_data_chunk_get_vector(chunk, (idx_t)headers_col), 0)) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route headers_json");
+            goto done;
+        }
+    }
+    content_type_col = ducknng_result_column_index(result, "content_type");
+    if (content_type_col >= 0) {
+        if (duckdb_column_type(result, (idx_t)content_type_col) != DUCKDB_TYPE_VARCHAR) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route content_type column must be VARCHAR");
+            goto done;
+        }
+        reply->content_type = ducknng_chunk_varchar_dup(chunk, content_type_col, 0);
+        if (!reply->content_type && !ducknng_chunk_value_is_null(duckdb_data_chunk_get_vector(chunk, (idx_t)content_type_col), 0)) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route content_type");
+            goto done;
+        }
+    }
+    body_col = ducknng_result_column_index(result, "body");
+    if (body_col >= 0) {
+        if (duckdb_column_type(result, (idx_t)body_col) != DUCKDB_TYPE_BLOB) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route body column must be BLOB");
+            goto done;
+        }
+        reply->body = ducknng_chunk_blob_dup(chunk, body_col, 0, &reply->body_len);
+        if (!reply->body && reply->body_len > 0) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route body");
+            goto done;
+        }
+    }
+    body_text_col = ducknng_result_column_index(result, "body_text");
+    if (body_text_col >= 0) {
+        if (duckdb_column_type(result, (idx_t)body_text_col) != DUCKDB_TYPE_VARCHAR) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route body_text column must be VARCHAR");
+            goto done;
+        }
+        reply->body_text = ducknng_chunk_varchar_dup(chunk, body_text_col, 0);
+        if (!reply->body_text && !ducknng_chunk_value_is_null(duckdb_data_chunk_get_vector(chunk, (idx_t)body_text_col), 0)) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route body_text");
+            goto done;
+        }
+    }
+    if (reply->body && reply->body_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route must return either body or body_text, not both");
+        goto done;
+    }
+    if (!reply->content_type || !reply->content_type[0]) {
+        if (reply->content_type) {
+            duckdb_free(reply->content_type);
+            reply->content_type = NULL;
+        }
+        if (reply->body_text) reply->content_type = ducknng_strdup("text/plain; charset=utf-8");
+        else if (reply->body) reply->content_type = ducknng_strdup("application/octet-stream");
+        if ((reply->body_text || reply->body) && !reply->content_type) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory assigning HTTP route content type");
+            goto done;
+        }
+    }
+    rc = 0;
+done:
+    if (extra) duckdb_destroy_data_chunk(&extra);
+    if (chunk) duckdb_destroy_data_chunk(&chunk);
+    return rc;
+}
+
+int ducknng_service_handle_http_route(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx, ducknng_http_route_reply *reply, char **errmsg) {
+    duckdb_result result;
+    int rc = -1;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !svc->rt || !svc->rt->init_con || !request_ctx || !reply ||
+        !request_ctx->route.handler_sql || !request_ctx->route.handler_sql[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
+        return -1;
+    }
+    memset(&result, 0, sizeof(result));
+    ducknng_mutex_lock(&svc->mu);
+    ducknng_service_enter_http_route_sql(svc, request_ctx);
+    if (duckdb_query(svc->rt->init_con, request_ctx->route.handler_sql, &result) == DuckDBError) {
+        const char *detail = duckdb_result_error(&result);
+        size_t need = detail && detail[0] ? strlen(detail) + 40 : 0;
+        if (detail && detail[0] && errmsg) {
+            *errmsg = (char *)duckdb_malloc(need);
+            if (*errmsg) snprintf(*errmsg, need, "ducknng: HTTP route handler error: %s", detail);
+        }
+        ducknng_service_leave_http_route_sql(svc);
+        ducknng_mutex_unlock(&svc->mu);
+        duckdb_destroy_result(&result);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route handler error");
+        return -1;
+    }
+    ducknng_service_leave_http_route_sql(svc);
+    ducknng_mutex_unlock(&svc->mu);
+    rc = ducknng_parse_http_route_result(&result, reply, errmsg);
+    duckdb_destroy_result(&result);
     return rc;
 }
 
@@ -1163,6 +1387,7 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
     svc->session_idle_ms = session_idle_ms ? session_idle_ms : 300000u;
     svc->tls_config_id = tls_config_id;
     svc->next_session_id = 1;
+    svc->next_http_route_id = 1;
     svc->tls_config_source = ducknng_strdup(tls_config_source);
     if ((tls_config_source && !svc->tls_config_source) || ducknng_tls_opts_copy(&svc->tls_opts, tls_opts) != 0) {
         ducknng_service_destroy(svc);
@@ -1192,6 +1417,7 @@ void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_tls_opts_reset(&svc->tls_opts);
     ducknng_service_clear_ip_allowlist(svc);
     ducknng_service_clear_authorizer(svc);
+    ducknng_service_clear_http_routes(svc);
     ducknng_service_clear_pipe_events(svc);
     ducknng_service_clear_pipe_states(svc);
     for (i = 0; i < session_count; i++) {
@@ -1516,6 +1742,251 @@ int ducknng_service_set_authorizer(ducknng_service *svc, const char *authorizer_
     svc->authorizer_active = 1;
     if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
     return 0;
+}
+
+static char *ducknng_http_route_method_normalize_dup(const char *method, char **errmsg) {
+    size_t i;
+    size_t len;
+    char *out;
+    if (errmsg) *errmsg = NULL;
+    if (!method || !method[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route method is required");
+        return NULL;
+    }
+    len = strlen(method);
+    out = (char *)duckdb_malloc(len + 1);
+    if (!out) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory normalizing HTTP route method");
+        return NULL;
+    }
+    for (i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)method[i];
+        if ((ch >= 'a' && ch <= 'z')) ch = (unsigned char)(ch - ('a' - 'A'));
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-')) {
+            duckdb_free(out);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route method must be an HTTP token");
+            return NULL;
+        }
+        out[i] = (char)ch;
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static int ducknng_http_route_path_valid(const char *path) {
+    const char *p = path;
+    if (!path || path[0] != '/') return 0;
+    while (*p) {
+        if (*p == '?' || *p == '#') return 0;
+        p++;
+    }
+    return 1;
+}
+
+static const char *ducknng_service_http_mount_path(const ducknng_service *svc) {
+    static _Thread_local char mount_path[1024];
+    nng_url *up = NULL;
+    if (!svc || !svc->listen_url) return NULL;
+    if (nng_url_parse(&up, svc->listen_url) != 0 || !up || !up->u_path || up->u_path[0] != '/') {
+        if (up) nng_url_free(up);
+        return NULL;
+    }
+    snprintf(mount_path, sizeof(mount_path), "%s", up->u_path);
+    nng_url_free(up);
+    return mount_path;
+}
+
+static int ducknng_service_http_routes_reserve(ducknng_service *svc, size_t want, char **errmsg) {
+    ducknng_http_route *next;
+    size_t new_cap = svc && svc->http_route_cap ? svc->http_route_cap * 2 : 4;
+    if (errmsg) *errmsg = NULL;
+    if (!svc) return -1;
+    if (svc->http_route_cap >= want) return 0;
+    while (new_cap < want) new_cap *= 2;
+    next = (ducknng_http_route *)duckdb_malloc(sizeof(*next) * new_cap);
+    if (!next) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory growing HTTP route registry");
+        return -1;
+    }
+    memset(next, 0, sizeof(*next) * new_cap);
+    if (svc->http_routes && svc->http_route_count > 0) {
+        memcpy(next, svc->http_routes, sizeof(*next) * svc->http_route_count);
+        duckdb_free(svc->http_routes);
+    }
+    svc->http_routes = next;
+    svc->http_route_cap = new_cap;
+    return 0;
+}
+
+int ducknng_service_register_http_route(ducknng_service *svc, const char *method, const char *path,
+    const char *handler_sql, uint64_t request_max_bytes, char **errmsg) {
+    size_t i;
+    char *norm_method = NULL;
+    ducknng_http_route route;
+    const char *mount_path;
+    ducknng_transport_url parsed;
+    char *parse_err = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !method || !path || !handler_sql || !handler_sql[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route requires service, method, path, and handler_sql");
+        return -1;
+    }
+    if (ducknng_transport_url_parse(svc->listen_url, &parsed, &parse_err) != 0 ||
+        !ducknng_transport_url_is_http(&parsed)) {
+        if (parse_err && errmsg) *errmsg = parse_err;
+        else if (parse_err) duckdb_free(parse_err);
+        else if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP routes require an http:// or https:// service");
+        return -1;
+    }
+    if (parse_err) duckdb_free(parse_err);
+    if (!ducknng_http_route_path_valid(path)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route path must be an absolute path without query or fragment");
+        return -1;
+    }
+    mount_path = ducknng_service_http_mount_path(svc);
+    if (mount_path && strcmp(path, mount_path) == 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route path conflicts with the framed RPC mount");
+        return -1;
+    }
+    if (request_max_bytes > svc->recv_max_bytes) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route request_max_bytes cannot exceed the service recv_max_bytes");
+        return -1;
+    }
+    norm_method = ducknng_http_route_method_normalize_dup(method, errmsg);
+    if (!norm_method) return -1;
+    memset(&route, 0, sizeof(route));
+    route.route_id = svc->next_http_route_id++;
+    route.request_max_bytes = request_max_bytes;
+    route.method = norm_method;
+    route.path = ducknng_strdup(path);
+    route.handler_sql = ducknng_strdup(handler_sql);
+    if (!route.path || !route.handler_sql) {
+        ducknng_http_route_reset(&route);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory registering HTTP route");
+        return -1;
+    }
+    ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_route_count; i++) {
+        if (strcmp(svc->http_routes[i].method, route.method) == 0 &&
+            strcmp(svc->http_routes[i].path, route.path) == 0) {
+            ducknng_mutex_unlock(&svc->mu);
+            ducknng_http_route_reset(&route);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route already registered");
+            return -1;
+        }
+    }
+    if (ducknng_service_http_routes_reserve(svc, svc->http_route_count + 1, errmsg) != 0) {
+        ducknng_mutex_unlock(&svc->mu);
+        ducknng_http_route_reset(&route);
+        return -1;
+    }
+    svc->http_routes[svc->http_route_count++] = route;
+    ducknng_mutex_unlock(&svc->mu);
+    return 0;
+}
+
+int ducknng_service_unregister_http_route(ducknng_service *svc, const char *method,
+    const char *path, char **errmsg) {
+    size_t i;
+    char *norm_method = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !method || !path) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route unregister requires service, method, and path");
+        return -1;
+    }
+    norm_method = ducknng_http_route_method_normalize_dup(method, errmsg);
+    if (!norm_method) return -1;
+    ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_route_count; i++) {
+        if (strcmp(svc->http_routes[i].method, norm_method) == 0 &&
+            strcmp(svc->http_routes[i].path, path) == 0) {
+            ducknng_http_route_reset(&svc->http_routes[i]);
+            for (; i + 1 < svc->http_route_count; i++) svc->http_routes[i] = svc->http_routes[i + 1];
+            svc->http_route_count--;
+            if (svc->http_route_count < svc->http_route_cap) {
+                memset(&svc->http_routes[svc->http_route_count], 0, sizeof(*svc->http_routes));
+            }
+            ducknng_mutex_unlock(&svc->mu);
+            duckdb_free(norm_method);
+            return 1;
+        }
+    }
+    ducknng_mutex_unlock(&svc->mu);
+    duckdb_free(norm_method);
+    return 0;
+}
+
+int ducknng_service_lookup_http_route(ducknng_service *svc, const char *method,
+    const char *path, ducknng_http_route *out_route, char **errmsg) {
+    size_t i;
+    char *norm_method = NULL;
+    int rc = 0;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !method || !path || !out_route) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route lookup arguments");
+        return -1;
+    }
+    norm_method = ducknng_http_route_method_normalize_dup(method, errmsg);
+    if (!norm_method) return -1;
+    memset(out_route, 0, sizeof(*out_route));
+    ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_route_count; i++) {
+        if (strcmp(svc->http_routes[i].method, norm_method) == 0 &&
+            strcmp(svc->http_routes[i].path, path) == 0) {
+            rc = ducknng_http_route_copy(out_route, &svc->http_routes[i]) == 0 ? 1 : -1;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&svc->mu);
+    duckdb_free(norm_method);
+    if (rc < 0 && errmsg && !*errmsg) {
+        *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP route");
+    }
+    return rc;
+}
+
+int ducknng_service_http_routes_snapshot(ducknng_service *svc, ducknng_http_route **out_routes,
+    size_t *out_count, char **errmsg) {
+    ducknng_http_route *routes = NULL;
+    size_t i;
+    if (errmsg) *errmsg = NULL;
+    if (out_routes) *out_routes = NULL;
+    if (out_count) *out_count = 0;
+    if (!svc || !out_routes || !out_count) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route snapshot outputs");
+        return -1;
+    }
+    ducknng_mutex_lock(&svc->mu);
+    if (svc->http_route_count > 0) {
+        routes = (ducknng_http_route *)duckdb_malloc(sizeof(*routes) * svc->http_route_count);
+        if (!routes) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP routes");
+            return -1;
+        }
+        memset(routes, 0, sizeof(*routes) * svc->http_route_count);
+        for (i = 0; i < svc->http_route_count; i++) {
+            if (ducknng_http_route_copy(&routes[i], &svc->http_routes[i]) != 0) {
+                size_t j;
+                ducknng_mutex_unlock(&svc->mu);
+                for (j = 0; j <= i; j++) ducknng_http_route_reset(&routes[j]);
+                duckdb_free(routes);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP routes");
+                return -1;
+            }
+        }
+    }
+    *out_routes = routes;
+    *out_count = svc->http_route_count;
+    ducknng_mutex_unlock(&svc->mu);
+    return 0;
+}
+
+void ducknng_service_http_routes_free(ducknng_http_route *routes, size_t count) {
+    size_t i;
+    if (!routes) return;
+    for (i = 0; i < count; i++) ducknng_http_route_reset(&routes[i]);
+    duckdb_free(routes);
 }
 
 int ducknng_service_authorizer_active(const ducknng_service *svc) {

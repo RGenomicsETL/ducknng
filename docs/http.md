@@ -6,7 +6,7 @@ The governing rule is the same one stated in `docs/protocol.md` and `docs/transp
 
 ## Scope
 
-The initial HTTP adapter is deliberately narrow. It is a carrier for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. Anything broader than framed RPC carriage belongs to later work and must be justified separately. `docs/http_server_framework.md` sketches a possible future route framework while keeping this framed RPC endpoint separate.
+The initial HTTP adapter is deliberately narrow. Its primary job is still framed RPC carriage for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. A separate low-level exact-path route layer now exists beside that framed RPC mount, but it remains deliberately small and is documented separately in `docs/http_server_framework.md`.
 
 The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, while `ducknng_start_server(...)` mounts the HTTP/HTTPS carrier when the listen URL uses those schemes and the existing request, RPC, and session helpers route by URL scheme on top of that adapter.
 
@@ -71,6 +71,29 @@ For `http://` and `https://` listeners, `contexts` must be `1` because the HTTP 
 The matching stop and introspection path remains generic rather than adding HTTP-specific variants. `ducknng_stop_server(name)` stops a named service regardless of transport family, and `ducknng_list_servers()` reports the currently registered services without minting transport-specific lifecycle names. That keeps the public surface compact.
 
 `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` are transport-local and not manifest-derived. They are meant for generic HTTP interactions, adapter debugging, and future interoperability helpers. They are not the only route to `ducknng` RPC over HTTP because the higher-level synchronous helpers already use the same carrier automatically.
+
+## Companion route framework
+
+HTTP and HTTPS services can now also register additional exact-path routes beside the framed RPC mount:
+
+```sql
+ducknng_register_http_route(service_name, method, path, handler_sql[, request_max_bytes])
+ducknng_unregister_http_route(service_name, method, path)
+ducknng_list_http_routes()
+ducknng_http_request()
+ducknng_http_request_body()
+```
+
+These helpers are transport-local service tooling, not manifest-derived RPC methods. A route handler is one SQL query that returns exactly one response row, with optional `status`, `headers_json`, `content_type`, `body`, and `body_text` columns. Request context comes from `ducknng_http_request()` and `ducknng_http_request_body()` while that handler runs.
+
+The important boundary stays the same:
+
+- the framed RPC mount still lives exactly at the path encoded in the service listen URL
+- registered routes must not conflict with that mount path
+- routes are application routes beside the frame carrier, not a second RPC namespace
+- routes inherit the same admission stack and the same `shared_serialized_connection` execution model as the rest of the service
+
+For the precise route contract, request/response shape, and execution-model caveats, see `docs/http_server_framework.md`.
 
 ## Operation-oriented routing by URL scheme
 
@@ -143,4 +166,4 @@ Human-friendly convenience routes such as `GET /manifest` are deferred. They may
 
 HTTP-carrier WebSocket, SSE, NDJSON, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG `ws://` and `wss://` transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.
 
-A broader nanonext-style HTTP server framework is also future work. The current server framework is intentionally the framed RPC mount. A later layer may add explicit route registration for static responses, SQL-backed handlers, or codec-driven response helpers, but those routes should be documented as a web-toolkit surface beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.
+The low-level exact-path route layer is now part of the public SQL surface, but richer web-toolkit features are still deferred. Prefix routing, path parameters, static asset serving, HTTP-carrier WebSocket/SSE/NDJSON work, and any higher-level route helpers must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.

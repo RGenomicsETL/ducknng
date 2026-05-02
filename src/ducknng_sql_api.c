@@ -1,7 +1,14 @@
 #include "ducknng_sql_api.h"
 #include "ducknng_runtime.h"
 #include "ducknng_sql_shared.h"
+#include "ducknng_util.h"
+#include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 DUCKDB_EXTENSION_EXTERN
 
@@ -81,6 +88,77 @@ void ducknng_sql_set_null(duckdb_vector vec, idx_t row) {
 
 void ducknng_sql_assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, idx_t len) {
     duckdb_vector_assign_string_element_len(vec, row, (const char *)data, len);
+}
+
+int ducknng_sql_bytes_look_text(const uint8_t *data, size_t len) {
+    size_t i = 0;
+    if (len == 0) return 1;
+    if (!data) return 0;
+    while (i < len) {
+        uint8_t b = data[i];
+        if (b == 0) return 0;
+        if (b < 0x20) {
+            if (b != '\n' && b != '\r' && b != '\t') return 0;
+            i++;
+        } else if (b < 0x80) {
+            i++;
+        } else if ((b & 0xe0) == 0xc0) {
+            if (i + 1 >= len || (data[i + 1] & 0xc0) != 0x80 || b < 0xc2) return 0;
+            i += 2;
+        } else if ((b & 0xf0) == 0xe0) {
+            uint8_t b1;
+            if (i + 2 >= len || (data[i + 1] & 0xc0) != 0x80 || (data[i + 2] & 0xc0) != 0x80) return 0;
+            b1 = data[i + 1];
+            if (b == 0xe0 && b1 < 0xa0) return 0;
+            if (b == 0xed && b1 >= 0xa0) return 0;
+            i += 3;
+        } else if ((b & 0xf8) == 0xf0) {
+            uint8_t b1;
+            if (i + 3 >= len || (data[i + 1] & 0xc0) != 0x80 ||
+                (data[i + 2] & 0xc0) != 0x80 || (data[i + 3] & 0xc0) != 0x80) return 0;
+            b1 = data[i + 1];
+            if (b == 0xf0 && b1 < 0x90) return 0;
+            if (b > 0xf4 || (b == 0xf4 && b1 >= 0x90)) return 0;
+            i += 4;
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+char *ducknng_sql_sockaddr_addr_dup(const nng_sockaddr *addr, char **out_ip, int32_t *out_port) {
+    char ipbuf[INET6_ADDRSTRLEN];
+    char addrbuf[INET6_ADDRSTRLEN + 32];
+    const char *ip = NULL;
+    int32_t port = 0;
+    if (out_ip) *out_ip = NULL;
+    if (out_port) *out_port = 0;
+    if (!addr) return NULL;
+    memset(ipbuf, 0, sizeof(ipbuf));
+    memset(addrbuf, 0, sizeof(addrbuf));
+    if (addr->s_family == NNG_AF_INET) {
+        ip = inet_ntop(AF_INET, &addr->s_in.sa_addr, ipbuf, sizeof(ipbuf));
+        port = (int32_t)ntohs(addr->s_in.sa_port);
+        if (!ip) return NULL;
+        snprintf(addrbuf, sizeof(addrbuf), "%s:%d", ipbuf, (int)port);
+        if (out_ip) *out_ip = ducknng_strdup(ipbuf);
+        if (out_port) *out_port = port;
+        return ducknng_strdup(addrbuf);
+    }
+    if (addr->s_family == NNG_AF_INET6) {
+        ip = inet_ntop(AF_INET6, addr->s_in6.sa_addr, ipbuf, sizeof(ipbuf));
+        port = (int32_t)ntohs(addr->s_in6.sa_port);
+        if (!ip) return NULL;
+        snprintf(addrbuf, sizeof(addrbuf), "[%s]:%d", ipbuf, (int)port);
+        if (out_ip) *out_ip = ducknng_strdup(ipbuf);
+        if (out_port) *out_port = port;
+        return ducknng_strdup(addrbuf);
+    }
+    if (addr->s_family == NNG_AF_IPC) return ducknng_strdup(addr->s_ipc.sa_path);
+    if (addr->s_family == NNG_AF_INPROC) return ducknng_strdup(addr->s_inproc.sa_name);
+    snprintf(addrbuf, sizeof(addrbuf), "nng-family:%u", (unsigned)addr->s_family);
+    return ducknng_strdup(addrbuf);
 }
 
 static int ducknng_sql_register_scalar_logical_types_ex(duckdb_connection con, const char *name,
@@ -222,6 +300,7 @@ int ducknng_register_sql_api(duckdb_connection connection, ducknng_runtime *rt) 
     ctx.rt = rt;
     ctx.is_init_connection = rt && connection == rt->init_con;
     if (!ducknng_register_sql_service(connection, &ctx)) return 0;
+    if (!ducknng_register_sql_http(connection, &ctx)) return 0;
     if (!ducknng_register_sql_auth(connection, &ctx)) return 0;
     if (!ducknng_register_sql_monitor(connection, &ctx)) return 0;
     if (!ducknng_register_sql_tls(connection, &ctx)) return 0;

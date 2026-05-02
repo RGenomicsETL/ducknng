@@ -164,6 +164,10 @@ void ducknng_runtime_init_con_unlock(ducknng_runtime *rt);
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc);
 ducknng_service *ducknng_runtime_current_request_service_get(ducknng_runtime *rt);
 ducknng_service *ducknng_runtime_current_thread_request_service_get(ducknng_runtime *rt);
+void ducknng_runtime_current_http_request_context_set(ducknng_runtime *rt,
+    const ducknng_http_request_context *request_ctx);
+const ducknng_http_request_context *ducknng_runtime_current_thread_http_request_context_get(
+    ducknng_runtime *rt);
 void ducknng_runtime_current_authorizer_context_set(ducknng_runtime *rt,
     const ducknng_authorizer_context *auth_ctx);
 const ducknng_authorizer_context *ducknng_runtime_current_thread_authorizer_context_get(ducknng_runtime *rt);

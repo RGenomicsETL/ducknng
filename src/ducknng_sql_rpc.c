@@ -86,42 +86,6 @@ static char *ducknng_dup_bytes(const uint8_t *data, size_t len) {
     out[len] = '\0';
     return out;
 }
-static int ducknng_bytes_look_text(const uint8_t *data, size_t len) {
-    size_t i = 0;
-    if (len == 0) return 1;
-    if (!data) return 0;
-    while (i < len) {
-        uint8_t b = data[i];
-        if (b == 0) return 0;
-        if (b < 0x20) {
-            if (b != '\n' && b != '\r' && b != '\t') return 0;
-            i++;
-        } else if (b < 0x80) {
-            i++;
-        } else if ((b & 0xe0) == 0xc0) {
-            if (i + 1 >= len || (data[i + 1] & 0xc0) != 0x80 || b < 0xc2) return 0;
-            i += 2;
-        } else if ((b & 0xf0) == 0xe0) {
-            uint8_t b1;
-            if (i + 2 >= len || (data[i + 1] & 0xc0) != 0x80 || (data[i + 2] & 0xc0) != 0x80) return 0;
-            b1 = data[i + 1];
-            if (b == 0xe0 && b1 < 0xa0) return 0;
-            if (b == 0xed && b1 >= 0xa0) return 0;
-            i += 3;
-        } else if ((b & 0xf8) == 0xf0) {
-            uint8_t b1;
-            if (i + 3 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80 || (data[i + 3] & 0xc0) != 0x80) return 0;
-            b1 = data[i + 1];
-            if (b == 0xf0 && b1 < 0x90) return 0;
-            if (b > 0xf4 || (b == 0xf4 && b1 >= 0x90)) return 0;
-            i += 4;
-        } else {
-            return 0;
-        }
-    }
-    return 1;
-}
 static const char *ducknng_rpc_type_name(uint8_t type) {
     switch (type) {
     case DUCKNNG_RPC_MANIFEST: return "manifest";
@@ -1676,7 +1640,7 @@ static void ducknng_ncurl_bind(duckdb_bind_info info) {
         bind->ok = true;
         bind->status = (int32_t)status;
         bind->body_len = (idx_t)body_len;
-        if (bind->body && bind->body_len > 0 && ducknng_bytes_look_text(bind->body, (size_t)bind->body_len)) {
+        if (bind->body && bind->body_len > 0 && ducknng_sql_bytes_look_text(bind->body, (size_t)bind->body_len)) {
             bind->body_text = ducknng_dup_bytes(bind->body, (size_t)bind->body_len);
             if (!bind->body_text) {
                 bind->ok = false;

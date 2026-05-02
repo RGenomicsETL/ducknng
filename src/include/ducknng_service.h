@@ -75,6 +75,38 @@ typedef struct ducknng_pipe_monitor_stats {
     uint64_t max_active_pipes;
 } ducknng_pipe_monitor_stats;
 
+typedef struct ducknng_http_route {
+    uint64_t route_id;
+    char *method;
+    char *path;
+    char *handler_sql;
+    uint64_t request_max_bytes;
+} ducknng_http_route;
+
+typedef struct ducknng_http_request_context {
+    ducknng_service *svc;
+    ducknng_transport_scheme scheme;
+    const char *method;
+    const char *path;
+    const char *query_string;
+    const char *content_type;
+    const char *headers_json;
+    const uint8_t *body;
+    size_t body_len;
+    const char *caller_identity;
+    const nng_sockaddr *remote_addr;
+    ducknng_http_route route;
+} ducknng_http_request_context;
+
+typedef struct ducknng_http_route_reply {
+    int status;
+    char *headers_json;
+    char *content_type;
+    uint8_t *body;
+    size_t body_len;
+    char *body_text;
+} ducknng_http_route_reply;
+
 struct ducknng_rep_ctx {
     ducknng_service *svc;
     nng_ctx ctx;
@@ -123,6 +155,10 @@ struct ducknng_service {
     nng_listener listener;
     ducknng_rep_ctx *ctxs;
     ducknng_http_server_state *http_state;
+    ducknng_http_route *http_routes;
+    size_t http_route_count;
+    size_t http_route_cap;
+    uint64_t next_http_route_id;
     int ncontexts;
     ducknng_mutex mu;
     int mu_initialized;
@@ -189,9 +225,27 @@ size_t ducknng_service_active_pipe_count(const ducknng_service *svc);
 size_t ducknng_service_inflight_request_count(const ducknng_service *svc);
 void ducknng_service_enter_request_sql(ducknng_service *svc);
 void ducknng_service_leave_request_sql(ducknng_service *svc);
+void ducknng_service_enter_http_route_sql(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx);
+void ducknng_service_leave_http_route_sql(ducknng_service *svc);
 void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
     const ducknng_authorizer_context *auth_ctx);
 void ducknng_service_leave_authorizer_sql(ducknng_service *svc);
+void ducknng_http_route_reset(ducknng_http_route *route);
+int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *src);
+void ducknng_http_route_reply_init(ducknng_http_route_reply *reply);
+void ducknng_http_route_reply_reset(ducknng_http_route_reply *reply);
+int ducknng_service_register_http_route(ducknng_service *svc, const char *method, const char *path,
+    const char *handler_sql, uint64_t request_max_bytes, char **errmsg);
+int ducknng_service_unregister_http_route(ducknng_service *svc, const char *method,
+    const char *path, char **errmsg);
+int ducknng_service_lookup_http_route(ducknng_service *svc, const char *method,
+    const char *path, ducknng_http_route *out_route, char **errmsg);
+int ducknng_service_http_routes_snapshot(ducknng_service *svc, ducknng_http_route **out_routes,
+    size_t *out_count, char **errmsg);
+void ducknng_service_http_routes_free(ducknng_http_route *routes, size_t count);
+int ducknng_service_handle_http_route(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx, ducknng_http_route_reply *reply, char **errmsg);
 int ducknng_service_begin_request(ducknng_service *svc, char **errmsg);
 void ducknng_service_end_request(ducknng_service *svc);
 int ducknng_service_pipe_monitor_stats(ducknng_service *svc,

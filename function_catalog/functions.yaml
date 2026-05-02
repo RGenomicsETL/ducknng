@@ -762,6 +762,95 @@
       ]
     },
     {
+      "name": "ducknng_register_http_route",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_register_http_route(service_name, method, path, handler_sql[, request_max_bytes])",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Register one exact-path HTTP route beside the framed RPC mount of an existing http:// or https:// service.",
+      "notes": [
+        "The target service must already exist and must use http:// or https://.",
+        "method is normalized to uppercase; path must be an absolute path and must not include a query string or fragment.",
+        "Routes may not conflict with the framed RPC mount path encoded in the service listen URL.",
+        "request_max_bytes is optional and, when non-zero, must not exceed the service recv_max_bytes.",
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers."
+      ],
+      "examples": [
+        "SELECT ducknng_register_http_route('api', 'GET', '/healthz', 'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text');"
+      ]
+    },
+    {
+      "name": "ducknng_unregister_http_route",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_unregister_http_route(service_name, method, path)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Remove one previously registered exact-path HTTP route from a service.",
+      "notes": [
+        "Returns TRUE when a matching route was removed and FALSE when no matching route existed.",
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers."
+      ],
+      "examples": [
+        "SELECT ducknng_unregister_http_route('api', 'GET', '/healthz');"
+      ]
+    },
+    {
+      "name": "ducknng_list_http_routes",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_list_http_routes()",
+      "returns": "TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "List the currently registered exact-path HTTP routes across running services.",
+      "notes": [
+        "Rows are service-local route configuration, not manifest-derived RPC methods.",
+        "This helper is rejected inside SQL authorizer callbacks and inside active request handlers so the shared execution lane is not re-entered recursively."
+      ],
+      "examples": [
+        "SELECT service_name, method, path FROM ducknng_list_http_routes() ORDER BY service_name, path;"
+      ]
+    },
+    {
+      "name": "ducknng_http_request",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_request()",
+      "returns": "TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Expose the current HTTP request context while SQL runs inside an active route handler.",
+      "notes": [
+        "Outside an active route handler this table emits zero rows rather than raising an error.",
+        "headers_json uses the same canonical array-of-objects form as ducknng_ncurl().",
+        "route_method, route_path, and route_id identify the matched registered route rather than the framed RPC mount."
+      ],
+      "examples": [
+        "SELECT method, path, body_bytes FROM ducknng_http_request();"
+      ]
+    },
+    {
+      "name": "ducknng_http_request_body",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_request_body()",
+      "returns": "TABLE(body BLOB, body_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Expose the current HTTP request body while SQL runs inside an active route handler.",
+      "notes": [
+        "Outside an active route handler this table emits zero rows rather than raising an error.",
+        "body_text is populated only when the body bytes look like valid text under ducknng's shared UTF-8 detection rule."
+      ],
+      "examples": [
+        "SELECT body_text FROM ducknng_http_request_body();"
+      ]
+    },
+    {
       "name": "ducknng_request_raw_aio",
       "kind": "scalar",
       "category": "Async I/O",

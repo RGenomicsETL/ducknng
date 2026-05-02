@@ -5,11 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#endif
 
 DUCKDB_EXTENSION_EXTERN
 
@@ -78,40 +73,6 @@ static void destroy_auth_context_bind_data(void *ptr) {
     if (data->rpc_method) duckdb_free(data->rpc_method);
     if (data->rpc_type) duckdb_free(data->rpc_type);
     duckdb_free(data);
-}
-
-static char *ducknng_sql_sockaddr_addr_dup(const nng_sockaddr *addr, char **out_ip, int32_t *out_port) {
-    char ipbuf[INET6_ADDRSTRLEN];
-    char addrbuf[INET6_ADDRSTRLEN + 32];
-    const char *ip = NULL;
-    int32_t port = 0;
-    if (out_ip) *out_ip = NULL;
-    if (out_port) *out_port = 0;
-    if (!addr) return NULL;
-    memset(ipbuf, 0, sizeof(ipbuf));
-    memset(addrbuf, 0, sizeof(addrbuf));
-    if (addr->s_family == NNG_AF_INET) {
-        ip = inet_ntop(AF_INET, &addr->s_in.sa_addr, ipbuf, sizeof(ipbuf));
-        port = (int32_t)ntohs(addr->s_in.sa_port);
-        if (!ip) return NULL;
-        snprintf(addrbuf, sizeof(addrbuf), "%s:%d", ipbuf, (int)port);
-        if (out_ip) *out_ip = ducknng_strdup(ipbuf);
-        if (out_port) *out_port = port;
-        return ducknng_strdup(addrbuf);
-    }
-    if (addr->s_family == NNG_AF_INET6) {
-        ip = inet_ntop(AF_INET6, addr->s_in6.sa_addr, ipbuf, sizeof(ipbuf));
-        port = (int32_t)ntohs(addr->s_in6.sa_port);
-        if (!ip) return NULL;
-        snprintf(addrbuf, sizeof(addrbuf), "[%s]:%d", ipbuf, (int)port);
-        if (out_ip) *out_ip = ducknng_strdup(ipbuf);
-        if (out_port) *out_port = port;
-        return ducknng_strdup(addrbuf);
-    }
-    if (addr->s_family == NNG_AF_IPC) return ducknng_strdup(addr->s_ipc.sa_path);
-    if (addr->s_family == NNG_AF_INPROC) return ducknng_strdup(addr->s_inproc.sa_name);
-    snprintf(addrbuf, sizeof(addrbuf), "nng-family:%u", (unsigned)addr->s_family);
-    return ducknng_strdup(addrbuf);
 }
 
 static char *ducknng_sql_frame_method_dup(const ducknng_frame *frame) {

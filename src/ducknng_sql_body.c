@@ -107,42 +107,6 @@ static char *ducknng_dup_bytes(const uint8_t *data, size_t len) {
     out[len] = '\0';
     return out;
 }
-static int ducknng_bytes_look_text(const uint8_t *data, size_t len) {
-    size_t i = 0;
-    if (len == 0) return 1;
-    if (!data) return 0;
-    while (i < len) {
-        uint8_t b = data[i];
-        if (b == 0) return 0;
-        if (b < 0x20) {
-            if (b != '\n' && b != '\r' && b != '\t') return 0;
-            i++;
-        } else if (b < 0x80) {
-            i++;
-        } else if ((b & 0xe0) == 0xc0) {
-            if (i + 1 >= len || (data[i + 1] & 0xc0) != 0x80 || b < 0xc2) return 0;
-            i += 2;
-        } else if ((b & 0xf0) == 0xe0) {
-            uint8_t b1;
-            if (i + 2 >= len || (data[i + 1] & 0xc0) != 0x80 || (data[i + 2] & 0xc0) != 0x80) return 0;
-            b1 = data[i + 1];
-            if (b == 0xe0 && b1 < 0xa0) return 0;
-            if (b == 0xed && b1 >= 0xa0) return 0;
-            i += 3;
-        } else if ((b & 0xf8) == 0xf0) {
-            uint8_t b1;
-            if (i + 3 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80 || (data[i + 3] & 0xc0) != 0x80) return 0;
-            b1 = data[i + 1];
-            if (b == 0xf0 && b1 < 0x90) return 0;
-            if (b > 0xf4 || (b == 0xf4 && b1 >= 0x90)) return 0;
-            i += 4;
-        } else {
-            return 0;
-        }
-    }
-    return 1;
-}
 static const char *ducknng_rpc_type_name(uint8_t type) {
     switch (type) {
     case DUCKNNG_RPC_MANIFEST: return "manifest";
@@ -484,7 +448,7 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
                     bind->error = ducknng_strdup("ducknng: out of memory copying frame payload");
                 } else {
                     memcpy(bind->payload, frame.payload, (size_t)frame.payload_len);
-                    if (ducknng_bytes_look_text(frame.payload, (size_t)frame.payload_len)) {
+                    if (ducknng_sql_bytes_look_text(frame.payload, (size_t)frame.payload_len)) {
                         bind->payload_text = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
                     }
                 }
@@ -587,7 +551,7 @@ static int ducknng_body_parse_frame_copy(const uint8_t *data, size_t len,
             return -1;
         }
         memcpy(out->payload, frame.payload, (size_t)frame.payload_len);
-        if (ducknng_bytes_look_text(frame.payload, (size_t)frame.payload_len)) {
+        if (ducknng_sql_bytes_look_text(frame.payload, (size_t)frame.payload_len)) {
             out->payload_text = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
         }
     }
@@ -680,7 +644,7 @@ static int ducknng_body_parse_run_duckdb_reader(ducknng_sql_context *ctx,
         if (errmsg) *errmsg = ducknng_strdup("ducknng: JSON body must not be empty");
         return -1;
     }
-    if (!ducknng_bytes_look_text(body, body_len)) {
+    if (!ducknng_sql_bytes_look_text(body, body_len)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: JSON body is not valid UTF-8 text");
         return -1;
     }
@@ -904,7 +868,7 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             duckdb_bind_set_cardinality(info, 1, true);
             break;
         case DUCKNNG_BODY_CODEC_TEXT:
-            if (!ducknng_bytes_look_text(body, body_len)) {
+            if (!ducknng_sql_bytes_look_text(body, body_len)) {
                 destroy_body_parse_bind_data(bind);
                 duckdb_bind_set_error(info, "ducknng: text body is not valid UTF-8 text");
                 return -1;

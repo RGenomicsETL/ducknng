@@ -18,6 +18,8 @@ static size_t g_entry_cap = 0;
 static atomic_flag g_registry_lock = ATOMIC_FLAG_INIT;
 static _Thread_local ducknng_runtime *g_thread_request_runtime = NULL;
 static _Thread_local ducknng_service *g_thread_request_service = NULL;
+static _Thread_local ducknng_runtime *g_thread_http_request_runtime = NULL;
+static _Thread_local const ducknng_http_request_context *g_thread_http_request_context = NULL;
 static _Thread_local ducknng_runtime *g_thread_authorizer_runtime = NULL;
 static _Thread_local const ducknng_authorizer_context *g_thread_authorizer_context = NULL;
 
@@ -294,6 +296,24 @@ ducknng_service *ducknng_runtime_current_request_service_get(ducknng_runtime *rt
 ducknng_service *ducknng_runtime_current_thread_request_service_get(ducknng_runtime *rt) {
     if (!rt || g_thread_request_runtime != rt) return NULL;
     return g_thread_request_service;
+}
+
+void ducknng_runtime_current_http_request_context_set(ducknng_runtime *rt,
+    const ducknng_http_request_context *request_ctx) {
+    if (!rt) return;
+    if (request_ctx) {
+        g_thread_http_request_runtime = rt;
+        g_thread_http_request_context = request_ctx;
+    } else if (g_thread_http_request_runtime == rt) {
+        g_thread_http_request_runtime = NULL;
+        g_thread_http_request_context = NULL;
+    }
+}
+
+const ducknng_http_request_context *ducknng_runtime_current_thread_http_request_context_get(
+    ducknng_runtime *rt) {
+    if (!rt || g_thread_http_request_runtime != rt) return NULL;
+    return g_thread_http_request_context;
 }
 
 void ducknng_runtime_current_authorizer_context_set(ducknng_runtime *rt,

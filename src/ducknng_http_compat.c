@@ -12,6 +12,7 @@
 DUCKDB_EXTENSION_EXTERN
 
 /* Vendored NNG internal helpers kept isolated in the HTTP compat layer. */
+extern char *nni_http_req_headers(nng_http_req *req);
 extern char *nni_http_res_headers(nng_http_res *res);
 extern int nni_http_conn_getopt(nng_http_conn *conn, const char *name, void *buf, size_t *szp, nni_type type);
 extern void nni_strfree(char *s);
@@ -266,10 +267,11 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
     return NULL;
 }
 
-static int ducknng_http_apply_headers_json(nng_http_req *req, const char *headers_json, char **errmsg) {
+static int ducknng_http_apply_headers_json_common(const char *headers_json,
+    void *target, int (*add_header)(void *, const char *, const char *), char **errmsg) {
     const char *p = headers_json;
     if (errmsg) *errmsg = NULL;
-    if (!headers_json || !headers_json[0]) return 0;
+    if (!headers_json || !headers_json[0] || !add_header) return 0;
     ducknng_http_skip_ws(&p);
     if (*p != '[') {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: headers_json must be a JSON array of {name,value} objects");
@@ -354,7 +356,7 @@ static int ducknng_http_apply_headers_json(nng_http_req *req, const char *header
             if (errmsg) *errmsg = ducknng_strdup("ducknng: each headers_json object must contain non-empty name and value strings");
             return -1;
         }
-        rv = nng_http_req_add_header(req, name, header_value);
+        rv = add_header(target, name, header_value);
         duckdb_free(name);
         duckdb_free(header_value);
         if (rv != 0) {
@@ -370,6 +372,25 @@ static int ducknng_http_apply_headers_json(nng_http_req *req, const char *header
         if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or ']' in headers_json");
         return -1;
     }
+}
+
+static int ducknng_http_req_add_header_adapter(void *target, const char *name, const char *value) {
+    return nng_http_req_add_header((nng_http_req *)target, name, value);
+}
+
+static int ducknng_http_res_add_header_adapter(void *target, const char *name, const char *value) {
+    return nng_http_res_add_header((nng_http_res *)target, name, value);
+}
+
+static int ducknng_http_apply_headers_json(nng_http_req *req, const char *headers_json, char **errmsg) {
+    return ducknng_http_apply_headers_json_common(headers_json, req,
+        ducknng_http_req_add_header_adapter, errmsg);
+}
+
+static int ducknng_http_apply_response_headers_json(nng_http_res *res, const char *headers_json,
+    char **errmsg) {
+    return ducknng_http_apply_headers_json_common(headers_json, res,
+        ducknng_http_res_add_header_adapter, errmsg);
 }
 
 static char *ducknng_http_dup_bytes(const uint8_t *data, size_t len) {
@@ -459,6 +480,17 @@ oom:
     if (buf) duckdb_free(buf);
     if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building headers_json");
     return NULL;
+}
+
+static char *ducknng_http_request_headers_json_dup(nng_http_req *req, char **errmsg) {
+    char *headers_block;
+    char *headers_json;
+    if (errmsg) *errmsg = NULL;
+    if (!req) return ducknng_strdup("[]");
+    headers_block = nni_http_req_headers(req);
+    headers_json = ducknng_http_headers_block_to_json(headers_block, errmsg);
+    if (headers_block) nni_strfree(headers_block);
+    return headers_json;
 }
 
 int ducknng_validate_http_url(const char *url, char **errmsg) {
@@ -725,28 +757,43 @@ fail:
 typedef struct ducknng_http_server_state {
     struct ducknng_service *svc;
     nng_http_server *server;
-    nng_http_handler *handler;
+    nng_http_handler *rpc_handler;
+    nng_http_handler *route_handler;
     char *path;
     ducknng_mutex mu;
     ducknng_cond cv;
     int stopping;
-    int handler_finalized;
-    int handler_data_installed;
+    int rpc_handler_finalized;
+    int rpc_handler_data_installed;
+    int route_handler_finalized;
+    int route_handler_data_installed;
     int mu_initialized;
     int cv_initialized;
 } ducknng_http_server_state;
+
+typedef struct ducknng_http_handler_data {
+    ducknng_http_server_state *state;
+    int is_route_handler;
+} ducknng_http_handler_data;
 
 static const char *DUCKNNG_HTTP_FRAME_MEDIA_TYPE = "application/vnd.ducknng.frame";
 static const char *DUCKNNG_HTTP_FRAME_HEADERS_JSON =
     "[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]";
 
 static void ducknng_http_server_state_handler_dtor(void *arg) {
-    ducknng_http_server_state *state = (ducknng_http_server_state *)arg;
-    if (!state || !state->mu_initialized) return;
+    ducknng_http_handler_data *data = (ducknng_http_handler_data *)arg;
+    ducknng_http_server_state *state = data ? data->state : NULL;
+    int is_route_handler = data ? data->is_route_handler : 0;
+    if (!state || !state->mu_initialized) {
+        if (data) duckdb_free(data);
+        return;
+    }
     ducknng_mutex_lock(&state->mu);
-    state->handler_finalized = 1;
+    if (is_route_handler) state->route_handler_finalized = 1;
+    else state->rpc_handler_finalized = 1;
     if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
     ducknng_mutex_unlock(&state->mu);
+    duckdb_free(data);
 }
 
 static uint16_t ducknng_http_be16_to_host(uint16_t value) {
@@ -862,6 +909,251 @@ static void ducknng_http_finish_response(nng_aio *aio, nng_http_res *res, int rv
     nng_aio_finish(aio, rv != 0 ? rv : NNG_EINVAL);
 }
 
+static ducknng_http_server_state *ducknng_http_handler_server_state(nng_http_handler *handler) {
+    ducknng_http_handler_data *data =
+        handler ? (ducknng_http_handler_data *)nng_http_handler_get_data(handler) : NULL;
+    return data ? data->state : NULL;
+}
+
+static int ducknng_http_route_response_alloc(nng_http_res **out,
+    const ducknng_http_route_reply *reply, char **errmsg) {
+    nng_http_res *res = NULL;
+    int rv;
+    if (!out || !reply) return NNG_EINVAL;
+    if (errmsg) *errmsg = NULL;
+    *out = NULL;
+    rv = nng_http_res_alloc(&res);
+    if (rv != 0) return rv;
+    rv = nng_http_res_set_status(res, (uint16_t)reply->status);
+    if (rv != 0) goto fail;
+    if (reply->headers_json && reply->headers_json[0] &&
+        ducknng_http_apply_response_headers_json(res, reply->headers_json, errmsg) != 0) {
+        goto fail;
+    }
+    if (reply->content_type && reply->content_type[0]) {
+        rv = nng_http_res_set_header(res, "Content-Type", reply->content_type);
+        if (rv != 0) goto fail;
+    }
+    if (reply->body && reply->body_len > 0) {
+        rv = nng_http_res_copy_data(res, reply->body, reply->body_len);
+        if (rv != 0) goto fail;
+    } else if (reply->body_text && reply->body_text[0]) {
+        rv = nng_http_res_copy_data(res, reply->body_text, strlen(reply->body_text));
+        if (rv != 0) goto fail;
+    }
+    *out = res;
+    return 0;
+fail:
+    if (res) nng_http_res_free(res);
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    return rv;
+}
+
+static void ducknng_http_split_uri(const char *uri, char **out_path, const char **out_query) {
+    const char *path_end;
+    const char *query = NULL;
+    char *path = NULL;
+    size_t path_len;
+    if (out_path) *out_path = NULL;
+    if (out_query) *out_query = NULL;
+    if (!uri) return;
+    path_end = uri;
+    while (*path_end && *path_end != '?' && *path_end != '#') path_end++;
+    if (*path_end == '?') query = path_end + 1;
+    path_len = (size_t)(path_end - uri);
+    path = (char *)duckdb_malloc(path_len + 1);
+    if (!path) return;
+    if (path_len) memcpy(path, uri, path_len);
+    path[path_len] = '\0';
+    if (out_path) *out_path = path;
+    else duckdb_free(path);
+    if (out_query) *out_query = query;
+}
+
+static void ducknng_http_route_handler(nng_aio *aio) {
+    nng_http_req *req;
+    nng_http_handler *handler;
+    nng_http_conn *conn;
+    ducknng_http_server_state *state;
+    const char *content_type;
+    const char *uri;
+    const char *query_string = NULL;
+    const char *method;
+    void *body = NULL;
+    size_t body_len = 0;
+    char *request_path = NULL;
+    char *headers_json = NULL;
+    char *caller_identity = NULL;
+    nng_sockaddr remote_addr;
+    int have_remote_addr = 0;
+    nng_http_res *res = NULL;
+    int rv = 0;
+    int stopping = 0;
+    int service_stopping = 0;
+    ducknng_http_route route;
+    ducknng_http_request_context request_ctx;
+    ducknng_http_route_reply route_reply;
+    if (!aio) return;
+    memset(&route, 0, sizeof(route));
+    memset(&request_ctx, 0, sizeof(request_ctx));
+    ducknng_http_route_reply_init(&route_reply);
+    req = (nng_http_req *)nng_aio_get_input(aio, 0);
+    handler = (nng_http_handler *)nng_aio_get_input(aio, 1);
+    conn = (nng_http_conn *)nng_aio_get_input(aio, 2);
+    state = ducknng_http_handler_server_state(handler);
+    if (!req || !state || !state->svc) {
+        rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: missing HTTP server state");
+        ducknng_http_finish_response(aio, res, rv);
+        return;
+    }
+    if (state->mu_initialized) {
+        ducknng_mutex_lock(&state->mu);
+        stopping = state->stopping;
+        ducknng_mutex_unlock(&state->mu);
+    }
+    if (state->svc->mu_initialized) {
+        ducknng_mutex_lock(&state->svc->mu);
+        service_stopping = state->svc->shutting_down;
+        ducknng_mutex_unlock(&state->svc->mu);
+    } else {
+        service_stopping = state->svc->shutting_down;
+    }
+    if (stopping || service_stopping) {
+        rv = ducknng_http_alloc_text_response(&res, 503, "ducknng: HTTP server is stopping");
+        ducknng_http_finish_response(aio, res, rv);
+        return;
+    }
+    uri = nng_http_req_get_uri(req);
+    method = nng_http_req_get_method(req);
+    ducknng_http_split_uri(uri ? uri : "/", &request_path, &query_string);
+    if (!request_path) {
+        rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to copy HTTP request path");
+        ducknng_http_finish_response(aio, res, rv);
+        return;
+    }
+    if (state->path && strcmp(request_path, state->path) == 0) {
+        rv = ducknng_http_alloc_text_response(&res, 405, "ducknng: framed RPC mount accepts POST only");
+        goto done;
+    }
+    nng_http_req_get_data(req, &body, &body_len);
+    headers_json = ducknng_http_request_headers_json_dup(req, NULL);
+    if (!headers_json) {
+        rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to read HTTP request headers");
+        goto done;
+    }
+    content_type = nng_http_req_get_header(req, "Content-Type");
+    caller_identity = ducknng_http_conn_verified_peer_identity(conn);
+    have_remote_addr = ducknng_http_conn_remote_addr(conn, &remote_addr) == 0;
+    {
+        char *route_err = NULL;
+        int route_found = ducknng_service_lookup_http_route(state->svc,
+            method ? method : "GET", request_path, &route, &route_err);
+        if (route_found < 0) {
+            rv = ducknng_http_alloc_text_response(&res, 500,
+                route_err ? route_err : "ducknng: failed to resolve HTTP route");
+            if (route_err) duckdb_free(route_err);
+            goto done;
+        }
+        if (route_err) duckdb_free(route_err);
+        if (route_found == 0) {
+            rv = ducknng_http_alloc_text_response(&res, 404, "ducknng: HTTP route not found");
+            goto done;
+        }
+    }
+    if (route.request_max_bytes > 0 && body_len > route.request_max_bytes) {
+        rv = ducknng_http_alloc_text_response(&res, 413, "ducknng: HTTP route request body too large");
+        goto done;
+    }
+    {
+        ducknng_authorizer_context auth_ctx;
+        ducknng_authorizer_decision decision;
+        char *admission_err = NULL;
+        char *limit_err = NULL;
+        char *handler_err = NULL;
+        memset(&auth_ctx, 0, sizeof(auth_ctx));
+        auth_ctx.svc = state->svc;
+        auth_ctx.frame = NULL;
+        auth_ctx.phase = "http_route";
+        auth_ctx.transport_family = DUCKNNG_TRANSPORT_FAMILY_HTTP;
+        auth_ctx.scheme = state->svc && state->svc->tls_enabled ? DUCKNNG_TRANSPORT_SCHEME_HTTPS : DUCKNNG_TRANSPORT_SCHEME_HTTP;
+        auth_ctx.caller_identity = caller_identity;
+        auth_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
+        auth_ctx.http_method = method ? method : "GET";
+        auth_ctx.http_path = request_path;
+        auth_ctx.content_type = content_type;
+        auth_ctx.body_bytes = (uint64_t)body_len;
+        ducknng_authorizer_decision_init(&decision);
+        if (ducknng_service_network_admission_check(state->svc, caller_identity,
+                have_remote_addr ? &remote_addr : NULL, &admission_err) != 0) {
+            rv = ducknng_http_alloc_text_response(&res, 403,
+                admission_err ? admission_err : "ducknng: peer is not admitted");
+            if (admission_err) duckdb_free(admission_err);
+            ducknng_authorizer_decision_reset(&decision);
+            goto done;
+        }
+        if (ducknng_service_begin_request(state->svc, &limit_err) != 0) {
+            rv = ducknng_http_alloc_text_response(&res, 503,
+                limit_err ? limit_err : "ducknng: max inflight requests exceeded");
+            if (limit_err) duckdb_free(limit_err);
+            ducknng_authorizer_decision_reset(&decision);
+            goto done;
+        }
+        if (ducknng_service_authorize_request(state->svc, &auth_ctx, &decision, NULL) != 0) {
+            uint16_t status = (decision.http_status >= 100 && decision.http_status <= 599) ?
+                (uint16_t)decision.http_status : 403;
+            rv = ducknng_http_alloc_text_response(&res, status,
+                decision.reason ? decision.reason : "ducknng: request is not authorized");
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc);
+            goto done;
+        }
+        request_ctx.svc = state->svc;
+        request_ctx.scheme = auth_ctx.scheme;
+        request_ctx.method = auth_ctx.http_method;
+        request_ctx.path = request_path;
+        request_ctx.query_string = query_string;
+        request_ctx.content_type = content_type;
+        request_ctx.headers_json = headers_json;
+        request_ctx.body = (const uint8_t *)body;
+        request_ctx.body_len = body_len;
+        request_ctx.caller_identity = caller_identity;
+        request_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
+        if (ducknng_http_route_copy(&request_ctx.route, &route) != 0) {
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc);
+            rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to copy HTTP route context");
+            goto done;
+        }
+        if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
+            rv = ducknng_http_alloc_text_response(&res, 500,
+                handler_err ? handler_err : "ducknng: HTTP route handler failed");
+            if (handler_err) duckdb_free(handler_err);
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc);
+            goto done;
+        }
+        ducknng_authorizer_decision_reset(&decision);
+        ducknng_service_end_request(state->svc);
+    }
+    {
+        char *reply_err = NULL;
+        rv = ducknng_http_route_response_alloc(&res, &route_reply, &reply_err);
+        if (rv != 0) {
+            rv = ducknng_http_alloc_text_response(&res, 500,
+                reply_err ? reply_err : "ducknng: failed to build HTTP route response");
+            if (reply_err) duckdb_free(reply_err);
+        }
+    }
+done:
+    if (request_path) duckdb_free(request_path);
+    if (headers_json) duckdb_free(headers_json);
+    if (caller_identity) duckdb_free(caller_identity);
+    ducknng_http_route_reset(&request_ctx.route);
+    ducknng_http_route_reset(&route);
+    ducknng_http_route_reply_reset(&route_reply);
+    ducknng_http_finish_response(aio, res, rv);
+}
+
 static void ducknng_http_rpc_handler(nng_aio *aio) {
     nng_http_req *req;
     nng_http_handler *handler;
@@ -883,7 +1175,7 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
     req = (nng_http_req *)nng_aio_get_input(aio, 0);
     handler = (nng_http_handler *)nng_aio_get_input(aio, 1);
     conn = (nng_http_conn *)nng_aio_get_input(aio, 2);
-    state = handler ? (ducknng_http_server_state *)nng_http_handler_get_data(handler) : NULL;
+    state = ducknng_http_handler_server_state(handler);
     if (!req || !state || !state->svc) {
         rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: missing HTTP server state");
         ducknng_http_finish_response(aio, res, rv);
@@ -1065,6 +1357,8 @@ int ducknng_http_frame_transact(const char *url, const uint8_t *frame, size_t fr
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
     char **out_resolved_url, char **errmsg) {
     ducknng_http_server_state *state = NULL;
+    ducknng_http_handler_data *rpc_handler_data = NULL;
+    ducknng_http_handler_data *route_handler_data = NULL;
     nng_url *up = NULL;
     nng_tls_config *tls_cfg = NULL;
     int rv;
@@ -1115,16 +1409,49 @@ int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_s
     state->cv_initialized = 1;
     rv = nng_http_server_hold(&state->server, up);
     if (rv != 0) goto fail;
-    rv = nng_http_handler_alloc(&state->handler, up->u_path, ducknng_http_rpc_handler);
+    rv = nng_http_handler_alloc(&state->rpc_handler, up->u_path, ducknng_http_rpc_handler);
     if (rv != 0) goto fail;
-    rv = nng_http_handler_set_method(state->handler, "POST");
+    rv = nng_http_handler_set_method(state->rpc_handler, "POST");
     if (rv != 0) goto fail;
-    rv = nng_http_handler_collect_body(state->handler, true, svc->recv_max_bytes);
+    rv = nng_http_handler_collect_body(state->rpc_handler, true, svc->recv_max_bytes);
     if (rv != 0) goto fail;
-    rv = nng_http_handler_set_data(state->handler, state, ducknng_http_server_state_handler_dtor);
+    rpc_handler_data = (ducknng_http_handler_data *)duckdb_malloc(sizeof(*rpc_handler_data));
+    if (!rpc_handler_data) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating HTTP RPC handler state");
+        rv = NNG_ENOMEM;
+        goto fail;
+    }
+    rpc_handler_data->state = state;
+    rpc_handler_data->is_route_handler = 0;
+    rv = nng_http_handler_set_data(state->rpc_handler, rpc_handler_data,
+        ducknng_http_server_state_handler_dtor);
     if (rv != 0) goto fail;
-    state->handler_data_installed = 1;
-    rv = nng_http_server_add_handler(state->server, state->handler);
+    rpc_handler_data = NULL;
+    state->rpc_handler_data_installed = 1;
+    rv = nng_http_server_add_handler(state->server, state->rpc_handler);
+    if (rv != 0) goto fail;
+    rv = nng_http_handler_alloc(&state->route_handler, "/", ducknng_http_route_handler);
+    if (rv != 0) goto fail;
+    rv = nng_http_handler_set_method(state->route_handler, NULL);
+    if (rv != 0) goto fail;
+    rv = nng_http_handler_set_tree(state->route_handler);
+    if (rv != 0) goto fail;
+    rv = nng_http_handler_collect_body(state->route_handler, true, svc->recv_max_bytes);
+    if (rv != 0) goto fail;
+    route_handler_data = (ducknng_http_handler_data *)duckdb_malloc(sizeof(*route_handler_data));
+    if (!route_handler_data) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating HTTP route handler state");
+        rv = NNG_ENOMEM;
+        goto fail;
+    }
+    route_handler_data->state = state;
+    route_handler_data->is_route_handler = 1;
+    rv = nng_http_handler_set_data(state->route_handler, route_handler_data,
+        ducknng_http_server_state_handler_dtor);
+    if (rv != 0) goto fail;
+    route_handler_data = NULL;
+    state->route_handler_data_installed = 1;
+    rv = nng_http_server_add_handler(state->server, state->route_handler);
     if (rv != 0) goto fail;
     if (ducknng_http_tls_requested(&svc->tls_opts)) {
         rv = ducknng_http_tls_config_build(&tls_cfg, NNG_TLS_MODE_SERVER, NULL, &svc->tls_opts);
@@ -1141,16 +1468,30 @@ int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_s
     nng_url_free(up);
     return 0;
 fail:
+    if (rpc_handler_data) duckdb_free(rpc_handler_data);
+    if (route_handler_data) duckdb_free(route_handler_data);
     if (tls_cfg) nng_tls_config_free(tls_cfg);
     if (state) {
-        if (state->server && state->handler) (void)nng_http_server_del_handler(state->server, state->handler);
-        if (state->handler) {
-            nng_http_handler_free(state->handler);
-            state->handler = NULL;
+        if (state->server && state->rpc_handler) (void)nng_http_server_del_handler(state->server, state->rpc_handler);
+        if (state->server && state->route_handler) (void)nng_http_server_del_handler(state->server, state->route_handler);
+        if (state->rpc_handler) {
+            nng_http_handler_free(state->rpc_handler);
+            state->rpc_handler = NULL;
         }
-        if (state->mu_initialized && state->handler_data_installed) {
+        if (state->route_handler) {
+            nng_http_handler_free(state->route_handler);
+            state->route_handler = NULL;
+        }
+        if (state->mu_initialized && state->rpc_handler_data_installed) {
             ducknng_mutex_lock(&state->mu);
-            while (!state->handler_finalized && state->cv_initialized) {
+            while (!state->rpc_handler_finalized && state->cv_initialized) {
+                ducknng_cond_wait(&state->cv, &state->mu);
+            }
+            ducknng_mutex_unlock(&state->mu);
+        }
+        if (state->mu_initialized && state->route_handler_data_installed) {
+            ducknng_mutex_lock(&state->mu);
+            while (!state->route_handler_finalized && state->cv_initialized) {
                 ducknng_cond_wait(&state->cv, &state->mu);
             }
             ducknng_mutex_unlock(&state->mu);
@@ -1176,19 +1517,29 @@ void ducknng_http_server_stop(ducknng_http_server_state *state) {
         state->stopping = 1;
         ducknng_mutex_unlock(&state->mu);
     }
-    if (state->server && state->handler) (void)nng_http_server_del_handler(state->server, state->handler);
+    if (state->server && state->rpc_handler) (void)nng_http_server_del_handler(state->server, state->rpc_handler);
+    if (state->server && state->route_handler) (void)nng_http_server_del_handler(state->server, state->route_handler);
     if (state->server) nng_http_server_stop(state->server);
-    if (state->handler) {
-        nng_http_handler_free(state->handler);
-        state->handler = NULL;
+    if (state->rpc_handler) {
+        nng_http_handler_free(state->rpc_handler);
+        state->rpc_handler = NULL;
     } else if (state->mu_initialized) {
         ducknng_mutex_lock(&state->mu);
-        state->handler_finalized = 1;
+        state->rpc_handler_finalized = 1;
+        ducknng_mutex_unlock(&state->mu);
+    }
+    if (state->route_handler) {
+        nng_http_handler_free(state->route_handler);
+        state->route_handler = NULL;
+    } else if (state->mu_initialized) {
+        ducknng_mutex_lock(&state->mu);
+        state->route_handler_finalized = 1;
         ducknng_mutex_unlock(&state->mu);
     }
     if (state->mu_initialized) {
         ducknng_mutex_lock(&state->mu);
-        while (!state->handler_finalized && state->cv_initialized) {
+        while ((!state->rpc_handler_finalized || !state->route_handler_finalized) &&
+                state->cv_initialized) {
             ducknng_cond_wait(&state->cv, &state->mu);
         }
         ducknng_mutex_unlock(&state->mu);

@@ -92,7 +92,7 @@ Important details:
 - `ducknng_cancel_query(...)` is best-effort session control, not a replacement for the normal explicit close path
 - runtime teardown is fallback cleanup, not the primary lifecycle model for a long-lived DuckDB process
 
-For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`, `docs/manifest.md`, `docs/security.md`, `docs/registry.md`, `docs/transports.md`, `docs/http.md`, `docs/codecs.md`, and `docs/types.md`. The non-sealed routing demo lives in `docs/mesh_routing_demo.md`; `NEWS.md` summarizes landed changes. TLS supports both file-backed and in-memory PEM material (`ducknng_tls_config_from_files(...)`, `ducknng_tls_config_from_pem(...)`, `ducknng_self_signed_tls_config(...)`); `auth_mode = 2` enables required mTLS peer verification for `tls+tcp://`, `wss://`, and `https://` services.
+For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`, `docs/manifest.md`, `docs/security.md`, `docs/registry.md`, `docs/transports.md`, `docs/http.md`, `docs/http_server_framework.md`, `docs/codecs.md`, and `docs/types.md`. A MotherDuck-style multi-process gateway sketch now lives in `docs/motherduck_style_demo.md`; the older non-sealed routing note remains in `docs/mesh_routing_demo.md`. `NEWS.md` summarizes landed changes. TLS supports both file-backed and in-memory PEM material (`ducknng_tls_config_from_files(...)`, `ducknng_tls_config_from_pem(...)`, `ducknng_self_signed_tls_config(...)`); `auth_mode = 2` enables required mTLS peer verification for `tls+tcp://`, `wss://`, and `https://` services.
 
 ## Function catalog
 
@@ -477,6 +477,76 @@ FROM ducknng_decode_frame(getvariable('http_demo_frame'));
 
 SELECT ducknng_stop_server('http_demo');
 ```
+
+### Register low-level HTTP routes beside the framed RPC mount
+
+The framed RPC mount stays exactly where the listen URL says it lives, but HTTP and HTTPS services can now register additional exact-path routes beside that mount. Route handlers are ordinary SQL queries that return exactly one response row, and they can inspect the in-flight request through `ducknng_http_request()` and `ducknng_http_request_body()`.
+
+```{sql eval=TRUE, collapse=FALSE, comment=""}
+SELECT ducknng_start_server(
+  'http_route_demo',
+  'http://127.0.0.1:18445/_ducknng',
+  1,
+  134217728,
+  300000,
+  0::UBIGINT
+);
+
+SET VARIABLE http_route_echo_sql =
+'SELECT 201 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT method || '' '' || path || ''?'' || coalesce(query_string, '''') ||
+                 '' '' || coalesce(content_type, '''') ||
+                 '' '' || coalesce(body_text, '''')
+          FROM ducknng_http_request(), ducknng_http_request_body()
+        ) AS body_text';
+
+SELECT ducknng_register_http_route(
+  'http_route_demo',
+  'GET',
+  '/healthz',
+  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+);
+
+SELECT ducknng_register_http_route(
+  'http_route_demo',
+  'POST',
+  '/echo',
+  getvariable('http_route_echo_sql')::VARCHAR
+);
+
+SELECT ok, status = 200, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/healthz',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+);
+
+SELECT ok, status = 201, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/echo?x=1',
+  'POST',
+  '[{"name":"Content-Type","value":"text/plain"}]',
+  'hello'::BLOB,
+  2000,
+  0::UBIGINT
+);
+
+SELECT service_name, method, path
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_route_demo'
+ORDER BY path;
+
+SELECT ducknng_stop_server('http_route_demo');
+```
+
+These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
+
+A MotherDuck-style public gateway is still a good fit for this layer, but it should use a separate backend DuckDB process or runtime boundary. That multi-process sketch lives in `docs/motherduck_style_demo.md` instead of this README because keeping it honest requires a second live `ducknng` backend, and the README examples are kept runnable in one rendered session.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 
@@ -1519,11 +1589,11 @@ The same pipe-event family is useful beyond admission. NNG exposes `ADD_PRE`, `A
 
 ## Status
 
-What is sealed and runnable in v1: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
+What is sealed and runnable in v1: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level exact-path HTTP routes with SQL response rows and request-context/body helpers; fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
 
 Intentionally deferred:
 
-- A broader nanonext-style HTTP route/server framework — the current HTTP server is the framed RPC mount.
+- Prefix/path-parameter HTTP routing, route-local auth policies, and richer web-toolkit conveniences beyond the current exact-path low-level framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a table-function path.
 - Routing/forwarding and mesh scheduling as sealed APIs — the pipe monitor and active-pipe snapshot are the membership/telemetry foundation that comes first.

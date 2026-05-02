@@ -15,6 +15,8 @@ uint64_t ducknng_sql_arg_u64(duckdb_vector vec, idx_t row, uint64_t dflt);
 bool ducknng_sql_arg_bool(duckdb_vector vec, idx_t row, bool dflt);
 void ducknng_sql_set_null(duckdb_vector vec, idx_t row);
 void ducknng_sql_assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, idx_t len);
+int ducknng_sql_bytes_look_text(const uint8_t *data, size_t len);
+char *ducknng_sql_sockaddr_addr_dup(const nng_sockaddr *addr, char **out_ip, int32_t *out_port);
 int ducknng_sql_register_scalar(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
     duckdb_type return_type_id);
@@ -55,6 +57,7 @@ int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_s
 int ducknng_register_sql_auth(duckdb_connection con, ducknng_sql_context *ctx);
 int ducknng_register_sql_monitor(duckdb_connection con, ducknng_sql_context *ctx);
 int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx);
+int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx);
 int ducknng_register_sql_tls(duckdb_connection con, ducknng_sql_context *ctx);
 int ducknng_register_sql_socket(duckdb_connection con, ducknng_sql_context *ctx);
 int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx);

@@ -132,11 +132,12 @@ Important details:
 
 For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`,
 `docs/manifest.md`, `docs/security.md`, `docs/registry.md`,
-`docs/transports.md`, `docs/http.md`, `docs/codecs.md`, and
-`docs/types.md`. The non-sealed routing demo lives in
-`docs/mesh_routing_demo.md`; `NEWS.md` summarizes landed changes. TLS
-supports both file-backed and in-memory PEM material
-(`ducknng_tls_config_from_files(...)`,
+`docs/transports.md`, `docs/http.md`, `docs/http_server_framework.md`,
+`docs/codecs.md`, and `docs/types.md`. A MotherDuck-style multi-process
+gateway sketch now lives in `docs/motherduck_style_demo.md`; the older
+non-sealed routing note remains in `docs/mesh_routing_demo.md`.
+`NEWS.md` summarizes landed changes. TLS supports both file-backed and
+in-memory PEM material (`ducknng_tls_config_from_files(...)`,
 `ducknng_tls_config_from_pem(...)`,
 `ducknng_self_signed_tls_config(...)`); `auth_mode = 2` enables required
 mTLS peer verification for `tls+tcp://`, `wss://`, and `https://`
@@ -231,6 +232,16 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_register_codec`   | scalar | `content_type, function_name` | `BOOLEAN`                                                                                                          | Register a user body codec that decodes a BLOB body into a single VARCHAR value through an existing scalar SQL function. |
 | `ducknng_unregister_codec` | scalar | `content_type`                | `BOOLEAN`                                                                                                          | Remove a previously registered user body codec for a content type.                                                       |
 | `ducknng_parse_body`       | table  | `body, content_type`          | `TABLE(dynamic by provider)`                                                                                       | Parse one response/request body BLOB according to its content type.                                                      |
+
+## HTTP Routes
+
+| name                            | kind   | arguments                                                      | returns                                                                                                                                                                                                                                                                                                                             | description                                                                                                    |
+|---------------------------------|--------|----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| `ducknng_register_http_route`   | scalar | `service_name, method, path, handler_sql[, request_max_bytes]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                           | Register one exact-path HTTP route beside the framed RPC mount of an existing <http://> or <https://> service. |
+| `ducknng_unregister_http_route` | scalar | `service_name, method, path`                                   | `BOOLEAN`                                                                                                                                                                                                                                                                                                                           | Remove one previously registered exact-path HTTP route from a service.                                         |
+| `ducknng_list_http_routes`      | table  |                                                                | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)`                                                                                                                                                                                   | List the currently registered exact-path HTTP routes across running services.                                  |
+| `ducknng_http_request`          | table  |                                                                | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler.                         |
+| `ducknng_http_request_body`     | table  |                                                                | `TABLE(body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                               | Expose the current HTTP request body while SQL runs inside an active route handler.                            |
 
 ## Async I/O
 
@@ -801,6 +812,130 @@ SELECT ducknng_stop_server('http_demo');
     +----------------------------------+
     | true                             |
     +----------------------------------+
+
+### Register low-level HTTP routes beside the framed RPC mount
+
+The framed RPC mount stays exactly where the listen URL says it lives,
+but HTTP and HTTPS services can now register additional exact-path
+routes beside that mount. Route handlers are ordinary SQL queries that
+return exactly one response row, and they can inspect the in-flight
+request through `ducknng_http_request()` and
+`ducknng_http_request_body()`.
+
+``` sql
+LOAD 'build/release/ducknng.duckdb_extension';
+SELECT ducknng_start_server(
+  'http_route_demo',
+  'http://127.0.0.1:18445/_ducknng',
+  1,
+  134217728,
+  300000,
+  0::UBIGINT
+);
+
+SET VARIABLE http_route_echo_sql =
+'SELECT 201 AS status,
+        ''text/plain; charset=utf-8'' AS content_type,
+        (
+          SELECT method || '' '' || path || ''?'' || coalesce(query_string, '''') ||
+                 '' '' || coalesce(content_type, '''') ||
+                 '' '' || coalesce(body_text, '''')
+          FROM ducknng_http_request(), ducknng_http_request_body()
+        ) AS body_text';
+
+SELECT ducknng_register_http_route(
+  'http_route_demo',
+  'GET',
+  '/healthz',
+  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+);
+
+SELECT ducknng_register_http_route(
+  'http_route_demo',
+  'POST',
+  '/echo',
+  getvariable('http_route_echo_sql')::VARCHAR
+);
+
+SELECT ok, status = 200, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/healthz',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+);
+
+SELECT ok, status = 201, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18445/echo?x=1',
+  'POST',
+  '[{"name":"Content-Type","value":"text/plain"}]',
+  'hello'::BLOB,
+  2000,
+  0::UBIGINT
+);
+
+SELECT service_name, method, path
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_route_demo'
+ORDER BY path;
+
+SELECT ducknng_stop_server('http_route_demo');
+```
+
+    +------------------------------------------------------------------------------------------------------------------------+
+    | ducknng_start_server('http_route_demo', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
+    +------------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                                   |
+    +------------------------------------------------------------------------------------------------------------------------+
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ducknng_register_http_route('http_route_demo', 'GET', '/healthz', 'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text') |
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                                                                          |
+    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    +----------------------------------------------------------------------------------------------------------------------+
+    | ducknng_register_http_route('http_route_demo', 'POST', '/echo', CAST(getvariable('http_route_echo_sql') AS VARCHAR)) |
+    +----------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                                 |
+    +----------------------------------------------------------------------------------------------------------------------+
+    +------+----------------+-----------+
+    |  ok  | (status = 200) | body_text |
+    +------+----------------+-----------+
+    | true | true           | ok        |
+    +------+----------------+-----------+
+    +------+----------------+---------------------------------+
+    |  ok  | (status = 201) |            body_text            |
+    +------+----------------+---------------------------------+
+    | true | true           | POST /echo?x=1 text/plain hello |
+    +------+----------------+---------------------------------+
+    +-----------------+--------+----------+
+    |  service_name   | method |   path   |
+    +-----------------+--------+----------+
+    | http_route_demo | POST   | /echo    |
+    | http_route_demo | GET    | /healthz |
+    +-----------------+--------+----------+
+    +----------------------------------------+
+    | ducknng_stop_server('http_route_demo') |
+    +----------------------------------------+
+    | true                                   |
+    +----------------------------------------+
+
+These route handlers still run inside the service-owned DuckDB execution
+lane, so keep them short and explicit. They are a good fit for health
+checks, thin JSON APIs, and gateway-style fixed operations. They are not
+a safe excuse to expose arbitrary SQL to the public internet, and they
+should not synchronously call back into another `ducknng` service in the
+same runtime when that backend also needs the shared serialized
+execution lane.
+
+A MotherDuck-style public gateway is still a good fit for this layer,
+but it should use a separate backend DuckDB process or runtime boundary.
+That multi-process sketch lives in `docs/motherduck_style_demo.md`
+instead of this README because keeping it honest requires a second live
+`ducknng` backend, and the README examples are kept runnable in one
+rendered session.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 
@@ -2342,17 +2477,19 @@ framed RPC wire protocol.
 What is sealed and runnable in v1: NNG transports and socket patterns;
 first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary
 RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions);
-fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR
-allowlists, service limits); SQL authorizer callbacks; bounded
-per-service pipe-event monitor and active-pipe snapshot; body codec
-layer with built-in providers and user-registered codec hooks. See
-`function_catalog/functions.md` for the exact surface and `NEWS.md` for
-landed changes.
+low-level exact-path HTTP routes with SQL response rows and
+request-context/body helpers; fast C admission (mTLS, exact
+peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
+authorizer callbacks; bounded per-service pipe-event monitor and
+active-pipe snapshot; body codec layer with built-in providers and
+user-registered codec hooks. See `function_catalog/functions.md` for the
+exact surface and `NEWS.md` for landed changes.
 
 Intentionally deferred:
 
-- A broader nanonext-style HTTP route/server framework — the current
-  HTTP server is the framed RPC mount.
+- Prefix/path-parameter HTTP routing, route-local auth policies, and
+  richer web-toolkit conveniences beyond the current exact-path
+  low-level framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
   table-function path.

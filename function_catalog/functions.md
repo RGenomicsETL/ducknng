@@ -81,6 +81,16 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_unregister_codec` | scalar | `content_type` | `BOOLEAN` | Remove a previously registered user body codec for a content type. |
 | `ducknng_parse_body` | table | `body, content_type` | `TABLE(dynamic by provider)` | Parse one response/request body BLOB according to its content type. |
 
+## HTTP Routes
+
+| name | kind | arguments | returns | description |
+|---|---|---|---|---|
+| `ducknng_register_http_route` | scalar | `service_name, method, path, handler_sql[, request_max_bytes]` | `BOOLEAN` | Register one exact-path HTTP route beside the framed RPC mount of an existing http:// or https:// service. |
+| `ducknng_unregister_http_route` | scalar | `service_name, method, path` | `BOOLEAN` | Remove one previously registered exact-path HTTP route from a service. |
+| `ducknng_list_http_routes` | table |  | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, path VARCHAR, handler_sql VARCHAR)` | List the currently registered exact-path HTTP routes across running services. |
+| `ducknng_http_request` | table |  | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_path VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler. |
+| `ducknng_http_request_body` | table |  | `TABLE(body BLOB, body_text VARCHAR)` | Expose the current HTTP request body while SQL runs inside an active route handler. |
+
 ## Async I/O
 
 | name | kind | arguments | returns | description |

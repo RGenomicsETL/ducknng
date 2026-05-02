@@ -77,6 +77,10 @@ This checklist tracks the implementation status of the main architecture, transp
 - [x] Add HTTP/HTTPS aio client helpers without changing the framed RPC carrier contract.
   - `ducknng_ncurl_aio(...)` launches one asynchronous HTTP/HTTPS request.
   - `ducknng_ncurl_aio_collect(...)` returns HTTP-shaped terminal results instead of raw frame rows.
+- [x] Land the low-level exact-path HTTP route framework beside the framed RPC mount.
+  - `ducknng_register_http_route(...)`, `ducknng_unregister_http_route(...)`, and `ducknng_list_http_routes()` expose service-local route registration and introspection for `http://` and `https://` services.
+  - `ducknng_http_request()` and `ducknng_http_request_body()` expose route-local request context and body bytes while handler SQL runs.
+  - Route handlers return one bounded response row and share the same admission stack and `shared_serialized_connection` execution model as framed RPC.
 - [x] Surface NNG pipe events and live pipe snapshots.
   - `ducknng_read_monitor(...)` exposes bounded pipe monitor events with sequence cursors and denial reasons.
   - `ducknng_monitor_status(...)` exposes monitor ring counters and drop counts.
@@ -91,9 +95,8 @@ This checklist tracks the implementation status of the main architecture, transp
 
 - [x] Keep structured-vs-raw helper duplication under explicit review.
   - Resolved: signatures and transport reach are unified, and the raw/structured twins are kept intentionally as the v1 surface. The raw helpers feed `ducknng_decode_frame()` / aio collection paths and the structured helpers wrap them as ergonomic table forms; deleting either side would force every caller through the other style without removing real complexity.
-- [~] Prepare HTTP / HTTPS transport adapters without inventing a second RPC surface.
-  - Current state: `docs/transports.md` and `docs/http.md` now fix the intended boundary, `ducknng_start_server(...)` now covers `http://` and `https://` listeners with `contexts = 1`, `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` provide low-level synchronous/asynchronous HTTP/HTTPS client slices, and the synchronous request/RPC/session helpers now route by URL scheme.
-  - Remaining work: a broader nanonext-style HTTP route framework is intentionally deferred past v1. Any later web-toolkit layer must remain explicitly separate from the sealed framed RPC endpoint and must not create path-specific copies of existing RPC methods.
+- [x] Prepare HTTP / HTTPS transport adapters without inventing a second RPC surface.
+  - Current state: `docs/transports.md` and `docs/http.md` now fix the intended boundary, `ducknng_start_server(...)` covers `http://` and `https://` listeners with `contexts = 1`, `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` provide low-level synchronous/asynchronous HTTP/HTTPS client slices, synchronous request/RPC/session helpers route by URL scheme, and the low-level exact-path route layer stays explicitly beside rather than inside the manifest-derived RPC surface.
 
 ## Blocked by larger architectural replacement work
 
@@ -137,6 +140,6 @@ This checklist tracks the implementation status of the main architecture, transp
 
 1. **Current DuckDB-facing Arrow work stays on manual nanoarrow mappings.** The implementation no longer compiles unstable or deprecated DuckDB Arrow entrypoints, so any future Arrow re-plumb must wait for a non-deprecated seam or be abandoned in favor of maintaining the explicit mappings.
 2. **Session-family ownership is sealed around token plus optional mTLS identity.** Query sessions now have an explicit `session_token` bearer capability and optional mTLS owner-identity binding, so the bare-`session_id` ownership hole is closed. The higher-level row ergonomics are also in place: `ducknng_fetch_query_table(...)` gives the one-fetch table path, `ducknng_query_rpc()` now sits on the session family, and raw session aio launchers collect through the same raw-frame async contract as the rest of RPC. Remaining work is optional isolation and any future structured async wrappers.
-3. **HTTP / HTTPS transport adapters are landed, including the raw async client slice.** The transport-family boundary is explicit in docs and code, `ducknng_start_server(...)` covers HTTP and HTTPS listeners, synchronous request/RPC/session helpers and raw RPC AIO helpers route over HTTP and HTTPS, and `ducknng_ncurl_aio(...)` / `ducknng_ncurl_aio_collect(...)` cover the raw asynchronous HTTP client contract. Remaining HTTP work is about any future web-route framework, not the framed RPC carrier.
+3. **HTTP / HTTPS transport adapters are landed, including the raw async client slice and the low-level route layer.** The transport-family boundary is explicit in docs and code, `ducknng_start_server(...)` covers HTTP and HTTPS listeners, synchronous request/RPC/session helpers and raw RPC AIO helpers route over HTTP and HTTPS, `ducknng_ncurl_aio(...)` / `ducknng_ncurl_aio_collect(...)` cover the raw asynchronous HTTP client contract, and the exact-path route helpers remain an explicitly separate surface beside the framed RPC carrier. Remaining HTTP work is about richer web-toolkit features, not about inventing a second RPC namespace.
 4. **Codec work should not be built on undocumented mapping behavior.** If the project continues using the current manual nanoarrow route, codec decisions should sit on top of explicit tested mappings rather than implicit assumptions about a future Arrow helper path.
 5. **Generic client socket TLS dialing and the supported transport matrix are documented.** Listener-side TLS, one-shot req/rep TLS, and socket-handle dialing share the same TLS-config handle model, including `wss://`; non-TLS URL schemes reject supplied TLS configuration; and `docs/transports.md` plus the README summarize which surfaces accept NNG schemes, HTTP schemes, and TLS handles.

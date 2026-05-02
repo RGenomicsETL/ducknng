@@ -1,124 +1,153 @@
-# HTTP server framework design sketch
+# ducknng HTTP route framework
 
-This is a design document for a future broader HTTP server framework. It is not a sealed API and it does not change the current frame-over-HTTP RPC carrier contract in `docs/http.md`.
+This document defines the landed low-level HTTP route layer that lives beside the framed RPC mount described in `docs/http.md`. It is intentionally narrower than a full web toolkit. The purpose of the layer is to let a service expose exact-path HTTP handlers without minting HTTP-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`.
 
-## Current invariant
+The route layer is part of the public SQL surface, but it is not part of the manifest-derived RPC surface. A registered HTTP route is a local service configuration entry. It is not a registry method, it does not appear in the `manifest` method list, and it does not change the frame-over-HTTP contract at the RPC mount.
 
-The current HTTP/HTTPS server surface is deliberately narrow:
+## Public SQL surface
 
-- `ducknng_start_server(...)` exposes the framed RPC endpoint when the listen URL is `http://` or `https://`.
-- The endpoint accepts `POST` only.
-- The content type is `application/vnd.ducknng.frame` with optional parameters.
-- The body is one complete `ducknng` frame.
-- Registry methods are still `manifest`, optional `exec`, `query_open`, `fetch`, and `cancel`/`close` through the same manifest descriptors used by NNG transports.
-
-A broader HTTP server framework must preserve that invariant. It must not create method duplicates such as `http_exec`, `http_query_open`, `http_fetch`, or `http_cancel`. HTTP routes are application routes beside the framed RPC endpoint, not an alternate RPC namespace.
-
-## Desired shape
-
-A future route framework should let deployments attach explicit HTTP routes to a service:
-
-- method match, e.g. `GET`, `POST`, `PUT`, `DELETE`;
-- path match, initially exact path or prefix path only;
-- optional request size cap;
-- optional content-type constraints;
-- optional response content type;
-- callback SQL or callback method name;
-- route-local auth policy that composes with service auth policy.
-
-The first version should prefer a table-driven registry over ad hoc callbacks so route introspection is possible:
+The current route surface is:
 
 ```sql
--- sketch only, not implemented
-SELECT ducknng_register_http_route(
-  service_name := 'api',
-  method := 'GET',
-  path := '/healthz',
-  handler_sql := 'SELECT 200 AS status, ''ok'' AS body_text'
-);
+ducknng_register_http_route(service_name, method, path, handler_sql)
+ducknng_register_http_route(service_name, method, path, handler_sql, request_max_bytes)
+ducknng_unregister_http_route(service_name, method, path)
+ducknng_list_http_routes()
+ducknng_http_request()
+ducknng_http_request_body()
 ```
+
+`ducknng_register_http_route(...)` installs one exact method/path match on an existing `http://` or `https://` service. `ducknng_unregister_http_route(...)` removes one installed route and returns `FALSE` when no matching route exists. `ducknng_list_http_routes()` exposes the current route registry as a table. `ducknng_http_request()` and `ducknng_http_request_body()` are request-context helpers that only emit a row while SQL is running inside an active route handler.
+
+## Route registration rules
+
+Registration is deliberately strict:
+
+- the target service must already exist and must use `http://` or `https://`
+- `method` is normalized to uppercase and must be a valid HTTP token
+- `path` must be an absolute path and must not contain a query string or fragment
+- the route path must not conflict with the framed RPC mount path from the service listen URL
+- `request_max_bytes`, when non-zero, must be less than or equal to the service `recv_max_bytes`
+- one service cannot register the same normalized `method` plus `path` twice
+
+Route registration and route listing are rejected inside SQL authorizer callbacks and inside active request handlers. That avoids recursive service-owned SQL entry and lock-order problems on the shared execution lane.
 
 ## Request context
 
-Route callbacks should reuse the same context model as framed RPC authorizers. A future context table could be route-aware while staying compatible with `ducknng_auth_context()` concepts:
+Inside an active route handler, `ducknng_http_request()` returns exactly one row with:
 
-- phase;
-- service name;
-- transport family;
-- scheme;
-- listen URL;
-- remote address/IP/port;
-- TLS verification and peer identity;
-- peer/IP allowlist state;
-- HTTP method;
-- HTTP path;
-- query string;
-- content type;
-- body byte count;
-- matched route id/name.
+- `service_name`
+- `listen`
+- `scheme`
+- `method`
+- `path`
+- `query_string`
+- `content_type`
+- `headers_json`
+- `caller_identity`
+- `remote_addr`
+- `remote_ip`
+- `route_method`
+- `route_path`
+- `body_bytes`
+- `route_id`
+- `remote_port`
 
-The existing `ducknng_auth_context()` can remain the authorizer-only table. A separate route callback context may be cleaner if it needs parsed headers, query parameters, or request bodies.
+`ducknng_http_request_body()` returns exactly one row with:
 
-## Authorization
+- `body BLOB`
+- `body_text VARCHAR`
 
-HTTP routes should compose the same admission stack:
+`body_text` is populated only when the request body looks like valid text under the same UTF-8 check used by the other SQL-visible body helpers. Outside an active route handler, both tables emit zero rows instead of raising an error.
 
-1. fast C denial for required mTLS;
-2. exact verified-peer allowlists;
-3. IP/CIDR allowlists;
-4. service resource limits;
-5. optional SQL authorizer at request boundary;
-6. route-local policy.
+`headers_json` uses the same canonical array-of-objects form as `ducknng_ncurl(...)`, for example `[{"name":"Content-Type","value":"application/json"}]`.
 
-SQL authorizer callbacks remain short, side-effect-light, and fail-closed. Recursive same-service `ducknng_*` client/lifecycle calls remain rejected inside callbacks to avoid deadlocks in the service-owned SQL lane.
+## Response contract
 
-## Body handling
+`handler_sql` is executed as one DuckDB query. It must return exactly one row. The route layer recognizes these columns by name:
 
-Raw request bodies should remain raw by default. Parsed bodies should use the explicit codec/provider layer instead of implicit route magic:
+- `status INTEGER`
+- `headers_json VARCHAR`
+- `content_type VARCHAR`
+- `body BLOB`
+- `body_text VARCHAR`
 
-- raw body as `BLOB`;
-- optional `body_text` only when the bytes are valid UTF-8 text;
-- explicit JSON parsing through the JSON provider;
-- Arrow IPC/frame parsing through existing providers;
-- CSV/TSV/Parquet only after a memory-backed reader/provider path is real.
+The rules are:
 
-The HTTP framework should not reinterpret framed RPC bodies. The framed endpoint remains one complete `ducknng` frame and replies with a complete `ducknng` frame.
+- `status` is optional and defaults to `200`
+- when present, `status` must be between `100` and `599`
+- `headers_json` is optional and uses the same canonical JSON form as the client helper layer
+- `content_type` is optional
+- exactly one of `body` or `body_text` may be non-NULL
+- when `body_text` is used without `content_type`, the default content type is `text/plain; charset=utf-8`
+- when `body` is used without `content_type`, the default content type is `application/octet-stream`
 
-## Response model
+If the handler returns the wrong shape, returns more than one row, or raises a query error, the adapter fails closed with an HTTP 5xx response.
 
-A route callback should produce a bounded response row, likely with columns like:
+## Admission and security
 
-- `status INTEGER`;
-- `headers_json VARCHAR`;
-- `body BLOB` or `body_text VARCHAR`;
-- `content_type VARCHAR`.
+Route requests compose the same service-level admission stack as framed RPC:
 
-The callback must return exactly one row. Multiple rows or missing required columns should fail closed with an adapter-level error response.
+1. required mTLS when the service TLS policy demands it
+2. exact verified-peer allowlists
+3. IP/CIDR allowlists
+4. service-level inflight limits
+5. optional SQL authorizer
 
-## Resource limits
+The SQL authorizer sees route requests through `ducknng_auth_context()` with `phase = 'http_route'` and HTTP fields populated from the current request. That keeps policy carrier-neutral while still letting deployments write HTTP-specific denials when needed.
 
-Route traffic should share service-level limits with framed RPC where practical:
+Routes do not bypass the guidance in `docs/security.md`. They are a good fit for health endpoints, thin JSON APIs, Arrow-returning gateway operations, and fixed application routes. They are not an automatic sandbox for arbitrary public SQL.
 
-- maximum request body size;
-- maximum in-flight requests;
-- future owner/identity quotas;
-- future cumulative reply-byte limits.
+## Execution model
 
-Route-local caps can add stricter request and reply byte limits. They should not bypass global service limits.
+Route handler SQL runs inside the same service-owned DuckDB execution lane exposed elsewhere as:
 
-## Non-goals
+```text
+server.execution.model = "shared_serialized_connection"
+```
 
-- no HTTP-specific copies of RPC methods;
-- no implicit `exec` exposure through HTTP routes;
-- no body parser claims for CSV/TSV/Parquet until those providers really parse in memory;
-- no long-running SQL authorizer work;
-- no route callbacks inside NNG low-level pipe callbacks;
-- no sealed public route API before a prototype and tests prove the shape.
+That is the stable current contract. It means:
 
-## Open questions
+- handler SQL is serialized with the service's other DuckDB work
+- DuckDB session state on that lane is shared
+- handlers should stay short and explicit
+- handlers must not assume they can re-enter the same runtime arbitrarily
 
-- whether route callbacks should be SQL strings, registered method names, or both;
-- whether route matching should initially support path parameters or only exact/prefix matches;
-- how to expose request headers without making callback rows huge;
-- whether route results should be cached for static health/status endpoints;
-- how route-local rate limits should identify owners before SQL authorizer principals become session/request ownership metadata.
+The most important practical consequence is that a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs the shared execution lane. That pattern can block on itself. A MotherDuck-style public gateway should therefore target a separate backend DuckDB process or at least a separate `ducknng` runtime boundary, not a sibling service in the same runtime.
+
+## Example
+
+```sql
+SELECT ducknng_register_http_route(
+  'api',
+  'GET',
+  '/healthz',
+  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+);
+
+SELECT ducknng_register_http_route(
+  'api',
+  'POST',
+  '/echo',
+  'SELECT 201 AS status,
+          ''text/plain; charset=utf-8'' AS content_type,
+          (
+            SELECT method || '' '' || path || '' '' || coalesce(body_text, '''')
+            FROM ducknng_http_request(), ducknng_http_request_body()
+          ) AS body_text'
+);
+```
+
+## Explicit non-goals
+
+The landed layer is intentionally low-level. These are still deferred:
+
+- prefix or wildcard route matching
+- path-parameter extraction
+- automatic query-parameter parsing helpers
+- static asset serving
+- HTTP-carrier WebSocket, SSE, or NDJSON streaming
+- HTTP-specific copies of manifest-derived RPC methods
+- automatic SQL-to-JSON marshalling for arbitrary rowsets
+
+Those may arrive later as additive tooling, but they must stay clearly separate from the framed RPC carrier and from the manifest-derived method surface.
