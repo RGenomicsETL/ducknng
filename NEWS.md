@@ -4,6 +4,8 @@
 
 ### Latest additions
 
+- Added `make check_news` plus `scripts/check_news.py` so user-visible changes in `src/`, `docs/`, `demo/`, `README.Rmd`, and the main build workflow now fail locally unless `NEWS.md` is updated too; `BASE=<ref>` makes the same check usable on commit ranges in CI.
+- Added `make docs` as the umbrella documentation target over the rendered README and the dedicated subscriber-gateway walkthrough, instead of keeping those render paths as separate ad hoc commands.
 - Removed the temporary `ducknng_start_http_server(...)` alias and made `ducknng_start_server(...)` the single scheme-routed server entrypoint across NNG and HTTP/HTTPS, with `contexts = 1` as the explicit HTTP carrier rule.
 - Made the NNG request aio path honest end to end: URL-launched raw request aio no longer blocks on the initial dial, raw RPC aio helpers route by URL scheme, and HTTP/HTTPS now shares the same raw aio request family instead of living on a separate dual track.
 - Unified Arrow row decoding into a shared internal layer, rebased `ducknng_query_rpc(...)` onto the explicit session lifecycle, added `ducknng_fetch_query_table(...)` as the one-fetch decoded-table convenience path, and added raw async session launchers for `open`, `fetch`, `close`, and `cancel`.

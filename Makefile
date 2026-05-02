@@ -1,4 +1,4 @@
-.PHONY: clean clean_all function_catalog rdm rpc_smoke rpc_smoke_r http_smoke motherduck_demo motherduck_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke motherduck_demo motherduck_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -11,6 +11,15 @@ motherduck_demo: release
 
 motherduck_rdm: release
 	R -e "rmarkdown::render('demo/motherduck_gateway.Rmd')"
+
+check_news:
+ifdef BASE
+	python3 scripts/check_news.py --base "$(BASE)"
+else
+	python3 scripts/check_news.py
+endif
+
+docs: rdm motherduck_rdm
 
 rpc_smoke_r:
 	@if command -v Rscript >/dev/null 2>&1; then \
