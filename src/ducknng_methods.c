@@ -510,33 +510,6 @@ const ducknng_method_descriptor ducknng_method_exec = {
     ducknng_method_exec_handler
 };
 
-static const ducknng_method_descriptor ducknng_method_exec_requires_auth = {
-    "exec",
-    "sql",
-    "Execute SQL and return metadata or rows",
-    DUCKNNG_TRANSPORT_REQREP,
-    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
-    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
-    DUCKNNG_RESPONSE_METADATA_OR_ROWS,
-    DUCKNNG_SESSION_STATELESS,
-    0,
-    DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_RESULT_METADATA | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
-    16 * 1024 * 1024,
-    16 * 1024 * 1024,
-    1,
-    0,
-    0,
-    0,
-    1,
-    0,
-    0,
-    0,
-    1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"want_result\",\"type\":\"bool\",\"nullable\":false}]}",
-    "{\"mode\":\"metadata_or_rows\"}",
-    ducknng_method_exec_handler
-};
-
 const ducknng_method_descriptor ducknng_method_query_open = {
     "query_open",
     "query",
@@ -693,8 +666,13 @@ int ducknng_register_exec_method_with_auth(ducknng_runtime *rt, int requires_aut
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for exec method registration");
         return 0;
     }
-    return ducknng_method_registry_register(&rt->registry,
-        requires_auth ? &ducknng_method_exec_requires_auth : &ducknng_method_exec, errmsg);
+    if (!ducknng_method_registry_register(&rt->registry, &ducknng_method_exec, errmsg)) return 0;
+    if (!requires_auth) return 1;
+    if (ducknng_method_registry_set_requires_auth(&rt->registry, ducknng_method_exec.name, 1, errmsg)) {
+        return 1;
+    }
+    ducknng_method_registry_unregister(&rt->registry, ducknng_method_exec.name);
+    return 0;
 }
 
 int ducknng_register_exec_method(ducknng_runtime *rt, char **errmsg) {
