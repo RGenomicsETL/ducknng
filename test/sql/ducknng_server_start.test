@@ -113,6 +113,13 @@ WHERE name = 'sql0'
 ----
 false	0	false
 
+query T
+SELECT execution_model
+FROM ducknng_list_servers()
+WHERE name = 'sql0'
+----
+shared_serialized_connection
+
 query TI
 SELECT name, requires_auth
 FROM ducknng_list_methods()

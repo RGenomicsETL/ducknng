@@ -78,53 +78,9 @@ typedef struct {
 static _Thread_local ducknng_fetch_query_table_rebind_cache ducknng_fetch_query_table_cache;
 static _Thread_local uint64_t ducknng_fetch_query_table_cache_generation;
 
-static int arg_is_null(duckdb_vector vec, idx_t row) {
-    uint64_t *validity = duckdb_vector_get_validity(vec);
-    return validity && !duckdb_validity_row_is_valid(validity, row);
-}
-
-static void set_null(duckdb_vector vec, idx_t row) {
-    uint64_t *validity;
-    duckdb_vector_ensure_validity_writable(vec);
-    validity = duckdb_vector_get_validity(vec);
-    duckdb_validity_set_row_invalid(validity, row);
-}
-
-static void assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, idx_t len) {
-    duckdb_vector_assign_string_element_len(vec, row, (const char *)data, len);
-}
-
-static int ducknng_reject_table_inside_authorizer(duckdb_bind_info info, ducknng_sql_context *ctx) {
-    if (ctx && ctx->rt && ducknng_runtime_current_thread_authorizer_context_get(ctx->rt)) {
-        duckdb_bind_set_error(info, "ducknng: ducknng client and lifecycle functions cannot run inside a SQL authorizer callback");
-        return 1;
-    }
-    return 0;
-}
-
 static void destroy_single_row_init_data(void *ptr) {
     ducknng_single_row_init_data *data = (ducknng_single_row_init_data *)ptr;
     if (data) duckdb_free(data);
-}
-
-static void destroy_sql_context_extra(void *data) {
-    if (data) duckdb_free(data);
-}
-
-static ducknng_sql_context *ducknng_dup_sql_context(const ducknng_sql_context *ctx) {
-    ducknng_sql_context *copy;
-    if (!ctx) return NULL;
-    copy = (ducknng_sql_context *)duckdb_malloc(sizeof(*copy));
-    if (!copy) return NULL;
-    *copy = *ctx;
-    return copy;
-}
-
-static int ducknng_set_table_sql_context(duckdb_table_function tf, const ducknng_sql_context *ctx) {
-    ducknng_sql_context *copy = ducknng_dup_sql_context(ctx);
-    if (!copy) return 0;
-    duckdb_table_function_set_extra_info(tf, copy, destroy_sql_context_extra);
-    return 1;
 }
 
 static void ducknng_session_result_bind_data_reset(ducknng_session_result_bind_data *data) {
@@ -1052,121 +1008,37 @@ static void ducknng_fetch_query_table_scan(duckdb_function_info info, duckdb_dat
 
 
 static int register_open_query_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_table_function tf;
-    duckdb_logical_type type_varchar;
-    duckdb_logical_type type_u64;
+    duckdb_type param_types[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT,
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
-    tf = duckdb_create_table_function();
-    if (!tf) return 0;
-    duckdb_table_function_set_name(tf, name);
-    type_varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    type_u64 = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_destroy_logical_type(&type_varchar);
-    duckdb_destroy_logical_type(&type_u64);
-    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
-    duckdb_table_function_set_bind(tf, ducknng_open_query_bind);
-    duckdb_table_function_set_init(tf, ducknng_session_result_init);
-    duckdb_table_function_set_function(tf, ducknng_session_control_scan);
-    if (duckdb_register_table_function(con, tf) == DuckDBError) {
-        duckdb_destroy_table_function(&tf);
-        return 0;
-    }
-    duckdb_destroy_table_function(&tf);
-    return 1;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 5, param_types, ducknng_open_query_bind,
+        ducknng_session_result_init, ducknng_session_control_scan);
 }
 
 static int register_session_control_table_named(duckdb_connection con, ducknng_sql_context *ctx,
     const char *name, duckdb_table_function_bind_t bind_fn) {
-    duckdb_table_function tf;
-    duckdb_logical_type type_varchar;
-    duckdb_logical_type type_u64;
+    duckdb_type param_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
-    tf = duckdb_create_table_function();
-    if (!tf) return 0;
-    duckdb_table_function_set_name(tf, name);
-    type_varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    type_u64 = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_destroy_logical_type(&type_varchar);
-    duckdb_destroy_logical_type(&type_u64);
-    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
-    duckdb_table_function_set_bind(tf, bind_fn);
-    duckdb_table_function_set_init(tf, ducknng_session_result_init);
-    duckdb_table_function_set_function(tf, ducknng_session_control_scan);
-    if (duckdb_register_table_function(con, tf) == DuckDBError) {
-        duckdb_destroy_table_function(&tf);
-        return 0;
-    }
-    duckdb_destroy_table_function(&tf);
-    return 1;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 4, param_types, bind_fn,
+        ducknng_session_result_init, ducknng_session_control_scan);
 }
 
 static int register_fetch_query_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_table_function tf;
-    duckdb_logical_type type_varchar;
-    duckdb_logical_type type_u64;
+    duckdb_type param_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
-    tf = duckdb_create_table_function();
-    if (!tf) return 0;
-    duckdb_table_function_set_name(tf, name);
-    type_varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    type_u64 = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_destroy_logical_type(&type_varchar);
-    duckdb_destroy_logical_type(&type_u64);
-    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
-    duckdb_table_function_set_bind(tf, ducknng_fetch_query_bind);
-    duckdb_table_function_set_init(tf, ducknng_session_result_init);
-    duckdb_table_function_set_function(tf, ducknng_fetch_query_scan);
-    if (duckdb_register_table_function(con, tf) == DuckDBError) {
-        duckdb_destroy_table_function(&tf);
-        return 0;
-    }
-    duckdb_destroy_table_function(&tf);
-    return 1;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 6, param_types, ducknng_fetch_query_bind,
+        ducknng_session_result_init, ducknng_fetch_query_scan);
 }
 
 static int register_fetch_query_table_rows_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_table_function tf;
-    duckdb_logical_type type_varchar;
-    duckdb_logical_type type_u64;
+    duckdb_type param_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
-    tf = duckdb_create_table_function();
-    if (!tf) return 0;
-    duckdb_table_function_set_name(tf, name);
-    type_varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    type_u64 = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_varchar);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_table_function_add_parameter(tf, type_u64);
-    duckdb_destroy_logical_type(&type_varchar);
-    duckdb_destroy_logical_type(&type_u64);
-    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
-    duckdb_table_function_set_bind(tf, ducknng_fetch_query_table_bind);
-    duckdb_table_function_set_init(tf, ducknng_fetch_query_table_init);
-    duckdb_table_function_set_function(tf, ducknng_fetch_query_table_scan);
-    if (duckdb_register_table_function(con, tf) == DuckDBError) {
-        duckdb_destroy_table_function(&tf);
-        return 0;
-    }
-    duckdb_destroy_table_function(&tf);
-    return 1;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 6, param_types,
+        ducknng_fetch_query_table_bind, ducknng_fetch_query_table_init,
+        ducknng_fetch_query_table_scan);
 }
 
 

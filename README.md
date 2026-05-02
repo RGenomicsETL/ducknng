@@ -37,7 +37,11 @@ through each in turn.
     IP/CIDR allowlists, and service limits. Optional SQL authorizers run
     at the request boundary and read context through
     `ducknng_auth_context()`. Sessions are bearer-token owned,
-    additionally bound to verified mTLS identity when present.
+    additionally bound to verified mTLS identity when present. The
+    current stable execution model is `shared_serialized_connection`:
+    service-owned DuckDB SQL is serialized through one shared
+    connection, and that contract is exposed in `manifest` and
+    `ducknng_list_servers()`.
 4.  **Codecs.** `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)`
     parse content-type-tagged BLOBs. Built-in providers cover JSON,
     Arrow IPC, ducknng frames, and a text/raw fallback. Deployments can
@@ -158,12 +162,12 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Introspection
 
-| name                     | kind  | arguments                     | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | description                                                                     |
-|--------------------------|-------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
-| `ducknng_list_servers`   | table |                               | `TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)` | List registered ducknng services.                                               |
-| `ducknng_read_monitor`   | table | `name, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                    | Read the bounded per-service NNG pipe monitor event stream.                     |
-| `ducknng_monitor_status` | table | `name`                        | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)`                                                                                                                                                                                                                                                                                                                                   | Return pipe monitor ring status and active-pipe counters for a running service. |
-| `ducknng_list_pipes`     | table | `name`                        | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                              | List currently active NNG pipes for a running service.                          |
+| name                     | kind  | arguments                     | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | description                                                                     |
+|--------------------------|-------|-------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| `ducknng_list_servers`   | table |                               | `TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)` | List registered ducknng services.                                               |
+| `ducknng_read_monitor`   | table | `name, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                             | Read the bounded per-service NNG pipe monitor event stream.                     |
+| `ducknng_monitor_status` | table | `name`                        | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)`                                                                                                                                                                                                                                                                                                                                                            | Return pipe monitor ring status and active-pipe counters for a running service. |
+| `ducknng_list_pipes`     | table | `name`                        | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                       | List currently active NNG pipes for a running service.                          |
 
 ## Method Registry
 
@@ -285,7 +289,7 @@ SELECT ducknng_start_server(
   0                               -- tls_config_id (0 means plaintext)
 );
 
-SELECT name, listen, contexts, running, sessions
+SELECT name, listen, contexts, running, execution_model, sessions
 FROM ducknng_list_servers();
 
 SELECT ducknng_stop_server('sql0');
@@ -296,11 +300,11 @@ SELECT ducknng_stop_server('sql0');
     +--------------------------------------------------------------------------------------+
     | true                                                                                 |
     +--------------------------------------------------------------------------------------+
-    +------+-----------------------------+----------+---------+----------+
-    | name |           listen            | contexts | running | sessions |
-    +------+-----------------------------+----------+---------+----------+
-    | sql0 | ipc:///tmp/ducknng_sql0.ipc | 1        | true    | 0        |
-    +------+-----------------------------+----------+---------+----------+
+    +------+-----------------------------+----------+---------+------------------------------+----------+
+    | name |           listen            | contexts | running |       execution_model        | sessions |
+    +------+-----------------------------+----------+---------+------------------------------+----------+
+    | sql0 | ipc:///tmp/ducknng_sql0.ipc | 1        | true    | shared_serialized_connection | 0        |
+    +------+-----------------------------+----------+---------+------------------------------+----------+
     +-----------------------------+
     | ducknng_stop_server('sql0') |
     +-----------------------------+
@@ -1677,17 +1681,18 @@ identity allowlist copied into future services, and
 dynamically for a running service. NNG listeners use NNG’s
 `NNG_PIPE_EV_ADD_PRE` pipe notification to close non-admitted new pipes
 before they are added to the socket; HTTP/HTTPS returns HTTP `403`
-before RPC dispatch. `ducknng_list_servers()` exposes `active_pipes`,
-`max_active_pipes`, `inflight_requests`, `max_inflight_requests`,
-`max_sessions_per_peer_identity`, `tls_enabled`, `tls_auth_mode`,
-`peer_identity_required`, `peer_allowlist_active`,
-`ip_allowlist_active`, `sql_authorizer_active`, and the corresponding
-counts so deployments can distinguish current NNG membership, TLS
-without client verification, mTLS, allowlisted mTLS, IP-gated services,
-and services with SQL authorization callbacks. Individual
-registry-backed methods can also require verified peer identity; for
-example, `ducknng_set_method_auth('manifest', true)` protects manifest
-discovery without unregistering the method.
+before RPC dispatch. `ducknng_list_servers()` exposes `execution_model`,
+`active_pipes`, `max_active_pipes`, `inflight_requests`,
+`max_inflight_requests`, `max_sessions_per_peer_identity`,
+`tls_enabled`, `tls_auth_mode`, `peer_identity_required`,
+`peer_allowlist_active`, `ip_allowlist_active`, `sql_authorizer_active`,
+and the corresponding counts so deployments can distinguish the current
+execution-lane contract, current NNG membership, TLS without client
+verification, mTLS, allowlisted mTLS, IP-gated services, and services
+with SQL authorization callbacks. Individual registry-backed methods can
+also require verified peer identity; for example,
+`ducknng_set_method_auth('manifest', true)` protects manifest discovery
+without unregistering the method.
 
 The built-in mTLS, peer-identity allowlist, and IP/CIDR allowlist checks
 are the fast C path for common denials. They run before the flexible SQL
@@ -1713,13 +1718,13 @@ columns are `status`, `reason`, `principal`, `claims_json`, and
 `cache_ttl_ms`. `NULL` or an empty string clears the SQL authorizer.
 This callback is intentionally evaluated at the request/dispatch
 boundary, not inside NNG’s low-level pipe callback. It runs through the
-service-owned DuckDB execution lane, so keep it short and
-side-effect-light: prefer table/view lookups, avoid recursive
-`ducknng_*` client calls to the same service, avoid stopping the service
-from its own callback, and do not use it for long-running work. That
-limitation avoids deadlocks while keeping one uniform policy interface
-for NNG, HTTP/HTTPS framed RPC, and the planned broader HTTP server
-framework.
+service-owned DuckDB execution lane exposed as
+`shared_serialized_connection`, so keep it short and side-effect-light:
+prefer table/view lookups, avoid recursive `ducknng_*` client calls to
+the same service, avoid stopping the service from its own callback, and
+do not use it for long-running work. That limitation avoids deadlocks
+while keeping one uniform policy interface for NNG, HTTP/HTTPS framed
+RPC, and the planned broader HTTP server framework.
 
 ### `tls+tcp://` from file-backed certificate material
 

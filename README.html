@@ -638,7 +638,11 @@ as futures.</li>
 peer-identity allowlists, IP/CIDR allowlists, and service limits.
 Optional SQL authorizers run at the request boundary and read context
 through <code>ducknng_auth_context()</code>. Sessions are bearer-token
-owned, additionally bound to verified mTLS identity when present.</li>
+owned, additionally bound to verified mTLS identity when present. The
+current stable execution model is
+<code>shared_serialized_connection</code>: service-owned DuckDB SQL is
+serialized through one shared connection, and that contract is exposed
+in <code>manifest</code> and <code>ducknng_list_servers()</code>.</li>
 <li><strong>Codecs.</strong> <code>ducknng_parse_body(...)</code> and
 <code>ducknng_ncurl_table(...)</code> parse content-type-tagged BLOBs.
 Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw
@@ -786,7 +790,7 @@ URL scheme.</td>
 <td><code>ducknng_list_servers</code></td>
 <td>table</td>
 <td></td>
-<td><code>TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)</code></td>
+<td><code>TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)</code></td>
 <td>List registered ducknng services.</td>
 </tr>
 <tr class="even">
@@ -1426,7 +1430,7 @@ listener and inspect the registry</h3>
 <span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a>  <span class="dv">0</span>                               <span class="co">-- tls_config_id (0 means plaintext)</span></span>
 <span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a>);</span>
 <span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a></span>
-<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a><span class="kw">SELECT</span> name, listen, contexts, running, sessions</span>
+<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a><span class="kw">SELECT</span> name, listen, contexts, running, execution_model, sessions</span>
 <span id="cb4-12"><a href="#cb4-12" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_servers();</span>
 <span id="cb4-13"><a href="#cb4-13" tabindex="-1"></a></span>
 <span id="cb4-14"><a href="#cb4-14" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql0&#39;</span>);</span></code></pre></div>
@@ -1435,11 +1439,11 @@ listener and inspect the registry</h3>
 +--------------------------------------------------------------------------------------+
 | true                                                                                 |
 +--------------------------------------------------------------------------------------+
-+------+-----------------------------+----------+---------+----------+
-| name |           listen            | contexts | running | sessions |
-+------+-----------------------------+----------+---------+----------+
-| sql0 | ipc:///tmp/ducknng_sql0.ipc | 1        | true    | 0        |
-+------+-----------------------------+----------+---------+----------+
++------+-----------------------------+----------+---------+------------------------------+----------+
+| name |           listen            | contexts | running |       execution_model        | sessions |
++------+-----------------------------+----------+---------+------------------------------+----------+
+| sql0 | ipc:///tmp/ducknng_sql0.ipc | 1        | true    | shared_serialized_connection | 0        |
++------+-----------------------------+----------+---------+------------------------------+----------+
 +-----------------------------+
 | ducknng_stop_server(&#39;sql0&#39;) |
 +-----------------------------+
@@ -2760,17 +2764,19 @@ allowlist dynamically for a running service. NNG listeners use NNG’s
 <code>NNG_PIPE_EV_ADD_PRE</code> pipe notification to close non-admitted
 new pipes before they are added to the socket; HTTP/HTTPS returns HTTP
 <code>403</code> before RPC dispatch.
-<code>ducknng_list_servers()</code> exposes <code>active_pipes</code>,
+<code>ducknng_list_servers()</code> exposes
+<code>execution_model</code>, <code>active_pipes</code>,
 <code>max_active_pipes</code>, <code>inflight_requests</code>,
 <code>max_inflight_requests</code>,
 <code>max_sessions_per_peer_identity</code>, <code>tls_enabled</code>,
 <code>tls_auth_mode</code>, <code>peer_identity_required</code>,
 <code>peer_allowlist_active</code>, <code>ip_allowlist_active</code>,
 <code>sql_authorizer_active</code>, and the corresponding counts so
-deployments can distinguish current NNG membership, TLS without client
-verification, mTLS, allowlisted mTLS, IP-gated services, and services
-with SQL authorization callbacks. Individual registry-backed methods can
-also require verified peer identity; for example,
+deployments can distinguish the current execution-lane contract, current
+NNG membership, TLS without client verification, mTLS, allowlisted mTLS,
+IP-gated services, and services with SQL authorization callbacks.
+Individual registry-backed methods can also require verified peer
+identity; for example,
 <code>ducknng_set_method_auth(&#39;manifest&#39;, true)</code> protects manifest
 discovery without unregistering the method.</p>
 <p>The built-in mTLS, peer-identity allowlist, and IP/CIDR allowlist
@@ -2800,8 +2806,9 @@ column; optional columns are <code>status</code>, <code>reason</code>,
 <code>cache_ttl_ms</code>. <code>NULL</code> or an empty string clears
 the SQL authorizer. This callback is intentionally evaluated at the
 request/dispatch boundary, not inside NNG’s low-level pipe callback. It
-runs through the service-owned DuckDB execution lane, so keep it short
-and side-effect-light: prefer table/view lookups, avoid recursive
+runs through the service-owned DuckDB execution lane exposed as
+<code>shared_serialized_connection</code>, so keep it short and
+side-effect-light: prefer table/view lookups, avoid recursive
 <code>ducknng_*</code> client calls to the same service, avoid stopping
 the service from its own callback, and do not use it for long-running
 work. That limitation avoids deadlocks while keeping one uniform policy

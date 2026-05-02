@@ -34,14 +34,15 @@ FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIG
 ----
 1	1
 
-query IIIT
+query IIIIT
 SELECT position('"session_token"' IN manifest) > 0,
        position('"idle_timeout_ms"' IN manifest) > 0,
+       json_extract_string(manifest::JSON, '$.server.execution.model'),
        json_extract(manifest::JSON, '$.server.session_policy.idle_timeout_ms')::UBIGINT = 300000,
        json_extract_string(manifest::JSON, '$.server.session_policy.idle_timeout_owner')
 FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
 ----
-1	1	1	server
+1	1	shared_serialized_connection	1	server
 
 query IIIIIII
 SELECT ok, version, type, flags, type_name, name, position('"name":"exec"' IN payload_text) > 0
@@ -85,6 +86,13 @@ FROM ducknng_list_servers()
 WHERE name = 'rpc_smoke'
 ----
 0
+
+query T
+SELECT execution_model
+FROM ducknng_list_servers()
+WHERE name = 'rpc_smoke'
+----
+shared_serialized_connection
 
 query II
 SELECT count(*)::INTEGER, sum(i) IS NULL

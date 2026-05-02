@@ -378,6 +378,10 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
         if (!append_text(&buf, &len, &cap,
                 security->sessions_bind_peer_identity_when_present ? "true" : "false")) goto oom;
         if (!append_text(&buf, &len, &cap, "}")) goto oom;
+        if (!append_text(&buf, &len, &cap, ",\"execution\":{\"model\":")) goto oom;
+        if (!append_json_string(&buf, &len, &cap,
+                security->execution_model ? security->execution_model : "shared_serialized_connection")) goto oom;
+        if (!append_text(&buf, &len, &cap, "}")) goto oom;
         snprintf(numbuf, sizeof(numbuf), ",\"session_policy\":{\"idle_timeout_ms\":%llu,\"idle_timeout_owner\":\"server\",\"max_open_sessions\":%llu,\"max_open_sessions_owner\":\"server\",\"max_sessions_per_peer_identity\":%llu,\"max_sessions_per_peer_identity_owner\":\"server\"}",
             (unsigned long long)security->session_idle_timeout_ms,
             (unsigned long long)security->max_open_sessions,

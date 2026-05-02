@@ -30,100 +30,6 @@ typedef struct {
     idx_t offset;
 } ducknng_sockets_init_data;
 
-static int arg_is_null(duckdb_vector vec, idx_t row) {
-    uint64_t *validity = duckdb_vector_get_validity(vec);
-    return validity && !duckdb_validity_row_is_valid(validity, row);
-}
-
-static char *arg_varchar_dup(duckdb_vector vec, idx_t row) {
-    duckdb_string_t *data = (duckdb_string_t *)duckdb_vector_get_data(vec);
-    const char *src;
-    uint32_t len;
-    char *out;
-    if (arg_is_null(vec, row)) return NULL;
-    src = duckdb_string_t_data(&data[row]);
-    len = duckdb_string_t_length(data[row]);
-    out = (char *)duckdb_malloc((size_t)len + 1);
-    if (!out) return NULL;
-    memcpy(out, src, len);
-    out[len] = '\0';
-    return out;
-}
-
-static uint8_t *arg_blob_dup(duckdb_vector vec, idx_t row, idx_t *out_len) {
-    duckdb_string_t *data = (duckdb_string_t *)duckdb_vector_get_data(vec);
-    const char *src;
-    uint32_t len;
-    uint8_t *out;
-    if (out_len) *out_len = 0;
-    if (arg_is_null(vec, row)) return NULL;
-    src = duckdb_string_t_data(&data[row]);
-    len = duckdb_string_t_length(data[row]);
-    out = (uint8_t *)duckdb_malloc((size_t)len);
-    if (!out && len > 0) return NULL;
-    if (len > 0) memcpy(out, src, len);
-    if (out_len) *out_len = (idx_t)len;
-    return out;
-}
-
-static int32_t arg_int32(duckdb_vector vec, idx_t row, int32_t dflt) {
-    int32_t *data = (int32_t *)duckdb_vector_get_data(vec);
-    if (arg_is_null(vec, row)) return dflt;
-    return data[row];
-}
-
-static uint64_t arg_u64(duckdb_vector vec, idx_t row, uint64_t dflt) {
-    uint64_t *data = (uint64_t *)duckdb_vector_get_data(vec);
-    if (arg_is_null(vec, row)) return dflt;
-    return data[row];
-}
-
-static void set_null(duckdb_vector vec, idx_t row) {
-    uint64_t *validity;
-    duckdb_vector_ensure_validity_writable(vec);
-    validity = duckdb_vector_get_validity(vec);
-    duckdb_validity_set_row_invalid(validity, row);
-}
-
-static void assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, idx_t len) {
-    duckdb_vector_assign_string_element_len(vec, row, (const char *)data, len);
-}
-
-static void destroy_sql_context_extra(void *data) {
-    if (data) duckdb_free(data);
-}
-
-static ducknng_sql_context *ducknng_dup_sql_context(const ducknng_sql_context *ctx) {
-    ducknng_sql_context *copy;
-    if (!ctx) return NULL;
-    copy = (ducknng_sql_context *)duckdb_malloc(sizeof(*copy));
-    if (!copy) return NULL;
-    *copy = *ctx;
-    return copy;
-}
-
-static int ducknng_set_scalar_sql_context(duckdb_scalar_function fn, const ducknng_sql_context *ctx) {
-    ducknng_sql_context *copy = ducknng_dup_sql_context(ctx);
-    if (!copy) return 0;
-    duckdb_scalar_function_set_extra_info(fn, copy, destroy_sql_context_extra);
-    return 1;
-}
-
-static int ducknng_set_table_sql_context(duckdb_table_function tf, const ducknng_sql_context *ctx) {
-    ducknng_sql_context *copy = ducknng_dup_sql_context(ctx);
-    if (!copy) return 0;
-    duckdb_table_function_set_extra_info(tf, copy, destroy_sql_context_extra);
-    return 1;
-}
-
-static int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_sql_context *ctx) {
-    if (ctx && ctx->rt && ducknng_runtime_current_thread_authorizer_context_get(ctx->rt)) {
-        duckdb_scalar_function_set_error(info, "ducknng: ducknng client and lifecycle functions cannot run inside a SQL authorizer callback");
-        return 1;
-    }
-    return 0;
-}
-
 static int ducknng_lookup_tls_config_copy(ducknng_sql_context *ctx, uint64_t tls_config_id,
     uint64_t *out_id, char **out_source, ducknng_tls_opts *out_opts, char **errmsg) {
     size_t i;
@@ -773,50 +679,9 @@ static void ducknng_sockets_scan(duckdb_function_info info, duckdb_data_chunk ou
 
 
 static int register_named_sockets_table(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_table_function tf;
     if (!ctx || !ctx->rt) return 0;
-    tf = duckdb_create_table_function();
-    if (!tf) return 0;
-    duckdb_table_function_set_name(tf, name);
-    if (!ducknng_set_table_sql_context(tf, ctx)) { duckdb_destroy_table_function(&tf); return 0; }
-    duckdb_table_function_set_bind(tf, ducknng_sockets_bind);
-    duckdb_table_function_set_init(tf, ducknng_sockets_init);
-    duckdb_table_function_set_function(tf, ducknng_sockets_scan);
-    if (duckdb_register_table_function(con, tf) == DuckDBError) {
-        duckdb_destroy_table_function(&tf);
-        return 0;
-    }
-    duckdb_destroy_table_function(&tf);
-    return 1;
-}
-
-
-static int register_scalar(duckdb_connection con, const char *name, idx_t nparams,
-    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types, duckdb_type return_type_id) {
-    duckdb_scalar_function f;
-    idx_t i;
-    duckdb_logical_type ret_type;
-    f = duckdb_create_scalar_function();
-    if (!f) return 0;
-    duckdb_scalar_function_set_name(f, name);
-    for (i = 0; i < nparams; i++) {
-        duckdb_logical_type t = duckdb_create_logical_type(param_types[i]);
-        duckdb_scalar_function_add_parameter(f, t);
-        duckdb_destroy_logical_type(&t);
-    }
-    ret_type = duckdb_create_logical_type(return_type_id);
-    duckdb_scalar_function_set_return_type(f, ret_type);
-    duckdb_destroy_logical_type(&ret_type);
-    duckdb_scalar_function_set_function(f, fn);
-    duckdb_scalar_function_set_special_handling(f);
-    duckdb_scalar_function_set_volatile(f);
-    if (!ducknng_set_scalar_sql_context(f, ctx)) { duckdb_destroy_scalar_function(&f); return 0; }
-    if (duckdb_register_scalar_function(con, f) == DuckDBError) {
-        duckdb_destroy_scalar_function(&f);
-        return 0;
-    }
-    duckdb_destroy_scalar_function(&f);
-    return 1;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 0, NULL, ducknng_sockets_bind,
+        ducknng_sockets_init, ducknng_sockets_scan);
 }
 
 int ducknng_register_sql_socket(duckdb_connection con, ducknng_sql_context *ctx) {
@@ -827,14 +692,14 @@ int ducknng_register_sql_socket(duckdb_connection con, ducknng_sql_context *ctx)
     duckdb_type request_socket_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER};
     duckdb_type recv_socket_types[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_INTEGER};
     duckdb_type subscribe_types[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB};
-    if (!register_scalar(con, "ducknng_open_socket", 1, ducknng_socket_scalar, ctx, socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
-    if (!register_scalar(con, "ducknng_dial_socket", 4, ducknng_dial_scalar, ctx, dial_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(con, "ducknng_listen_socket", 4, ducknng_listen_scalar, ctx, listen_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(con, "ducknng_close_socket", 1, ducknng_close_scalar, ctx, close_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(con, "ducknng_send_socket_raw", 3, ducknng_send_scalar, ctx, request_socket_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(con, "ducknng_recv_socket_raw", 2, ducknng_recv_scalar, ctx, recv_socket_types, DUCKDB_TYPE_BLOB)) return 0;
-    if (!register_scalar(con, "ducknng_subscribe_socket", 2, ducknng_subscribe_scalar, ctx, subscribe_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_scalar(con, "ducknng_unsubscribe_socket", 2, ducknng_unsubscribe_scalar, ctx, subscribe_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_open_socket", 1, ducknng_socket_scalar, ctx, socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_dial_socket", 4, ducknng_dial_scalar, ctx, dial_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_listen_socket", 4, ducknng_listen_scalar, ctx, listen_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_close_socket", 1, ducknng_close_scalar, ctx, close_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_send_socket_raw", 3, ducknng_send_scalar, ctx, request_socket_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_recv_socket_raw", 2, ducknng_recv_scalar, ctx, recv_socket_types, DUCKDB_TYPE_BLOB)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_subscribe_socket", 2, ducknng_subscribe_scalar, ctx, subscribe_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unsubscribe_socket", 2, ducknng_unsubscribe_scalar, ctx, subscribe_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!register_named_sockets_table(con, ctx, "ducknng_list_sockets")) return 0;
     return 1;
 }

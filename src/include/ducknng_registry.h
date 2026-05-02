@@ -104,6 +104,7 @@ typedef struct ducknng_manifest_security {
     uint64_t max_open_sessions;
     uint64_t max_sessions_per_peer_identity;
     const char *peer_identity_format;
+    const char *execution_model;
 } ducknng_manifest_security;
 
 int ducknng_method_registry_init(ducknng_method_registry *registry);
