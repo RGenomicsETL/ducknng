@@ -1804,7 +1804,6 @@ static int register_aio_status_scalar_named(duckdb_connection con, ducknng_sql_c
 }
 
 static int register_aio_status_macro(duckdb_connection con) {
-    duckdb_result result;
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_aio_status(aio_id) AS TABLE "
         "SELECT struct_extract(s, 'aio_id') AS aio_id, "
@@ -1820,17 +1819,10 @@ static int register_aio_status_macro(duckdb_connection con) {
         "       struct_extract(s, 'has_reply_frame') AS has_reply_frame, "
         "       struct_extract(s, 'error') AS error "
         "FROM (SELECT ducknng__aio_status_row(aio_id) AS s)";
-    memset(&result, 0, sizeof(result));
-    if (duckdb_query(con, sql, &result) == DuckDBError) {
-        duckdb_destroy_result(&result);
-        return 0;
-    }
-    duckdb_destroy_result(&result);
-    return 1;
+    return execute_sql(con, sql);
 }
 
 static int register_aio_collect_macro(duckdb_connection con) {
-    duckdb_result result;
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_aio_collect(aio_ids, wait_ms) AS TABLE "
         "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng__aio_wait_any(aio_ids, wait_ms) AS have_ready) "
@@ -1844,17 +1836,10 @@ static int register_aio_collect_macro(duckdb_connection con) {
         "  lambda x: ducknng__aio_collect_row(x, 0)"
         ")) AS t(r) "
         "WHERE have_ready";
-    memset(&result, 0, sizeof(result));
-    if (duckdb_query(con, sql, &result) == DuckDBError) {
-        duckdb_destroy_result(&result);
-        return 0;
-    }
-    duckdb_destroy_result(&result);
-    return 1;
+    return execute_sql(con, sql);
 }
 
 static int register_ncurl_aio_collect_macro(duckdb_connection con) {
-    duckdb_result result;
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_ncurl_aio_collect(aio_ids, wait_ms) AS TABLE "
         "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng__aio_wait_any(aio_ids, wait_ms) AS have_ready) "
@@ -1871,13 +1856,7 @@ static int register_ncurl_aio_collect_macro(duckdb_connection con) {
         "  lambda x: ducknng__ncurl_aio_collect_row(x, 0)"
         ")) AS t(r) "
         "WHERE have_ready";
-    memset(&result, 0, sizeof(result));
-    if (duckdb_query(con, sql, &result) == DuckDBError) {
-        duckdb_destroy_result(&result);
-        return 0;
-    }
-    duckdb_destroy_result(&result);
-    return 1;
+    return execute_sql(con, sql);
 }
 
 
