@@ -83,22 +83,15 @@ void ducknng_sql_assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, 
     duckdb_vector_assign_string_element_len(vec, row, (const char *)data, len);
 }
 
-static int ducknng_sql_register_scalar_ex(duckdb_connection con, const char *name, idx_t nparams,
-    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
-    duckdb_type return_type_id, int is_volatile) {
+static int ducknng_sql_register_scalar_logical_types_ex(duckdb_connection con, const char *name,
+    idx_t nparams, duckdb_scalar_function_t fn, ducknng_sql_context *ctx,
+    duckdb_logical_type *param_types, duckdb_logical_type return_type, int is_volatile) {
     duckdb_scalar_function f = duckdb_create_scalar_function();
-    duckdb_logical_type ret_type;
     idx_t i;
     if (!f) return 0;
     duckdb_scalar_function_set_name(f, name);
-    for (i = 0; i < nparams; i++) {
-        duckdb_logical_type t = duckdb_create_logical_type(param_types[i]);
-        duckdb_scalar_function_add_parameter(f, t);
-        duckdb_destroy_logical_type(&t);
-    }
-    ret_type = duckdb_create_logical_type(return_type_id);
-    duckdb_scalar_function_set_return_type(f, ret_type);
-    duckdb_destroy_logical_type(&ret_type);
+    for (i = 0; i < nparams; i++) duckdb_scalar_function_add_parameter(f, param_types[i]);
+    duckdb_scalar_function_set_return_type(f, return_type);
     duckdb_scalar_function_set_function(f, fn);
     duckdb_scalar_function_set_special_handling(f);
     if (is_volatile) duckdb_scalar_function_set_volatile(f);
@@ -114,6 +107,29 @@ static int ducknng_sql_register_scalar_ex(duckdb_connection con, const char *nam
     return 1;
 }
 
+static int ducknng_sql_register_scalar_ex(duckdb_connection con, const char *name, idx_t nparams,
+    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
+    duckdb_type return_type_id, int is_volatile) {
+    duckdb_logical_type *logical_param_types = NULL;
+    duckdb_logical_type ret_type;
+    idx_t i;
+    int ok;
+    if (nparams > 0) {
+        logical_param_types = (duckdb_logical_type *)duckdb_malloc(sizeof(*logical_param_types) * nparams);
+        if (!logical_param_types) return 0;
+    }
+    for (i = 0; i < nparams; i++) {
+        logical_param_types[i] = duckdb_create_logical_type(param_types[i]);
+    }
+    ret_type = duckdb_create_logical_type(return_type_id);
+    ok = ducknng_sql_register_scalar_logical_types_ex(con, name, nparams, fn, ctx,
+        logical_param_types, ret_type, is_volatile);
+    for (i = 0; i < nparams; i++) duckdb_destroy_logical_type(&logical_param_types[i]);
+    if (logical_param_types) duckdb_free(logical_param_types);
+    duckdb_destroy_logical_type(&ret_type);
+    return ok;
+}
+
 int ducknng_sql_register_scalar(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
     duckdb_type return_type_id) {
@@ -126,6 +142,20 @@ int ducknng_sql_register_volatile_scalar(duckdb_connection con, const char *name
     duckdb_type return_type_id) {
     return ducknng_sql_register_scalar_ex(con, name, nparams, fn, ctx, param_types,
         return_type_id, 1);
+}
+
+int ducknng_sql_register_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
+    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
+    duckdb_logical_type return_type) {
+    return ducknng_sql_register_scalar_logical_types_ex(con, name, nparams, fn, ctx,
+        param_types, return_type, 0);
+}
+
+int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, const char *name,
+    idx_t nparams, duckdb_scalar_function_t fn, ducknng_sql_context *ctx,
+    duckdb_logical_type *param_types, duckdb_logical_type return_type) {
+    return ducknng_sql_register_scalar_logical_types_ex(con, name, nparams, fn, ctx,
+        param_types, return_type, 1);
 }
 
 int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,

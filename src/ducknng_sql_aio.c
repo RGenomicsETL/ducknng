@@ -91,6 +91,12 @@ static int execute_sql(duckdb_connection con, const char *sql) {
     return 1;
 }
 
+static void ducknng_destroy_logical_types(duckdb_logical_type *types, idx_t count) {
+    idx_t i;
+    if (!types) return;
+    for (i = 0; i < count; i++) duckdb_destroy_logical_type(&types[i]);
+}
+
 static int ducknng_lookup_tls_config_copy(ducknng_sql_context *ctx, uint64_t tls_config_id,
     uint64_t *out_id, char **out_source, ducknng_tls_opts *out_opts, char **errmsg) {
     size_t i;
@@ -1701,114 +1707,54 @@ static void ducknng_aio_collect_scan(duckdb_function_info info, duckdb_data_chun
 
 
 static int register_aio_wait_any_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_scalar_function fn;
-    duckdb_logical_type u64_type;
-    duckdb_logical_type list_u64_type;
-    duckdb_logical_type int_type;
-    duckdb_logical_type bool_type;
+    duckdb_logical_type list_child_type;
+    duckdb_logical_type param_types[2];
+    duckdb_logical_type return_type;
+    int ok;
     if (!ctx || !ctx->rt) return 0;
-    fn = duckdb_create_scalar_function();
-    if (!fn) return 0;
-    duckdb_scalar_function_set_name(fn, name);
-    u64_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    list_u64_type = duckdb_create_list_type(u64_type);
-    int_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    bool_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    duckdb_scalar_function_add_parameter(fn, list_u64_type);
-    duckdb_scalar_function_add_parameter(fn, int_type);
-    duckdb_scalar_function_set_return_type(fn, bool_type);
-    duckdb_scalar_function_set_function(fn, ducknng_aio_wait_any_scalar);
-    duckdb_scalar_function_set_special_handling(fn);
-    duckdb_scalar_function_set_volatile(fn);
-    if (!ducknng_set_scalar_sql_context(fn, ctx)) { duckdb_destroy_scalar_function(&fn); return 0; }
-    if (duckdb_register_scalar_function(con, fn) == DuckDBError) {
-        duckdb_destroy_scalar_function(&fn);
-        duckdb_destroy_logical_type(&u64_type);
-        duckdb_destroy_logical_type(&list_u64_type);
-        duckdb_destroy_logical_type(&int_type);
-        duckdb_destroy_logical_type(&bool_type);
-        return 0;
-    }
-    duckdb_destroy_scalar_function(&fn);
-    duckdb_destroy_logical_type(&u64_type);
-    duckdb_destroy_logical_type(&list_u64_type);
-    duckdb_destroy_logical_type(&int_type);
-    duckdb_destroy_logical_type(&bool_type);
-    return 1;
+    list_child_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    param_types[0] = duckdb_create_list_type(list_child_type);
+    param_types[1] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+    return_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
+        ducknng_aio_wait_any_scalar, ctx, param_types, return_type);
+    duckdb_destroy_logical_type(&list_child_type);
+    ducknng_destroy_logical_types(param_types, 2);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
 }
 
 static int register_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_scalar_function fn;
-    duckdb_logical_type u64_type;
-    duckdb_logical_type int_type;
-    duckdb_logical_type bool_type;
-    duckdb_logical_type varchar_type;
-    duckdb_logical_type blob_type;
+    duckdb_logical_type param_types[2];
     duckdb_logical_type fields[4];
     const char *field_names[4] = {"aio_id", "ok", "error", "frame"};
-    duckdb_logical_type struct_type;
+    duckdb_logical_type return_type;
+    int ok;
     if (!ctx || !ctx->rt) return 0;
-    fn = duckdb_create_scalar_function();
-    if (!fn) return 0;
-    duckdb_scalar_function_set_name(fn, name);
-    u64_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    int_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    bool_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    varchar_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    blob_type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
+    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    param_types[1] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
     fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     fields[3] = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    struct_type = duckdb_create_struct_type(fields, field_names, 4);
-    duckdb_scalar_function_add_parameter(fn, u64_type);
-    duckdb_scalar_function_add_parameter(fn, int_type);
-    duckdb_scalar_function_set_return_type(fn, struct_type);
-    duckdb_scalar_function_set_function(fn, ducknng_aio_collect_row_scalar);
-    duckdb_scalar_function_set_special_handling(fn);
-    duckdb_scalar_function_set_volatile(fn);
-    if (!ducknng_set_scalar_sql_context(fn, ctx)) { duckdb_destroy_scalar_function(&fn); return 0; }
-    if (duckdb_register_scalar_function(con, fn) == DuckDBError) {
-        duckdb_destroy_scalar_function(&fn);
-        duckdb_destroy_logical_type(&u64_type);
-        duckdb_destroy_logical_type(&int_type);
-        duckdb_destroy_logical_type(&bool_type);
-        duckdb_destroy_logical_type(&varchar_type);
-        duckdb_destroy_logical_type(&blob_type);
-        for (int i = 0; i < 4; i++) duckdb_destroy_logical_type(&fields[i]);
-        duckdb_destroy_logical_type(&struct_type);
-        return 0;
-    }
-    duckdb_destroy_scalar_function(&fn);
-    duckdb_destroy_logical_type(&u64_type);
-    duckdb_destroy_logical_type(&int_type);
-    duckdb_destroy_logical_type(&bool_type);
-    duckdb_destroy_logical_type(&varchar_type);
-    duckdb_destroy_logical_type(&blob_type);
-    for (int i = 0; i < 4; i++) duckdb_destroy_logical_type(&fields[i]);
-    duckdb_destroy_logical_type(&struct_type);
-    return 1;
+    return_type = duckdb_create_struct_type(fields, field_names, 4);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
+        ducknng_aio_collect_row_scalar, ctx, param_types, return_type);
+    ducknng_destroy_logical_types(param_types, 2);
+    ducknng_destroy_logical_types(fields, 4);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
 }
 
 static int register_ncurl_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_scalar_function fn;
-    duckdb_logical_type u64_type;
-    duckdb_logical_type int_type;
-    duckdb_logical_type bool_type;
-    duckdb_logical_type varchar_type;
-    duckdb_logical_type blob_type;
+    duckdb_logical_type param_types[2];
     duckdb_logical_type fields[7];
     const char *field_names[7] = {"aio_id", "ok", "status", "error", "headers_json", "body", "body_text"};
-    duckdb_logical_type struct_type;
+    duckdb_logical_type return_type;
+    int ok;
     if (!ctx || !ctx->rt) return 0;
-    fn = duckdb_create_scalar_function();
-    if (!fn) return 0;
-    duckdb_scalar_function_set_name(fn, name);
-    u64_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    int_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    bool_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    varchar_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    blob_type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
+    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    param_types[1] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
     fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
@@ -1816,54 +1762,26 @@ static int register_ncurl_aio_collect_row_scalar_named(duckdb_connection con, du
     fields[4] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     fields[5] = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
     fields[6] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    struct_type = duckdb_create_struct_type(fields, field_names, 7);
-    duckdb_scalar_function_add_parameter(fn, u64_type);
-    duckdb_scalar_function_add_parameter(fn, int_type);
-    duckdb_scalar_function_set_return_type(fn, struct_type);
-    duckdb_scalar_function_set_function(fn, ducknng_ncurl_aio_collect_row_scalar);
-    duckdb_scalar_function_set_special_handling(fn);
-    duckdb_scalar_function_set_volatile(fn);
-    if (!ducknng_set_scalar_sql_context(fn, ctx)) { duckdb_destroy_scalar_function(&fn); return 0; }
-    if (duckdb_register_scalar_function(con, fn) == DuckDBError) {
-        duckdb_destroy_scalar_function(&fn);
-        duckdb_destroy_logical_type(&u64_type);
-        duckdb_destroy_logical_type(&int_type);
-        duckdb_destroy_logical_type(&bool_type);
-        duckdb_destroy_logical_type(&varchar_type);
-        duckdb_destroy_logical_type(&blob_type);
-        for (int i = 0; i < 7; i++) duckdb_destroy_logical_type(&fields[i]);
-        duckdb_destroy_logical_type(&struct_type);
-        return 0;
-    }
-    duckdb_destroy_scalar_function(&fn);
-    duckdb_destroy_logical_type(&u64_type);
-    duckdb_destroy_logical_type(&int_type);
-    duckdb_destroy_logical_type(&bool_type);
-    duckdb_destroy_logical_type(&varchar_type);
-    duckdb_destroy_logical_type(&blob_type);
-    for (int i = 0; i < 7; i++) duckdb_destroy_logical_type(&fields[i]);
-    duckdb_destroy_logical_type(&struct_type);
-    return 1;
+    return_type = duckdb_create_struct_type(fields, field_names, 7);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
+        ducknng_ncurl_aio_collect_row_scalar, ctx, param_types, return_type);
+    ducknng_destroy_logical_types(param_types, 2);
+    ducknng_destroy_logical_types(fields, 7);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
 }
 
 static int register_aio_status_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_scalar_function fn;
-    duckdb_logical_type u64_type;
-    duckdb_logical_type bool_type;
-    duckdb_logical_type varchar_type;
+    duckdb_logical_type param_types[1];
     duckdb_logical_type fields[12];
     const char *field_names[12] = {
         "aio_id", "exists", "kind", "state", "phase", "terminal",
         "send_done", "send_ok", "recv_done", "recv_ok", "has_reply_frame", "error"
     };
-    duckdb_logical_type struct_type;
+    duckdb_logical_type return_type;
+    int ok;
     if (!ctx || !ctx->rt) return 0;
-    fn = duckdb_create_scalar_function();
-    if (!fn) return 0;
-    duckdb_scalar_function_set_name(fn, name);
-    u64_type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
-    bool_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    varchar_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    param_types[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     fields[0] = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     fields[1] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     fields[2] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
@@ -1876,29 +1794,13 @@ static int register_aio_status_scalar_named(duckdb_connection con, ducknng_sql_c
     fields[9] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     fields[10] = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     fields[11] = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    struct_type = duckdb_create_struct_type(fields, field_names, 12);
-    duckdb_scalar_function_add_parameter(fn, u64_type);
-    duckdb_scalar_function_set_return_type(fn, struct_type);
-    duckdb_scalar_function_set_function(fn, ducknng_aio_status_scalar);
-    duckdb_scalar_function_set_special_handling(fn);
-    duckdb_scalar_function_set_volatile(fn);
-    if (!ducknng_set_scalar_sql_context(fn, ctx)) { duckdb_destroy_scalar_function(&fn); return 0; }
-    if (duckdb_register_scalar_function(con, fn) == DuckDBError) {
-        duckdb_destroy_scalar_function(&fn);
-        duckdb_destroy_logical_type(&u64_type);
-        duckdb_destroy_logical_type(&bool_type);
-        duckdb_destroy_logical_type(&varchar_type);
-        for (int i = 0; i < 12; i++) duckdb_destroy_logical_type(&fields[i]);
-        duckdb_destroy_logical_type(&struct_type);
-        return 0;
-    }
-    duckdb_destroy_scalar_function(&fn);
-    duckdb_destroy_logical_type(&u64_type);
-    duckdb_destroy_logical_type(&bool_type);
-    duckdb_destroy_logical_type(&varchar_type);
-    for (int i = 0; i < 12; i++) duckdb_destroy_logical_type(&fields[i]);
-    duckdb_destroy_logical_type(&struct_type);
-    return 1;
+    return_type = duckdb_create_struct_type(fields, field_names, 12);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 1,
+        ducknng_aio_status_scalar, ctx, param_types, return_type);
+    ducknng_destroy_logical_types(param_types, 1);
+    ducknng_destroy_logical_types(fields, 12);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
 }
 
 static int register_aio_status_macro(duckdb_connection con) {

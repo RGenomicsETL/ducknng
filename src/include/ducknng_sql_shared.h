@@ -21,12 +21,20 @@ int ducknng_sql_register_scalar(duckdb_connection con, const char *name, idx_t n
 int ducknng_sql_register_volatile_scalar(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
     duckdb_type return_type_id);
+int ducknng_sql_register_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
+    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
+    duckdb_logical_type return_type);
+int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
+    duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
+    duckdb_logical_type return_type);
 int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,
     idx_t nparams, duckdb_type *param_types, duckdb_table_function_bind_t bind_fn,
     duckdb_table_function_init_t init_fn, duckdb_table_function_t scan_fn);
 
 #define DUCKNNG_REGISTER_SCALAR(...) ducknng_sql_register_scalar(__VA_ARGS__)
 #define DUCKNNG_REGISTER_VOLATILE_SCALAR(...) ducknng_sql_register_volatile_scalar(__VA_ARGS__)
+#define DUCKNNG_REGISTER_SCALAR_LOGICAL_TYPES(...) ducknng_sql_register_scalar_logical_types(__VA_ARGS__)
+#define DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(...) ducknng_sql_register_volatile_scalar_logical_types(__VA_ARGS__)
 #define DUCKNNG_REGISTER_TABLE(...) ducknng_sql_register_table(__VA_ARGS__)
 
 #define arg_is_null ducknng_sql_arg_is_null
