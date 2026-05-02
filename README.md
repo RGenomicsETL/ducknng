@@ -939,13 +939,13 @@ execution lane.
 
 A MotherDuck-style public gateway is still a good fit for this layer,
 but it should use separate backend DuckDB processes or runtime
-boundaries. That multi-process sketch lives in
-`docs/motherduck_style_demo.md` instead of this README because keeping
-it honest requires live private backends, and the README examples are
-kept runnable in one rendered session. The repo also ships a runnable
-continuation-token gateway demo at `demo/motherduck_gateway.py`; from
-the repo root, `make motherduck_demo` walks multi-batch queries through
-a public HTTP gateway and two dedicated private subscriber backends.
+boundaries. The main README still stays single-session, so the
+multi-process walkthrough lives separately:
+`docs/motherduck_style_demo.md` explains the topology,
+`demo/motherduck_gateway.py` is the live helper, `make motherduck_demo`
+runs the end-to-end check, and `make motherduck_rdm` renders a dedicated
+`demo/motherduck_gateway.Rmd` walkthrough with hidden worker setup and
+live HTTP requests.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 

@@ -1,0 +1,594 @@
+---
+output: github_document
+---
+
+<!-- demo/motherduck_gateway.md is generated from demo/motherduck_gateway.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+
+library(jsonlite)
+library(knitr)
+library(nanonext)
+
+project_root <- normalizePath("..", mustWork = TRUE)
+extension_path <- normalizePath(
+  file.path(project_root, "build", "release", "ducknng.duckdb_extension"),
+  mustWork = FALSE
+)
+demo_script <- normalizePath(file.path(project_root, "demo", "motherduck_gateway.py"), mustWork = TRUE)
+
+if (!file.exists(extension_path)) {
+  stop("build/release/ducknng.duckdb_extension not found; run `make release` first.")
+}
+
+sql_quote <- function(text) gsub("'", "''", text, fixed = TRUE)
+
+run_duckdb_sql <- function(code, autoload = TRUE) {
+  sql <- code
+  if (autoload) {
+    sql <- paste(sprintf("LOAD '%s';", sql_quote(extension_path)), sql, sep = "\n")
+  }
+  out <- system2(
+    "duckdb",
+    "-unsigned",
+    input = paste(".mode table", sql, sep = "\n"),
+    stdout = TRUE,
+    stderr = TRUE
+  )
+  status <- attr(out, "status")
+  if (!is.null(status) && status != 0) {
+    stop(paste(out, collapse = "\n"))
+  }
+  out
+}
+
+emit_sql_result <- function(display_code, run_code = display_code, autoload = TRUE) {
+  cat("```sql\n", display_code, "\n```\n\n", sep = "")
+  out <- run_duckdb_sql(run_code, autoload = autoload)
+  cat("```text\n", paste(out, collapse = "\n"), "\n```\n\n", sep = "")
+}
+
+raw_hex <- function(x) paste(sprintf("%02X", as.integer(x)), collapse = "")
+
+decode_arrow_output <- function(raw_body) {
+  run_duckdb_sql(
+    sprintf(
+      paste(
+        "SELECT *",
+        "FROM ducknng_parse_body(",
+        "  from_hex('%s'),",
+        "  'application/vnd.apache.arrow.stream'",
+        ");",
+        sep = "\n"
+      ),
+      raw_hex(raw_body)
+    )
+  )
+}
+
+header_value <- function(headers, name) {
+  if (is.null(headers) || is.null(names(headers))) {
+    return(NA_character_)
+  }
+  idx <- which(tolower(names(headers)) == tolower(name))
+  if (!length(idx)) {
+    return(NA_character_)
+  }
+  as.character(headers[[idx[[1L]]]])
+}
+
+response_summary <- function(resp) {
+  data.frame(
+    status = resp$status,
+    tenant = header_value(resp$headers, "X-Ducknng-Tenant"),
+    subscriber = header_value(resp$headers, "X-Ducknng-Subscriber"),
+    end_of_stream = header_value(resp$headers, "X-Ducknng-End-Of-Stream"),
+    has_next_token = !is.na(header_value(resp$headers, "X-Ducknng-Next-Token")),
+    stringsAsFactors = FALSE
+  )
+}
+
+json_body <- function(resp) {
+  if (is.null(resp$data) || !length(resp$data)) {
+    return(list())
+  }
+  fromJSON(rawToChar(resp$data))
+}
+
+free_port <- function() {
+  as.integer(system(
+    "python3 -c \"import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()\"",
+    intern = TRUE
+  ))
+}
+
+start_worker <- function(name, args) {
+  ready_path <- tempfile(pattern = paste0("ducknng-", name, "-"), tmpdir = tempdir(), fileext = ".ready")
+  pid_path <- tempfile(pattern = paste0("ducknng-", name, "-"), tmpdir = tempdir(), fileext = ".pid")
+  log_path <- tempfile(pattern = paste0("ducknng-", name, "-"), tmpdir = tempdir(), fileext = ".log")
+  launch_path <- tempfile(pattern = paste0("ducknng-", name, "-"), tmpdir = tempdir(), fileext = ".sh")
+  launch_cmd <- paste(
+    c(
+      "#!/usr/bin/env bash",
+      paste(
+        "python3",
+        shQuote(demo_script),
+        paste(shQuote(args), collapse = " "),
+        "--ready-file",
+        shQuote(ready_path),
+        ">",
+        shQuote(log_path),
+        "2>&1 &"
+      ),
+      paste("echo $! >", shQuote(pid_path))
+    ),
+    collapse = "\n"
+  )
+  writeLines(launch_cmd, launch_path)
+  Sys.chmod(launch_path, mode = "700")
+  status <- system2("bash", launch_path)
+  if (status != 0) {
+    stop("failed to launch worker ", name)
+  }
+  deadline <- Sys.time() + 10
+  while (Sys.time() < deadline) {
+    if (file.exists(ready_path)) {
+      msg <- trimws(paste(readLines(ready_path, warn = FALSE), collapse = "\n"))
+      if (identical(msg, "ready")) {
+        return(list(name = name, ready_path = ready_path, pid_path = pid_path, log_path = log_path, launch_path = launch_path))
+      }
+      stop("worker ", name, " failed during startup:\n", msg)
+    }
+    Sys.sleep(0.1)
+  }
+  log_text <- if (file.exists(log_path)) paste(readLines(log_path, warn = FALSE), collapse = "\n") else ""
+  stop("timed out waiting for worker ", name, "\n", log_text)
+}
+
+stop_worker <- function(worker) {
+  if (is.null(worker)) {
+    return(invisible(NULL))
+  }
+  if (file.exists(worker$pid_path)) {
+    pid <- suppressWarnings(as.integer(readLines(worker$pid_path, warn = FALSE)))
+    if (!is.na(pid)) {
+      tools::pskill(pid)
+    }
+  }
+  invisible(NULL)
+}
+
+wait_healthz <- function(base_url, timeout_s = 10) {
+  deadline <- Sys.time() + timeout_s
+  while (Sys.time() < deadline) {
+    probe <- tryCatch(
+      ncurl(
+        paste0(base_url, "/healthz"),
+        timeout = 500L
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(probe) && identical(probe$status, 200L) && identical(probe$data, "ok")) {
+      return(invisible(TRUE))
+    }
+    Sys.sleep(0.1)
+  }
+  stop("gateway health check did not become ready")
+}
+
+gateway_post <- function(base_url, path, payload, api_token) {
+  ncurl(
+    paste0(base_url, path),
+    convert = FALSE,
+    response = TRUE,
+    method = "POST",
+    headers = c(
+      "Content-Type" = "application/json",
+      "Authorization" = paste("Bearer", api_token)
+    ),
+    data = charToRaw(toJSON(payload, auto_unbox = TRUE)),
+    timeout = 2000L
+  )
+}
+
+alice_token <- "demo-alice-token"
+bob_token <- "demo-bob-token"
+gateway_port <- free_port()
+alice_backend_port <- free_port()
+bob_backend_port <- free_port()
+gateway_base_url <- sprintf("http://127.0.0.1:%d", gateway_port)
+
+alice_worker <- start_worker(
+  "alice-backend",
+  c(
+    "--role", "backend",
+    "--extension", extension_path,
+    "--backend-key", "alice",
+    "--listen-port", as.character(alice_backend_port)
+  )
+)
+
+bob_worker <- start_worker(
+  "bob-backend",
+  c(
+    "--role", "backend",
+    "--extension", extension_path,
+    "--backend-key", "bob",
+    "--listen-port", as.character(bob_backend_port)
+  )
+)
+
+gateway_worker <- start_worker(
+  "gateway",
+  c(
+    "--role", "gateway",
+    "--extension", extension_path,
+    "--gateway-port", as.character(gateway_port),
+    "--subscriber", sprintf("alice=%d", alice_backend_port),
+    "--subscriber", sprintf("bob=%d", bob_backend_port)
+  )
+)
+
+wait_healthz(gateway_base_url)
+```
+
+# MotherDuck-style gateway demo
+
+This is the dedicated rendered walkthrough for the multi-process subscriber gateway topology in `ducknng`. Unlike the main `README`, this document is allowed to boot several private DuckDB workers during render, so it can show the honest public-gateway shape rather than an in-process sketch.
+
+Render it from the repo root with:
+
+```sh
+make motherduck_rdm
+```
+
+The live helper behind this document is still [demo/motherduck_gateway.py](motherduck_gateway.py). The rendered walkthrough keeps the topology generic instead of hardwiring `user -> backend` logic into the public API.
+
+## Topology
+
+One public DuckDB process owns the HTTP edge, identity resolution, subscriber lookup, and public continuation tokens. Several private DuckDB processes expose ordinary `ducknng` query-session services. The gateway chooses one subscriber per tenant and keeps the backend `session_id` plus `session_token` private.
+
+```text
+HTTP client
+    |
+    v
+public gateway process
+  http://127.0.0.1:<gateway>/_ducknng
+    |
+    +--> subscriber_alice  tcp://127.0.0.1:<alice>
+    |
+    +--> subscriber_bob    tcp://127.0.0.1:<bob>
+```
+
+The route layer stays generic because the gateway owns two ordinary SQL tables:
+
+```sql
+CREATE TABLE gateway_identities(
+  api_token VARCHAR,
+  caller_identity VARCHAR,
+  tenant_id VARCHAR,
+  principal_id VARCHAR,
+  active BOOLEAN
+);
+
+CREATE TABLE gateway_subscribers(
+  subscriber_id VARCHAR,
+  tenant_id VARCHAR,
+  backend_url VARCHAR,
+  priority INTEGER,
+  enabled BOOLEAN
+);
+```
+
+`gateway_identities` resolves bearer tokens or caller identities into a tenant and principal. `gateway_subscribers` resolves that tenant into one private worker endpoint. Nothing in the public route contract needs to know whether the backend plane is two workers or two hundred.
+
+## Gateway route shape
+
+The public edge is still just the landed low-level HTTP route surface:
+
+```sql
+SELECT ducknng_register_http_route('gateway', 'POST', '/v1/query/start', ...);
+SELECT ducknng_register_http_route('gateway', 'POST', '/v1/query/fetch', ...);
+SELECT ducknng_register_http_route('gateway', 'POST', '/v1/query/close', ...);
+```
+
+Inside those routes, the gateway uses the raw session helpers so request-body columns and continuation-token columns stay dynamic:
+
+```sql
+ducknng_open_query_raw(...)
+ducknng_fetch_query_raw(...)
+ducknng_close_query_raw(...)
+ducknng_frame_payload(...)
+ducknng_frame_payload_text(...)
+ducknng_frame_error_text(...)
+```
+
+That keeps the route layer transport-local and gateway-owned. The public client sees HTTP plus Arrow batches, while the private worker plane stays on the ordinary `ducknng` session contract.
+
+## Alice starts a query through the public gateway
+
+```r
+start <- ncurl(
+  paste0(gateway_base_url, "/v1/query/start"),
+  convert = FALSE,
+  response = TRUE,
+  method = "POST",
+  headers = c(
+    "Content-Type" = "application/json",
+    "Authorization" = "Bearer demo-alice-token"
+  ),
+  data = charToRaw(
+    '{"sql":"SELECT owner, i, v FROM tenant_numbers ORDER BY i"}'
+  ),
+  timeout = 2000L
+)
+```
+
+```{r alice-start, include = FALSE}
+alice_start <- gateway_post(
+  gateway_base_url,
+  "/v1/query/start",
+  list(
+    sql = "SELECT owner, i, v FROM tenant_numbers ORDER BY i"
+  ),
+  alice_token
+)
+alice_next_token <- header_value(alice_start$headers, "X-Ducknng-Next-Token")
+```
+
+```{r alice-start-summary, echo = FALSE}
+kable(response_summary(alice_start))
+```
+
+The response body is an Arrow IPC batch. The gateway already chose the private subscriber and exposed that choice only through headers. The effective batch split is still backend-owned, so the public route contract stays stable even when the worker chooses a larger first chunk.
+
+```{r alice-start-body, echo = FALSE, results = "asis"}
+emit_sql_result(
+  paste(
+    "SELECT *",
+    "FROM ducknng_parse_body(<first Arrow batch>, 'application/vnd.apache.arrow.stream')",
+    "LIMIT 4;",
+    sep = "\n"
+  ),
+  sprintf(
+    paste(
+      "SELECT *",
+      "FROM ducknng_parse_body(",
+      "  from_hex('%s'),",
+      "  'application/vnd.apache.arrow.stream'",
+      ")",
+      "LIMIT 4;",
+      sep = "\n"
+    ),
+    raw_hex(alice_start$data)
+  )
+)
+```
+
+## Fetch continues on the same private subscriber
+
+```r
+fetch <- ncurl(
+  paste0(gateway_base_url, "/v1/query/fetch"),
+  convert = FALSE,
+  response = TRUE,
+  method = "POST",
+  headers = c(
+    "Content-Type" = "application/json",
+    "Authorization" = "Bearer demo-alice-token"
+  ),
+  data = charToRaw(sprintf('{"token":"%s"}', alice_next_token)),
+  timeout = 2000L
+)
+```
+
+```{r alice-fetch, include = FALSE}
+alice_fetch <- gateway_post(
+  gateway_base_url,
+  "/v1/query/fetch",
+  list(token = alice_next_token),
+  alice_token
+)
+alice_next_token <- header_value(alice_fetch$headers, "X-Ducknng-Next-Token")
+```
+
+```{r alice-fetch-summary, echo = FALSE}
+kable(response_summary(alice_fetch))
+```
+
+```{r alice-fetch-body, echo = FALSE, results = "asis"}
+emit_sql_result(
+  paste(
+    "SELECT *",
+    "FROM ducknng_parse_body(<next Arrow batch>, 'application/vnd.apache.arrow.stream')",
+    "LIMIT 4;",
+    sep = "\n"
+  ),
+  sprintf(
+    paste(
+      "SELECT *",
+      "FROM ducknng_parse_body(",
+      "  from_hex('%s'),",
+      "  'application/vnd.apache.arrow.stream'",
+      ")",
+      "LIMIT 4;",
+      sep = "\n"
+    ),
+    raw_hex(alice_fetch$data)
+  )
+)
+```
+
+The public continuation token is gateway-owned. It carries tenant affinity and private backend session state, but it does not turn the public API into a transport-specific copy of `fetch`.
+
+## A second identity routes to a different subscriber
+
+```r
+bob_start <- ncurl(
+  paste0(gateway_base_url, "/v1/query/start"),
+  convert = FALSE,
+  response = TRUE,
+  method = "POST",
+  headers = c(
+    "Content-Type" = "application/json",
+    "Authorization" = "Bearer demo-bob-token"
+  ),
+  data = charToRaw(
+    '{"sql":"SELECT owner, i, v FROM tenant_numbers ORDER BY i"}'
+  ),
+  timeout = 2000L
+)
+```
+
+```{r bob-start, include = FALSE}
+bob_start <- gateway_post(
+  gateway_base_url,
+  "/v1/query/start",
+  list(
+    sql = "SELECT owner, i, v FROM tenant_numbers ORDER BY i"
+  ),
+  bob_token
+)
+bob_next_token <- header_value(bob_start$headers, "X-Ducknng-Next-Token")
+```
+
+```{r bob-start-summary, echo = FALSE}
+kable(response_summary(bob_start))
+```
+
+```{r bob-start-body, echo = FALSE, results = "asis"}
+emit_sql_result(
+  paste(
+    "SELECT *",
+    "FROM ducknng_parse_body(<bob Arrow batch>, 'application/vnd.apache.arrow.stream')",
+    "LIMIT 4;",
+    sep = "\n"
+  ),
+  sprintf(
+    paste(
+      "SELECT *",
+      "FROM ducknng_parse_body(",
+      "  from_hex('%s'),",
+      "  'application/vnd.apache.arrow.stream'",
+      ")",
+      "LIMIT 4;",
+      sep = "\n"
+    ),
+    raw_hex(bob_start$data)
+  )
+)
+```
+
+```{r bob-close-hidden, include = FALSE}
+if (!is.na(bob_next_token)) {
+  bob_close_hidden <- gateway_post(
+    gateway_base_url,
+    "/v1/query/close",
+    list(token = bob_next_token),
+    bob_token
+  )
+}
+```
+
+The public start route did not change. Only the authenticated identity changed, and the gateway routed the request to a different private subscriber.
+
+## Cross-tenant close is rejected
+
+```r
+wrong_close <- ncurl(
+  paste0(gateway_base_url, "/v1/query/close"),
+  convert = FALSE,
+  response = TRUE,
+  method = "POST",
+  headers = c(
+    "Content-Type" = "application/json",
+    "Authorization" = "Bearer demo-bob-token"
+  ),
+  data = charToRaw(sprintf('{"token":"%s"}', alice_next_token)),
+  timeout = 2000L
+)
+```
+
+```{r wrong-close, include = FALSE}
+wrong_close <- gateway_post(
+  gateway_base_url,
+  "/v1/query/close",
+  list(token = alice_next_token),
+  bob_token
+)
+```
+
+```{r wrong-close-summary, echo = FALSE}
+kable(data.frame(
+  status = wrong_close$status,
+  body = rawToChar(wrong_close$data),
+  stringsAsFactors = FALSE
+))
+```
+
+That `403` is the important ownership boundary: a gateway token is not a cross-tenant escape hatch.
+
+## The owning tenant can close the session
+
+```r
+close <- ncurl(
+  paste0(gateway_base_url, "/v1/query/close"),
+  convert = FALSE,
+  response = TRUE,
+  method = "POST",
+  headers = c(
+    "Content-Type" = "application/json",
+    "Authorization" = "Bearer demo-alice-token"
+  ),
+  data = charToRaw(sprintf('{"token":"%s"}', alice_next_token)),
+  timeout = 2000L
+)
+```
+
+```{r right-close, include = FALSE}
+right_close <- gateway_post(
+  gateway_base_url,
+  "/v1/query/close",
+  list(token = alice_next_token),
+  alice_token
+)
+alice_next_token <- NA_character_
+```
+
+```{r right-close-summary, echo = FALSE}
+kable(data.frame(
+  status = right_close$status,
+  body = rawToChar(right_close$data),
+  stringsAsFactors = FALSE
+))
+```
+
+## What this shape buys you
+
+This topology is generic in the right place:
+
+- the public route surface stays fixed
+- auth resolution is table-driven
+- subscriber discovery is table-driven
+- backend session affinity stays private
+- Arrow remains the row contract
+
+The current execution model still matters. Route handlers run on `shared_serialized_connection`, so the public gateway should stay in a separate DuckDB process from the private workers. That is exactly why this rendered document boots several processes during render instead of pretending the pattern is honest inside one runtime.
+
+```{r cleanup, include = FALSE}
+if (!is.na(alice_next_token)) {
+  try(
+    gateway_post(
+      gateway_base_url,
+      "/v1/query/close",
+      list(token = alice_next_token),
+      alice_token
+    ),
+    silent = TRUE
+  )
+}
+stop_worker(gateway_worker)
+stop_worker(bob_worker)
+stop_worker(alice_worker)
+```

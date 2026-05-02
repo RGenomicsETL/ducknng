@@ -2147,14 +2147,14 @@ and they should not synchronously call back into another
 needs the shared serialized execution lane.</p>
 <p>A MotherDuck-style public gateway is still a good fit for this layer,
 but it should use separate backend DuckDB processes or runtime
-boundaries. That multi-process sketch lives in
-<code>docs/motherduck_style_demo.md</code> instead of this README
-because keeping it honest requires live private backends, and the README
-examples are kept runnable in one rendered session. The repo also ships
-a runnable continuation-token gateway demo at
-<code>demo/motherduck_gateway.py</code>; from the repo root,
-<code>make motherduck_demo</code> walks multi-batch queries through a
-public HTTP gateway and two dedicated private subscriber backends.</p>
+boundaries. The main README still stays single-session, so the
+multi-process walkthrough lives separately:
+<code>docs/motherduck_style_demo.md</code> explains the topology,
+<code>demo/motherduck_gateway.py</code> is the live helper,
+<code>make motherduck_demo</code> runs the end-to-end check, and
+<code>make motherduck_rdm</code> renders a dedicated
+<code>demo/motherduck_gateway.Rmd</code> walkthrough with hidden worker
+setup and live HTTP requests.</p>
 <h3 id="launch-raw-socket-sendrecv-airos-and-inspect-send-status-explicitly">Launch
 raw socket send/recv airos and inspect send status explicitly</h3>
 <div class="sourceCode" id="cb17"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>

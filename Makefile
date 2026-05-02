@@ -1,4 +1,4 @@
-.PHONY: clean clean_all function_catalog rdm rpc_smoke rpc_smoke_r http_smoke motherduck_demo
+.PHONY: clean clean_all function_catalog rdm rpc_smoke rpc_smoke_r http_smoke motherduck_demo motherduck_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -8,6 +8,9 @@ http_smoke: release
 
 motherduck_demo: release
 	python3 demo/motherduck_gateway.py build/release/ducknng.duckdb_extension
+
+motherduck_rdm: release
+	R -e "rmarkdown::render('demo/motherduck_gateway.Rmd')"
 
 rpc_smoke_r:
 	@if command -v Rscript >/dev/null 2>&1; then \
