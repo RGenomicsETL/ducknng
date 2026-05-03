@@ -453,6 +453,48 @@ static ducknng_client_aio *ducknng_client_aio_alloc_slot(ducknng_runtime *rt, in
     return slot;
 }
 
+static int ducknng_client_add_terminal_error_aio(ducknng_sql_context *ctx, int kind, int phase,
+    int timeout_ms, const char *message, uint64_t *out_aio_id, char **errmsg) {
+    ducknng_client_aio *slot;
+    if (out_aio_id) *out_aio_id = 0;
+    if (!ctx || !ctx->rt) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing aio runtime");
+        return -1;
+    }
+    slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
+    if (!slot) return -1;
+    slot->kind = kind;
+    slot->phase = phase;
+    slot->state = DUCKNNG_CLIENT_AIO_ERROR;
+    slot->finished_ms = ducknng_now_ms();
+    slot->error = ducknng_strdup(message ? message : "ducknng: aio launch failed");
+    if (!slot->error) {
+        ducknng_client_aio_destroy(slot);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying aio error");
+        return -1;
+    }
+    if (ducknng_runtime_add_client_aio(ctx->rt, slot, errmsg) != 0) {
+        ducknng_client_aio_destroy(slot);
+        return -1;
+    }
+    if (out_aio_id) *out_aio_id = slot->aio_id;
+    return 0;
+}
+
+static int ducknng_set_terminal_error_aio_or_throw(duckdb_function_info info, ducknng_sql_context *ctx,
+    duckdb_vector output, idx_t row, int kind, int phase, int timeout_ms, const char *message) {
+    uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
+    char *errmsg = NULL;
+    if (ducknng_client_add_terminal_error_aio(ctx, kind, phase, timeout_ms, message,
+            &out[row], &errmsg) != 0) {
+        duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to create terminal error aio");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    if (errmsg) duckdb_free(errmsg);
+    return 0;
+}
+
 static ducknng_client_aio *ducknng_client_prepare_url_aio(ducknng_runtime *rt, const char *url,
     int timeout_ms, const ducknng_tls_opts *tls_opts, char **errmsg) {
     ducknng_client_aio *slot = ducknng_client_aio_alloc_slot(rt, timeout_ms, errmsg);
@@ -690,26 +732,39 @@ static void ducknng_request_raw_aio_scalar(duckdb_function_info info, duckdb_dat
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
         nng_msg *req = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || (!payload && payload_len > 0)) {
             if (url) duckdb_free(url);
             if (payload) duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, "ducknng: request_raw_aio requires url and payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: request_raw_aio requires url and payload") != 0) return;
+            continue;
         }
         req = ducknng_client_raw_request_message(payload, (size_t)payload_len, &errmsg);
         if (payload) duckdb_free(payload);
         payload = NULL;
         if (!req) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to build request frame");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to build request frame") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_url_request_aio(ctx, url, timeout_ms, tls_config_id, req, &out[row], &errmsg) != 0) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
     }
@@ -727,22 +782,32 @@ static void ducknng_get_rpc_manifest_raw_aio_scalar(duckdb_function_info info, d
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 2), row, 0);
         nng_msg *req = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url) {
             if (url) duckdb_free(url);
-            duckdb_scalar_function_set_error(info, "ducknng: get_rpc_manifest_raw_aio requires url");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: get_rpc_manifest_raw_aio requires url") != 0) return;
+            continue;
         }
         req = ducknng_client_manifest_request();
         if (!req) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, "ducknng: failed to build manifest request frame");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: failed to build manifest request frame") != 0) return;
+            continue;
         }
         if (ducknng_client_launch_url_request_aio(ctx, url, timeout_ms, tls_config_id, req, &out[row], &errmsg) != 0) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch manifest aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch manifest aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
     }
@@ -761,25 +826,38 @@ static void ducknng_run_rpc_raw_aio_scalar(duckdb_function_info info, duckdb_dat
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
         nng_msg *req = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || !sql) {
             if (url) duckdb_free(url);
             if (sql) duckdb_free(sql);
-            duckdb_scalar_function_set_error(info, "ducknng: run_rpc_raw_aio requires url and sql");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: run_rpc_raw_aio requires url and sql") != 0) return;
+            continue;
         }
         req = ducknng_client_exec_request(sql, 0, &errmsg);
         duckdb_free(sql);
         if (!req) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to build exec request frame");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to build exec request frame") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_url_request_aio(ctx, url, timeout_ms, tls_config_id, req, &out[row], &errmsg) != 0) {
             duckdb_free(url);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch exec aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch exec aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
     }
@@ -801,27 +879,40 @@ static void ducknng_open_query_raw_aio_scalar(duckdb_function_info info, duckdb_
         uint8_t *payload = NULL;
         size_t payload_len = 0;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || !sql || !url[0] || !sql[0]) {
             if (url) duckdb_free(url);
             if (sql) duckdb_free(sql);
-            duckdb_scalar_function_set_error(info, "ducknng: open_query_raw_aio requires url and sql");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: open_query_raw_aio requires url and sql") != 0) return;
+            continue;
         }
         if (ducknng_query_open_request_to_ipc(sql, batch_rows, batch_bytes, &payload, &payload_len, &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(sql);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to encode query_open request payload");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to encode query_open request payload") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_url_method_aio(ctx, url, "query_open", payload, payload_len,
                 timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(sql);
             duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch query_open aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch query_open aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
         duckdb_free(sql);
@@ -845,27 +936,37 @@ static void ducknng_fetch_query_raw_aio_scalar(duckdb_function_info info, duckdb
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 6), row, 0);
         char *payload = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: fetch_query_raw_aio requires url, session_id, and session_token");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: fetch_query_raw_aio requires url, session_id, and session_token") != 0) return;
+            continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, batch_rows, batch_bytes);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: failed to build fetch request payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: failed to build fetch request payload") != 0) return;
+            continue;
         }
         if (ducknng_client_launch_url_method_aio(ctx, url, "fetch", (const uint8_t *)payload, strlen(payload),
                 timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(session_token);
             duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch fetch aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch fetch aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
         duckdb_free(session_token);
@@ -887,27 +988,37 @@ static void ducknng_close_query_raw_aio_scalar(duckdb_function_info info, duckdb
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 0);
         char *payload = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: close_query_raw_aio requires url, session_id, and session_token");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: close_query_raw_aio requires url, session_id, and session_token") != 0) return;
+            continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, 0, 0);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: failed to build close request payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: failed to build close request payload") != 0) return;
+            continue;
         }
         if (ducknng_client_launch_url_method_aio(ctx, url, "close", (const uint8_t *)payload, strlen(payload),
                 timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(session_token);
             duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch close aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch close aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
         duckdb_free(session_token);
@@ -929,27 +1040,37 @@ static void ducknng_cancel_query_raw_aio_scalar(duckdb_function_info info, duckd
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 4), row, 0);
         char *payload = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: cancel_query_raw_aio requires url, session_id, and session_token");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: cancel_query_raw_aio requires url, session_id, and session_token") != 0) return;
+            continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, 0, 0);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            duckdb_scalar_function_set_error(info, "ducknng: failed to build cancel request payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: failed to build cancel request payload") != 0) return;
+            continue;
         }
         if (ducknng_client_launch_url_method_aio(ctx, url, "cancel", (const uint8_t *)payload, strlen(payload),
                 timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(session_token);
             duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch cancel aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch cancel aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
         duckdb_free(session_token);
@@ -972,13 +1093,16 @@ static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chun
         int32_t timeout_ms = arg_int32(duckdb_data_chunk_get_vector(input, 4), row, 5000);
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 5), row, 0);
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || !url || (!body && body_len > 0)) {
             if (url) duckdb_free(url);
             if (method) duckdb_free(method);
             if (headers_json) duckdb_free(headers_json);
             if (body) duckdb_free(body);
-            duckdb_scalar_function_set_error(info, "ducknng: ncurl_aio requires url");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_NCURL, DUCKNNG_CLIENT_AIO_PHASE_HTTP,
+                    timeout_ms, "ducknng: ncurl_aio requires url") != 0) return;
+            continue;
         }
         if (ducknng_client_launch_ncurl_aio(ctx, url, method, headers_json,
                 body, (size_t)body_len, timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
@@ -986,9 +1110,14 @@ static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chun
             if (method) duckdb_free(method);
             if (headers_json) duckdb_free(headers_json);
             if (body) duckdb_free(body);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch ncurl aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_NCURL, DUCKNNG_CLIENT_AIO_PHASE_HTTP,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch ncurl aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         duckdb_free(url);
         if (method) duckdb_free(method);
@@ -1011,30 +1140,48 @@ static void ducknng_request_socket_raw_aio_scalar(duckdb_function_info info, duc
         ducknng_client_aio *slot = NULL;
         nng_msg *req = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || socket_id == 0 || (!payload && payload_len > 0)) {
             if (payload) duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, "ducknng: request_socket_raw_aio requires socket id and payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: request_socket_raw_aio requires socket id and payload") != 0) return;
+            continue;
         }
         req = ducknng_client_raw_request_message(payload, (size_t)payload_len, &errmsg);
         if (payload) duckdb_free(payload);
         payload = NULL;
         if (!req) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to build request frame");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to build request frame") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         slot = ducknng_client_prepare_socket_request_aio(ctx->rt, socket_id, timeout_ms, &errmsg);
         if (!slot) {
             nng_msg_free(req);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to prepare socket aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to prepare socket aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_request_aio(ctx->rt, slot, req, &errmsg) != 0) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch socket aio request");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_REQUEST, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch socket aio request") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         out[row] = slot->aio_id;
     }
@@ -1054,29 +1201,47 @@ static void ducknng_send_socket_raw_aio_scalar(duckdb_function_info info, duckdb
         ducknng_client_aio *slot = NULL;
         nng_msg *msg = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || socket_id == 0 || (!payload && payload_len > 0)) {
             if (payload) duckdb_free(payload);
-            duckdb_scalar_function_set_error(info, "ducknng: send_socket_raw_aio requires socket id and payload");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_SEND, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, "ducknng: send_socket_raw_aio requires socket id and payload") != 0) return;
+            continue;
         }
         msg = ducknng_client_raw_request_message(payload, (size_t)payload_len, &errmsg);
         if (payload) duckdb_free(payload);
         if (!msg) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to build send message");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_SEND, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to build send message") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         slot = ducknng_client_prepare_socket_raw_aio(ctx->rt, socket_id, timeout_ms, &errmsg);
         if (!slot) {
             nng_msg_free(msg);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to prepare socket send aio");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_SEND, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to prepare socket send aio") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_socket_send_aio(ctx->rt, slot, msg, &errmsg) != 0) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch socket send aio");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_SEND, DUCKNNG_CLIENT_AIO_PHASE_SEND,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch socket send aio") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         out[row] = slot->aio_id;
     }
@@ -1093,20 +1258,33 @@ static void ducknng_recv_socket_raw_aio_scalar(duckdb_function_info info, duckdb
         int32_t timeout_ms = arg_int32(duckdb_data_chunk_get_vector(input, 1), row, 5000);
         ducknng_client_aio *slot = NULL;
         char *errmsg = NULL;
+        out[row] = 0;
         if (!ctx || !ctx->rt || socket_id == 0) {
-            duckdb_scalar_function_set_error(info, "ducknng: recv_socket_raw_aio requires socket id");
-            return;
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_RECV, DUCKNNG_CLIENT_AIO_PHASE_RECV,
+                    timeout_ms, "ducknng: recv_socket_raw_aio requires socket id") != 0) return;
+            continue;
         }
         slot = ducknng_client_prepare_socket_raw_aio(ctx->rt, socket_id, timeout_ms, &errmsg);
         if (!slot) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to prepare socket recv aio");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_RECV, DUCKNNG_CLIENT_AIO_PHASE_RECV,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to prepare socket recv aio") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         if (ducknng_client_launch_socket_recv_aio(ctx->rt, slot, &errmsg) != 0) {
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to launch socket recv aio");
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_RECV, DUCKNNG_CLIENT_AIO_PHASE_RECV,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to launch socket recv aio") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            return;
+            continue;
         }
         out[row] = slot->aio_id;
     }

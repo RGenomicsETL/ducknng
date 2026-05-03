@@ -17,12 +17,12 @@ FROM ducknng_get_rpc_manifest('ws://127.0.0.1:45462/_ducknng', 0::UBIGINT)
 1	1
 
 query I
-SELECT ducknng_open_socket('req')
+SELECT (ducknng_open_socket('req')).socket_id
 ----
 1
 
 query I
-SELECT ducknng_dial_socket(1, 'ws://127.0.0.1:45462/_ducknng', 1000, 0::UBIGINT)
+SELECT (ducknng_dial_socket(1, 'ws://127.0.0.1:45462/_ducknng', 1000, 0::UBIGINT)).ok
 ----
 1
 
@@ -33,7 +33,7 @@ FROM ducknng_request_socket(1::UBIGINT, from_hex('010000000000000000000000000000
 1	1
 
 query I
-SELECT ducknng_close_socket(1)
+SELECT (ducknng_close_socket(1)).ok
 ----
 1
 
@@ -66,12 +66,12 @@ FROM ducknng_get_rpc_manifest('wss://127.0.0.1:45463/_ducknng', 1::UBIGINT)
 1	1
 
 query I
-SELECT ducknng_open_socket('req')
+SELECT (ducknng_open_socket('req')).socket_id
 ----
 2
 
 query I
-SELECT ducknng_dial_socket(2, 'wss://127.0.0.1:45463/_ducknng', 1000, 1::UBIGINT)
+SELECT (ducknng_dial_socket(2, 'wss://127.0.0.1:45463/_ducknng', 1000, 1::UBIGINT)).ok
 ----
 1
 
@@ -82,7 +82,7 @@ FROM ducknng_request_socket(2::UBIGINT, from_hex('010000000000000000000000000000
 1	1
 
 query I
-SELECT ducknng_close_socket(2)
+SELECT (ducknng_close_socket(2)).ok
 ----
 1
 

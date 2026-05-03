@@ -8,7 +8,7 @@ The governing rule is the same one stated in `docs/protocol.md` and `docs/transp
 
 The initial HTTP adapter is deliberately narrow. Its primary job is still framed RPC carriage for the existing `ducknng` envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of `manifest`, `exec`, `query_open`, `fetch`, `close`, or `cancel`. A separate low-level route layer now exists beside that framed RPC mount, covering exact, prefix, and template patterns while remaining deliberately small and documented separately in `docs/http_server_framework.md`.
 
-The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, while `ducknng_start_server(...)` mounts the HTTP/HTTPS carrier when the listen URL uses those schemes and the existing request, RPC, and session helpers route by URL scheme on top of that adapter.
+The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknng_listen_socket(...)`, `ducknng_send_socket_raw(...)`, `ducknng_recv_socket_raw(...)`, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The synchronous low-level socket helpers return a single struct-shaped result with `ok`, `error`, nullable `nng_error`, nullable `nng_error_message`, `socket_id`, `payload`, and `url`, so expected NNG failures can be handled in SQL without tearing down the DuckDB statement. The HTTP family instead gets its own low-level client helper, `ducknng_ncurl(...)`, while `ducknng_start_server(...)` mounts the HTTP/HTTPS carrier when the listen URL uses those schemes and the existing request, RPC, and session helpers route by URL scheme on top of that adapter.
 
 ## Current SQL surface
 
@@ -40,7 +40,7 @@ TABLE(
 )
 ```
 
-`ok` means the HTTP transport operation completed and a response was received. It does not mean the response status was 2xx. `status` is the HTTP status code when present. `error` is reserved for local client, connection, timeout, TLS, cancellation, or adapter failures. `headers_json` is the response header block in a canonical JSON form that preserves order and duplicates. `body` is the raw response body. `body_text` is a best-effort UTF-8 decoding of `body` and is `NULL` when the body is absent or not valid text. `ducknng_ncurl_aio_collect(...)` returns the same raw result columns plus `aio_id` for terminal handles launched by `ducknng_ncurl_aio(...)`; those handles are inspected with `ducknng_aio_status(...)` and released with `ducknng_aio_drop(...)` like other aio handles.
+`ok` means the HTTP transport operation completed and a response was received. It does not mean the response status was 2xx. `status` is the HTTP status code when present. `error` is reserved for local client, connection, timeout, TLS, cancellation, or adapter failures. `headers_json` is the response header block in a canonical JSON form that preserves order and duplicates. `body` is the raw response body. `body_text` is a best-effort UTF-8 decoding of `body` and is `NULL` when the body is absent or not valid text. `ducknng_ncurl_aio_collect(...)` returns the same raw result columns plus `aio_id` for terminal handles launched by `ducknng_ncurl_aio(...)`; expected launch failures such as unsupported schemes or invalid TLS handles are represented as immediate terminal error aio handles and are inspected through the same collect/status path. Those handles are inspected with `ducknng_aio_status(...)` and released with `ducknng_aio_drop(...)` like other aio handles.
 
 The request-side `headers_json` argument uses the same canonical JSON shape for symmetry. The preferred contract is an array of objects such as `[{"name":"Content-Type","value":"application/json"}]` rather than a plain JSON object, because HTTP header names may repeat and order sometimes matters operationally.
 
@@ -156,7 +156,7 @@ That means URLs like `http://127.0.0.1:8080/_ducknng` and `https://127.0.0.1:844
 - `ducknng_get_rpc_manifest_raw_aio(...)`
 - `ducknng_run_rpc_raw_aio(...)`
 
-In other words, `ducknng_ncurl(...)` is the generic HTTP primitive, while the higher-level `ducknng` RPC and session helpers keep their current names and use the HTTP carrier automatically when the URL scheme is `http` or `https`.
+In other words, `ducknng_ncurl(...)` is the generic HTTP primitive, while the higher-level `ducknng` RPC and session helpers keep their current names and use the HTTP carrier automatically when the URL scheme is `http` or `https`. Structured helpers report carrier failures as `ok = false` rows. Framed raw helpers report those same local setup or carrier failures as `ducknng` error frames so dynamic SQL can decode the error without forcing a DuckDB exception.
 
 ## Initial HTTP carrier contract
 

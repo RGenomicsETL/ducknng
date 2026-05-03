@@ -4,6 +4,9 @@
 
 ### Latest additions
 
+- Made synchronous low-level socket helpers return one in-band result struct with `ok`, `error`, nullable `nng_error`, nullable `nng_error_message`, `socket_id`, `payload`, and `url`, so validation failures and NNG failures no longer have to surface as DuckDB statement errors in normal socket workflows.
+- Made framed raw RPC/session helpers return local `ducknng` error frames for request setup and transport failures instead of collapsing them to `NULL`, and taught `ducknng_decode_frame(...)` to surface frame error text in its `error` column with `ok = false` for error frames.
+- Made AIO launch helpers return immediate terminal error handles for expected setup and launch failures, so callers can inspect those failures through `ducknng_aio_status(...)`, `ducknng_aio_collect(...)`, or `ducknng_ncurl_aio_collect(...)` instead of catching a DuckDB exception at launch time.
 - Reworked community-extension submission generation to follow the `duckhts` pattern: `function_catalog/functions.yaml` now carries a `community_extension` block, `function_catalog/generate_function_catalog.py` renders both the local catalog and the DuckDB community descriptor from one manifest plus the repo `description.yml` version, and the rendered submission lands in `community-extensions/extensions/ducknng/description.yml` through a checked-in template.
 - Added public `ducknng_aio_wait(...)` as the AIO lifecycle primitive for waiting on one of several handles without collecting or dropping the result, and removed direct test reliance on the internal macro helper that previously backed collection.
 - Tightened HTTP header JSON handling so request/response header adapters reject trailing garbage and non-token header names consistently with the SQL header-builder contract.

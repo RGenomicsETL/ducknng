@@ -495,12 +495,12 @@ statement ok
 DROP TABLE rpc_open_table
 
 query I
-SELECT ducknng_open_socket('req')
+SELECT (ducknng_open_socket('req')).socket_id
 ----
 1
 
 query I
-SELECT CASE WHEN ducknng_dial_socket(1, 'ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT) THEN 1 ELSE 0 END
+SELECT CASE WHEN (ducknng_dial_socket(1, 'ipc:///tmp/ducknng_rpc_client_smoke.ipc', 1000, 0::UBIGINT)).ok THEN 1 ELSE 0 END
 ----
 1
 
@@ -1071,7 +1071,7 @@ FROM ducknng_request('', from_hex('01000000000000000000000000000000000000000000'
 0	1
 
 query I
-SELECT CASE WHEN ducknng_close_socket(1) THEN 1 ELSE 0 END
+SELECT CASE WHEN (ducknng_close_socket(1)).ok THEN 1 ELSE 0 END
 ----
 1
 

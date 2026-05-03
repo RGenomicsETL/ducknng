@@ -231,20 +231,22 @@ FROM ducknng_parse_body(
 ORDER BY a;
 
 -- Primitive transport layer: open a req socket handle, dial it, and inspect the registry.
-SELECT ducknng_open_socket('req');
-SELECT ducknng_dial_socket(1, 'ipc:///tmp/ducknng_sql_client_demo.ipc', 1000, 0::UBIGINT);
+-- Low-level socket operations return one struct-shaped result:
+-- ok, error, nng_error, nng_error_message, socket_id, payload, url.
+SELECT (ducknng_open_socket('req')).socket_id;
+SELECT (ducknng_dial_socket(1, 'ipc:///tmp/ducknng_sql_client_demo.ipc', 1000, 0::UBIGINT)).ok;
 SELECT * FROM ducknng_list_sockets();
 
 -- Primitive transport layer: send the built-in manifest request frame.
 -- The hex literal here is the current wire-format request for the always-on manifest method.
-SELECT ok, error, octet_length(payload) > 0 AS has_payload
+SELECT ok, error, nng_error_message, octet_length(payload) > 0 AS has_payload
 FROM ducknng_request_socket(
   1::UBIGINT,                                        -- socket_id
   from_hex('01000000000000000000000000000000000000000000'), -- manifest request frame
   1000                                               -- timeout_ms
 );
 
-SELECT ok, error, octet_length(payload) > 0 AS has_payload
+SELECT ok, error, nng_error_message, octet_length(payload) > 0 AS has_payload
 FROM ducknng_request(
   'ipc:///tmp/ducknng_sql_client_demo.ipc',          -- url
   from_hex('01000000000000000000000000000000000000000000'), -- manifest request frame
@@ -252,7 +254,9 @@ FROM ducknng_request(
   0::UBIGINT                                         -- tls_config_id
 );
 
--- Raw scalar forms now mean raw reply frames as BLOBs.
+-- Framed request raw scalar forms return raw reply bytes as BLOBs.
+-- Framed RPC helpers return decodable ducknng error frames for setup
+-- or transport failures.
 SELECT substr(
   hex(
     ducknng_request_socket_raw(
@@ -274,14 +278,16 @@ FROM ducknng_decode_frame(
   ducknng_run_rpc_raw('ipc:///tmp/ducknng_sql_client_demo.ipc', 'CREATE TABLE IF NOT EXISTS client_side_demo(i INTEGER)', 0::UBIGINT)
 );
 
--- The generic raw request helper can be decoded the same way.
+-- The generic raw request helper can be decoded the same way. Use the
+-- table-shaped ducknng_request(...) form when you want ok/error/payload
+-- columns without decoding a frame yourself.
 SELECT ok, version, type_name, name, position('"name":"exec"' IN payload_text) > 0 AS has_exec
 FROM ducknng_decode_frame(
   ducknng_request_raw('ipc:///tmp/ducknng_sql_client_demo.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT)
 );
 
 -- Close the client socket handle and stop the demo server.
-SELECT ducknng_close_socket(1);
+SELECT (ducknng_close_socket(1)).ok;
 SELECT ducknng_stop_server('sql_client_demo');
 ```
 
@@ -587,20 +593,20 @@ A public subscriber gateway is a good fit for this layer, but it should use sepa
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Open one listening pair socket and one dialed peer.
 -- SET VARIABLE keeps setup handles out of the rendered output.
-SET VARIABLE pair_a = ducknng_open_socket('pair');
-SET VARIABLE pair_listen_ok = ducknng_listen_socket(
+SET VARIABLE pair_a = (ducknng_open_socket('pair')).socket_id;
+SET VARIABLE pair_listen_ok = (ducknng_listen_socket(
   getvariable('pair_a')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pair_aio_demo.ipc',
   134217728,
   0::UBIGINT
-);
-SET VARIABLE pair_b = ducknng_open_socket('pair');
-SET VARIABLE pair_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE pair_b = (ducknng_open_socket('pair')).socket_id;
+SET VARIABLE pair_dial_ok = (ducknng_dial_socket(
   getvariable('pair_b')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pair_aio_demo.ipc',
   1000,
   0::UBIGINT
-);
+)).ok;
 
 -- Start one async receive and one async send.
 CREATE TEMP TABLE pair_recv AS
@@ -630,38 +636,38 @@ SET VARIABLE pair_drop_send = ducknng_aio_drop((SELECT send_aio FROM pair_send))
 SET VARIABLE pair_drop_recv = ducknng_aio_drop((SELECT recv_aio FROM pair_recv));
 DROP TABLE pair_send;
 DROP TABLE pair_recv;
-SET VARIABLE pair_close_b = ducknng_close_socket(getvariable('pair_b')::UBIGINT);
-SET VARIABLE pair_close_a = ducknng_close_socket(getvariable('pair_a')::UBIGINT);
+SET VARIABLE pair_close_b = (ducknng_close_socket(getvariable('pair_b')::UBIGINT)).ok;
+SET VARIABLE pair_close_a = (ducknng_close_socket(getvariable('pair_a')::UBIGINT)).ok;
 ```
 
 ### Push one raw message through `push` / `pull`
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Open one pull socket, listen on it, then dial it from a push peer.
-SET VARIABLE pull_socket = ducknng_open_socket('pull');
-SET VARIABLE pull_listen_ok = ducknng_listen_socket(
+SET VARIABLE pull_socket = (ducknng_open_socket('pull')).socket_id;
+SET VARIABLE pull_listen_ok = (ducknng_listen_socket(
   getvariable('pull_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pushpull_demo.ipc',
   134217728,
   0::UBIGINT
-);
-SET VARIABLE push_socket = ducknng_open_socket('push');
-SET VARIABLE push_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE push_socket = (ducknng_open_socket('push')).socket_id;
+SET VARIABLE push_dial_ok = (ducknng_dial_socket(
   getvariable('push_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pushpull_demo.ipc',
   1000,
   0::UBIGINT
-);
+)).ok;
 
 -- Receive asynchronously on pull so the send side can return immediately.
 CREATE TEMP TABLE pushpull_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('pull_socket')::UBIGINT, 1000) AS recv_aio;
 
-SET VARIABLE pushpull_sent = ducknng_send_socket_raw(
+SET VARIABLE pushpull_sent = (ducknng_send_socket_raw(
   getvariable('push_socket')::UBIGINT,
   from_hex('707573682d70756c6c'),
   1000
-);
+)).ok;
 
 SELECT getvariable('pushpull_sent')::BOOLEAN AS sent,
        ok,
@@ -670,38 +676,38 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pushpull_recv), 1000)
 
 SET VARIABLE pushpull_drop = ducknng_aio_drop((SELECT recv_aio FROM pushpull_recv));
 DROP TABLE pushpull_recv;
-SET VARIABLE push_close = ducknng_close_socket(getvariable('push_socket')::UBIGINT);
-SET VARIABLE pull_close = ducknng_close_socket(getvariable('pull_socket')::UBIGINT);
+SET VARIABLE push_close = (ducknng_close_socket(getvariable('push_socket')::UBIGINT)).ok;
+SET VARIABLE pull_close = (ducknng_close_socket(getvariable('pull_socket')::UBIGINT)).ok;
 ```
 
 ### Publish one raw message through `pub` / `sub`
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Open one publisher, then subscribe from a sub peer to all topics.
-SET VARIABLE pub_socket = ducknng_open_socket('pub');
-SET VARIABLE pub_listen_ok = ducknng_listen_socket(
+SET VARIABLE pub_socket = (ducknng_open_socket('pub')).socket_id;
+SET VARIABLE pub_listen_ok = (ducknng_listen_socket(
   getvariable('pub_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pubsub_demo.ipc',
   134217728,
   0::UBIGINT
-);
-SET VARIABLE sub_socket = ducknng_open_socket('sub');
-SET VARIABLE sub_subscribe_ok = ducknng_subscribe_socket(getvariable('sub_socket')::UBIGINT, from_hex(''));
-SET VARIABLE sub_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE sub_socket = (ducknng_open_socket('sub')).socket_id;
+SET VARIABLE sub_subscribe_ok = (ducknng_subscribe_socket(getvariable('sub_socket')::UBIGINT, from_hex(''))).ok;
+SET VARIABLE sub_dial_ok = (ducknng_dial_socket(
   getvariable('sub_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_pubsub_demo.ipc',
   1000,
   0::UBIGINT
-);
+)).ok;
 
 CREATE TEMP TABLE pubsub_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('sub_socket')::UBIGINT, 1000) AS recv_aio;
 
-SET VARIABLE pubsub_sent = ducknng_send_socket_raw(
+SET VARIABLE pubsub_sent = (ducknng_send_socket_raw(
   getvariable('pub_socket')::UBIGINT,
   from_hex('7075622d737562'),
   1000
-);
+)).ok;
 
 SELECT getvariable('pubsub_sent')::BOOLEAN AS sent,
        ok,
@@ -710,38 +716,38 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pubsub_recv), 1000);
 
 SET VARIABLE pubsub_drop = ducknng_aio_drop((SELECT recv_aio FROM pubsub_recv));
 DROP TABLE pubsub_recv;
-SET VARIABLE sub_close = ducknng_close_socket(getvariable('sub_socket')::UBIGINT);
-SET VARIABLE pub_close = ducknng_close_socket(getvariable('pub_socket')::UBIGINT);
+SET VARIABLE sub_close = (ducknng_close_socket(getvariable('sub_socket')::UBIGINT)).ok;
+SET VARIABLE pub_close = (ducknng_close_socket(getvariable('pub_socket')::UBIGINT)).ok;
 ```
 
 ### Exchange one survey and one response through `surveyor` / `respondent`
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Open one respondent listener and one surveyor peer.
-SET VARIABLE respondent_socket = ducknng_open_socket('respondent');
-SET VARIABLE respondent_listen_ok = ducknng_listen_socket(
+SET VARIABLE respondent_socket = (ducknng_open_socket('respondent')).socket_id;
+SET VARIABLE respondent_listen_ok = (ducknng_listen_socket(
   getvariable('respondent_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_survey_demo.ipc',
   134217728,
   0::UBIGINT
-);
-SET VARIABLE surveyor_socket = ducknng_open_socket('surveyor');
-SET VARIABLE surveyor_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE surveyor_socket = (ducknng_open_socket('surveyor')).socket_id;
+SET VARIABLE surveyor_dial_ok = (ducknng_dial_socket(
   getvariable('surveyor_socket')::UBIGINT,
   'ipc:///tmp/ducknng_sql_survey_demo.ipc',
   1000,
   0::UBIGINT
-);
+)).ok;
 
 -- Receive the survey on the respondent side first.
 CREATE TEMP TABLE respondent_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('respondent_socket')::UBIGINT, 1000) AS recv_aio;
 
-SET VARIABLE survey_sent = ducknng_send_socket_raw(
+SET VARIABLE survey_sent = (ducknng_send_socket_raw(
   getvariable('surveyor_socket')::UBIGINT,
   from_hex('737572766579'),
   1000
-);
+)).ok;
 
 SELECT getvariable('survey_sent')::BOOLEAN AS sent_survey,
        ok,
@@ -752,11 +758,11 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM respondent_recv), 100
 CREATE TEMP TABLE surveyor_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('surveyor_socket')::UBIGINT, 1000) AS recv_aio;
 
-SET VARIABLE response_sent = ducknng_send_socket_raw(
+SET VARIABLE response_sent = (ducknng_send_socket_raw(
   getvariable('respondent_socket')::UBIGINT,
   from_hex('726573706f6e7365'),
   1000
-);
+)).ok;
 
 SELECT getvariable('response_sent')::BOOLEAN AS sent_response,
        ok,
@@ -767,8 +773,8 @@ SET VARIABLE respondent_drop = ducknng_aio_drop((SELECT recv_aio FROM respondent
 SET VARIABLE surveyor_drop = ducknng_aio_drop((SELECT recv_aio FROM surveyor_recv));
 DROP TABLE respondent_recv;
 DROP TABLE surveyor_recv;
-SET VARIABLE surveyor_close = ducknng_close_socket(getvariable('surveyor_socket')::UBIGINT);
-SET VARIABLE respondent_close = ducknng_close_socket(getvariable('respondent_socket')::UBIGINT);
+SET VARIABLE surveyor_close = (ducknng_close_socket(getvariable('surveyor_socket')::UBIGINT)).ok;
+SET VARIABLE respondent_close = (ducknng_close_socket(getvariable('respondent_socket')::UBIGINT)).ok;
 ```
 
 ### Broadcast one raw message through a three-peer `bus` mesh
@@ -776,30 +782,30 @@ SET VARIABLE respondent_close = ducknng_close_socket(getvariable('respondent_soc
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Open three bus peers. Every peer in a bus sends to and receives from every
 -- other peer, so a single send from peer A is delivered to both B and C.
-SET VARIABLE bus_a = ducknng_open_socket('bus');
-SET VARIABLE bus_b = ducknng_open_socket('bus');
-SET VARIABLE bus_c = ducknng_open_socket('bus');
+SET VARIABLE bus_a = (ducknng_open_socket('bus')).socket_id;
+SET VARIABLE bus_b = (ducknng_open_socket('bus')).socket_id;
+SET VARIABLE bus_c = (ducknng_open_socket('bus')).socket_id;
 
 -- A listens, B and C dial A. That gives every peer a direct edge to A; bus
 -- forwards the broadcast across the mesh.
-SET VARIABLE bus_a_listen_ok = ducknng_listen_socket(
+SET VARIABLE bus_a_listen_ok = (ducknng_listen_socket(
   getvariable('bus_a')::UBIGINT,
   'ipc:///tmp/ducknng_sql_bus_demo.ipc',
   134217728,
   0::UBIGINT
-);
-SET VARIABLE bus_b_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE bus_b_dial_ok = (ducknng_dial_socket(
   getvariable('bus_b')::UBIGINT,
   'ipc:///tmp/ducknng_sql_bus_demo.ipc',
   1000,
   0::UBIGINT
-);
-SET VARIABLE bus_c_dial_ok = ducknng_dial_socket(
+)).ok;
+SET VARIABLE bus_c_dial_ok = (ducknng_dial_socket(
   getvariable('bus_c')::UBIGINT,
   'ipc:///tmp/ducknng_sql_bus_demo.ipc',
   1000,
   0::UBIGINT
-);
+)).ok;
 
 -- Arm one async receive on each non-sending peer before A broadcasts.
 CREATE TEMP TABLE bus_recv_b AS
@@ -807,11 +813,11 @@ SELECT ducknng_recv_socket_raw_aio(getvariable('bus_b')::UBIGINT, 1000) AS recv_
 CREATE TEMP TABLE bus_recv_c AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('bus_c')::UBIGINT, 1000) AS recv_aio;
 
-SET VARIABLE bus_sent = ducknng_send_socket_raw(
+SET VARIABLE bus_sent = (ducknng_send_socket_raw(
   getvariable('bus_a')::UBIGINT,
   from_hex('6275732d62726f616463617374'),
   1000
-);
+)).ok;
 
 SELECT getvariable('bus_sent')::BOOLEAN AS sent,
        ok,
@@ -826,14 +832,14 @@ SET VARIABLE bus_drop_b = ducknng_aio_drop((SELECT recv_aio FROM bus_recv_b));
 SET VARIABLE bus_drop_c = ducknng_aio_drop((SELECT recv_aio FROM bus_recv_c));
 DROP TABLE bus_recv_b;
 DROP TABLE bus_recv_c;
-SET VARIABLE bus_close_c = ducknng_close_socket(getvariable('bus_c')::UBIGINT);
-SET VARIABLE bus_close_b = ducknng_close_socket(getvariable('bus_b')::UBIGINT);
-SET VARIABLE bus_close_a = ducknng_close_socket(getvariable('bus_a')::UBIGINT);
+SET VARIABLE bus_close_c = (ducknng_close_socket(getvariable('bus_c')::UBIGINT)).ok;
+SET VARIABLE bus_close_b = (ducknng_close_socket(getvariable('bus_b')::UBIGINT)).ok;
+SET VARIABLE bus_close_a = (ducknng_close_socket(getvariable('bus_a')::UBIGINT)).ok;
 ```
 
 ### Launch raw requests asynchronously and collect the reply frames later
 
-The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. `ducknng_aio_wait(...)` is the wait-without-consuming primitive for lifecycle code that needs to inspect or drop a terminal handle later. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper on top of that same frame substrate: it still waits on the same terminal aio handles, but it projects the decoded envelope columns directly through the same low-level frame scalar accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Aio handles still represent one pending operation, not a background job or streaming protocol.
+The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. Expected aio launch failures, such as unsupported URL schemes, invalid TLS handles, or missing socket handles, return immediate terminal error handles so the caller can inspect `ducknng_aio_status(...)` or collect the error row without turning the launch itself into a DuckDB exception. `ducknng_aio_wait(...)` is the wait-without-consuming primitive for lifecycle code that needs to inspect or drop a terminal handle later. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper on top of that same frame substrate: it still waits on the same terminal aio handles, but it projects the decoded envelope columns directly through the same low-level frame scalar accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Aio handles still represent one pending operation, not a background job or streaming protocol.
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Start a local listener that the aio requests will target.

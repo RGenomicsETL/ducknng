@@ -540,7 +540,10 @@ int ducknng_socket_apply_tls(nng_socket sock, const char *url, const ducknng_tls
 int ducknng_req_transact(nng_socket sock, nng_msg *req, nng_msg **resp) {
     int rv;
     rv = ducknng_socket_send(sock, req);
-    if (rv != 0) return rv;
+    if (rv != 0) {
+        nng_msg_free(req);
+        return rv;
+    }
     return ducknng_socket_recv(sock, resp);
 }
 int ducknng_listener_create(nng_listener *out, nng_socket sock, const char *url) { return nng_listener_create(out, sock, url); }

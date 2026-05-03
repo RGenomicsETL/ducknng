@@ -32,17 +32,17 @@ This file is generated from `function_catalog/functions.yaml`.
 
 | name | kind | arguments | returns | description |
 |---|---|---|---|---|
-| `ducknng_open_socket` | scalar | `protocol` | `UBIGINT` | Open a client socket handle for a supported NNG protocol. |
-| `ducknng_dial_socket` | scalar | `socket_id, url, timeout_ms, tls_config_id` | `BOOLEAN` | Dial a URL using an opened socket handle. |
-| `ducknng_listen_socket` | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `BOOLEAN` | Bind a socket handle to a listen URL and start its NNG listener. |
-| `ducknng_close_socket` | scalar | `socket_id` | `BOOLEAN` | Close a client socket handle. |
-| `ducknng_send_socket_raw` | scalar | `socket_id, frame, timeout_ms` | `BOOLEAN` | Send one raw frame through an active socket handle. |
-| `ducknng_recv_socket_raw` | scalar | `socket_id, timeout_ms` | `BLOB` | Receive one raw frame from an active socket handle. |
-| `ducknng_subscribe_socket` | scalar | `socket_id, topic` | `BOOLEAN` | Register a raw topic prefix on a sub socket. |
-| `ducknng_unsubscribe_socket` | scalar | `socket_id, topic` | `BOOLEAN` | Remove a raw topic prefix from a sub socket. |
+| `ducknng_open_socket` | scalar | `protocol` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Open a client socket handle for a supported NNG protocol. |
+| `ducknng_dial_socket` | scalar | `socket_id, url, timeout_ms, tls_config_id` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Dial a URL using an opened socket handle. |
+| `ducknng_listen_socket` | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Bind a socket handle to a listen URL and start its NNG listener. |
+| `ducknng_close_socket` | scalar | `socket_id` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Close a client socket handle. |
+| `ducknng_send_socket_raw` | scalar | `socket_id, frame, timeout_ms` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Send one raw frame through an active socket handle. |
+| `ducknng_recv_socket_raw` | scalar | `socket_id, timeout_ms` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Receive one raw frame from an active socket handle. |
+| `ducknng_subscribe_socket` | scalar | `socket_id, topic` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Register a raw topic prefix on a sub socket. |
+| `ducknng_unsubscribe_socket` | scalar | `socket_id, topic` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)` | Remove a raw topic prefix from a sub socket. |
 | `ducknng_list_sockets` | table |  | `TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)` | List client socket handles in the runtime. |
-| `ducknng_request` | table | `url, payload, timeout_ms, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)` | Perform a one-shot raw request and return a structured result row. |
-| `ducknng_request_socket` | table | `socket_id, payload, timeout_ms` | `TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)` | Perform a raw request through a previously dialed socket handle and return a structured result row. |
+| `ducknng_request` | table | `url, payload, timeout_ms, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)` | Perform a one-shot raw request and return a structured result row. |
+| `ducknng_request_socket` | table | `socket_id, payload, timeout_ms` | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)` | Perform a raw request through a previously dialed socket handle and return a structured result row. |
 | `ducknng_request_raw` | scalar | `url, payload, timeout_ms, tls_config_id` | `BLOB` | Perform a one-shot raw request and return the raw reply frame bytes. |
 | `ducknng_request_socket_raw` | scalar | `socket_id, payload, timeout_ms` | `BLOB` | Perform a raw request through a dialed socket handle and return the raw reply frame bytes. |
 | `ducknng_decode_frame` | table | `frame` | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns. |

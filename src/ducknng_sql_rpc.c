@@ -62,6 +62,8 @@ typedef struct {
 typedef struct {
     bool ok;
     char *error;
+    int has_nng_error;
+    int32_t nng_error;
     uint8_t *payload;
     idx_t payload_len;
 } ducknng_request_bind_data;
@@ -850,6 +852,9 @@ static int ducknng_query_rpc_close_session(ducknng_query_rpc_bind_data *bind) {
     return 0;
 }
 
+static int ducknng_assign_local_error_frame(duckdb_function_info info, duckdb_vector output,
+    idx_t row, const char *name, const char *message);
+
 static void ducknng_get_rpc_manifest_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
@@ -863,15 +868,23 @@ static void ducknng_get_rpc_manifest_raw_scalar(duckdb_function_info info, duckd
         nng_msg *resp_msg;
         if (!url || ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
             if (url) duckdb_free(url);
+            if (ducknng_assign_local_error_frame(info, output, row, "manifest",
+                    errmsg ? errmsg : "ducknng: manifest URL must not be NULL or empty") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_manifest_request(), 5000, tls_opts, &errmsg);
         duckdb_free(url);
         if (!resp_msg) {
+            if (ducknng_assign_local_error_frame(info, output, row, "manifest",
+                    errmsg ? errmsg : "ducknng: manifest request failed") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         assign_blob(output, row, (const uint8_t *)nng_msg_body(resp_msg), (idx_t)nng_msg_len(resp_msg));
@@ -895,23 +908,35 @@ static void ducknng_run_rpc_raw_scalar(duckdb_function_info info, duckdb_data_ch
         if (!url || !sql || ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
             if (url) duckdb_free(url);
             if (sql) duckdb_free(sql);
+            if (ducknng_assign_local_error_frame(info, output, row, "exec",
+                    errmsg ? errmsg : "ducknng: run_rpc_raw requires non-null url and sql") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         req = ducknng_client_exec_request(sql, 0, &errmsg);
         duckdb_free(sql);
         if (!req) {
             duckdb_free(url);
+            if (ducknng_assign_local_error_frame(info, output, row, "exec",
+                    errmsg ? errmsg : "ducknng: failed to build exec request frame") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         resp_msg = ducknng_client_roundtrip_tls(url, req, 5000, tls_opts, &errmsg);
         duckdb_free(url);
         if (!resp_msg) {
+            if (ducknng_assign_local_error_frame(info, output, row, "exec",
+                    errmsg ? errmsg : "ducknng: remote exec request failed") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         assign_blob(output, row, (const uint8_t *)nng_msg_body(resp_msg), (idx_t)nng_msg_len(resp_msg));
@@ -919,7 +944,7 @@ static void ducknng_run_rpc_raw_scalar(duckdb_function_info info, duckdb_data_ch
     }
 }
 
-static int ducknng_assign_method_roundtrip_blob(duckdb_vector output, idx_t row,
+static int ducknng_assign_method_roundtrip_blob(duckdb_function_info info, duckdb_vector output, idx_t row,
     ducknng_sql_context *ctx, const char *url, const char *method_name,
     const void *payload, size_t payload_len, uint64_t tls_config_id) {
     const ducknng_tls_opts *tls_opts = NULL;
@@ -927,15 +952,23 @@ static int ducknng_assign_method_roundtrip_blob(duckdb_vector output, idx_t row,
     char *errmsg = NULL;
     if (!ctx || !ctx->rt || !url || !method_name ||
         ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
+        if (ducknng_assign_local_error_frame(info, output, row, method_name,
+                errmsg ? errmsg : "ducknng: raw RPC helper requires valid runtime, URL, and method") != 0) {
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
         if (errmsg) duckdb_free(errmsg);
-        set_null(output, row);
         return -1;
     }
     resp_msg = ducknng_client_method_roundtrip_tls(url, method_name, payload, payload_len,
         5000, tls_opts, &errmsg);
     if (!resp_msg) {
+        if (ducknng_assign_local_error_frame(info, output, row, method_name,
+                errmsg ? errmsg : "ducknng: raw RPC request failed") != 0) {
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
         if (errmsg) duckdb_free(errmsg);
-        set_null(output, row);
         return -1;
     }
     assign_blob(output, row, (const uint8_t *)nng_msg_body(resp_msg), (idx_t)nng_msg_len(resp_msg));
@@ -961,18 +994,23 @@ static void ducknng_open_query_raw_scalar(duckdb_function_info info, duckdb_data
         if (!ctx || !ctx->rt || !url || !sql || !url[0] || !sql[0]) {
             if (url) duckdb_free(url);
             if (sql) duckdb_free(sql);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "query_open",
+                    "ducknng: open_query_raw requires non-empty url and sql") != 0) return;
             continue;
         }
         if (ducknng_query_open_request_to_ipc(sql, batch_rows, batch_bytes, &payload, &payload_len, &errmsg) != 0) {
             duckdb_free(url);
             duckdb_free(sql);
             if (payload) duckdb_free(payload);
+            if (ducknng_assign_local_error_frame(info, output, row, "query_open",
+                    errmsg ? errmsg : "ducknng: failed to encode query_open request payload") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
-        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "query_open",
+        (void)ducknng_assign_method_roundtrip_blob(info, output, row, ctx, url, "query_open",
             payload, payload_len, tls_config_id);
         duckdb_free(url);
         duckdb_free(sql);
@@ -997,17 +1035,19 @@ static void ducknng_fetch_query_raw_scalar(duckdb_function_info info, duckdb_dat
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "fetch",
+                    "ducknng: fetch_query_raw requires non-empty url, session_id, and session_token") != 0) return;
             continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, batch_rows, batch_bytes);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "fetch",
+                    "ducknng: failed to build fetch request payload") != 0) return;
             continue;
         }
-        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "fetch",
+        (void)ducknng_assign_method_roundtrip_blob(info, output, row, ctx, url, "fetch",
             payload, strlen(payload), tls_config_id);
         duckdb_free(url);
         duckdb_free(session_token);
@@ -1029,17 +1069,19 @@ static void ducknng_close_query_raw_scalar(duckdb_function_info info, duckdb_dat
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "close",
+                    "ducknng: close_query_raw requires non-empty url, session_id, and session_token") != 0) return;
             continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, 0, 0);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "close",
+                    "ducknng: failed to build close request payload") != 0) return;
             continue;
         }
-        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "close",
+        (void)ducknng_assign_method_roundtrip_blob(info, output, row, ctx, url, "close",
             payload, strlen(payload), tls_config_id);
         duckdb_free(url);
         duckdb_free(session_token);
@@ -1061,17 +1103,19 @@ static void ducknng_cancel_query_raw_scalar(duckdb_function_info info, duckdb_da
         if (!ctx || !ctx->rt || !url || !url[0] || session_id == 0 || !session_token || !session_token[0]) {
             if (url) duckdb_free(url);
             if (session_token) duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "cancel",
+                    "ducknng: cancel_query_raw requires non-empty url, session_id, and session_token") != 0) return;
             continue;
         }
         payload = ducknng_session_request_json(session_id, session_token, 0, 0);
         if (!payload) {
             duckdb_free(url);
             duckdb_free(session_token);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "cancel",
+                    "ducknng: failed to build cancel request payload") != 0) return;
             continue;
         }
-        (void)ducknng_assign_method_roundtrip_blob(output, row, ctx, url, "cancel",
+        (void)ducknng_assign_method_roundtrip_blob(info, output, row, ctx, url, "cancel",
             payload, strlen(payload), tls_config_id);
         duckdb_free(url);
         duckdb_free(session_token);
@@ -1087,33 +1131,71 @@ static int ducknng_socket_is_req_protocol(const ducknng_client_socket *sock) {
     return sock && sock->protocol && strcmp(sock->protocol, "req") == 0;
 }
 
+static int ducknng_assign_local_error_frame(duckdb_function_info info, duckdb_vector output,
+    idx_t row, const char *name, const char *message) {
+    nng_msg *err = ducknng_error_msg(name ? name : "transport", DUCKNNG_STATUS_INTERNAL,
+        message ? message : "ducknng: request failed");
+    if (!err) {
+        duckdb_scalar_function_set_error(info, "ducknng: failed to build local error frame");
+        return -1;
+    }
+    assign_blob(output, row, (const uint8_t *)nng_msg_body(err), (idx_t)nng_msg_len(err));
+    nng_msg_free(err);
+    return 0;
+}
+
 static void ducknng_request_raw_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
     if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
     for (row = 0; row < count; row++) {
-        char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        duckdb_vector url_vec = duckdb_data_chunk_get_vector(input, 0);
+        duckdb_vector payload_vec = duckdb_data_chunk_get_vector(input, 1);
+        int url_is_null = ducknng_sql_arg_is_null(url_vec, row);
+        int payload_is_null = ducknng_sql_arg_is_null(payload_vec, row);
+        char *url = arg_varchar_dup(url_vec, row);
         idx_t payload_len = 0;
-        uint8_t *payload = arg_blob_dup(duckdb_data_chunk_get_vector(input, 1), row, &payload_len);
+        uint8_t *payload = arg_blob_dup(payload_vec, row, &payload_len);
         int32_t timeout_ms = arg_int32(duckdb_data_chunk_get_vector(input, 2), row, 5000);
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
         const ducknng_tls_opts *tls_opts = NULL;
         nng_msg *resp = NULL;
         char *errmsg = NULL;
-        if (!url || (!payload && payload_len > 0) || ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
+        if (url_is_null || payload_is_null || !url || !url[0]) {
             if (url) duckdb_free(url);
             if (payload) duckdb_free(payload);
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    "ducknng: request_raw requires non-null url and payload") != 0) return;
+            continue;
+        }
+        if (!payload && payload_len > 0) {
+            duckdb_free(url);
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    "ducknng: out of memory copying request payload") != 0) return;
+            continue;
+        }
+        if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
+            duckdb_free(url);
+            if (payload) duckdb_free(payload);
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    errmsg ? errmsg : "ducknng: tls config not found") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         resp = ducknng_client_roundtrip_raw_tls(url, payload, (size_t)payload_len, timeout_ms, tls_opts, &errmsg);
         duckdb_free(url);
         if (payload) duckdb_free(payload);
         if (!resp) {
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    errmsg ? errmsg : "ducknng: request failed") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         assign_blob(output, row, (const uint8_t *)nng_msg_body(resp), (idx_t)nng_msg_len(resp));
@@ -1137,29 +1219,39 @@ static void ducknng_request_socket_scalar(duckdb_function_info info, duckdb_data
         int rv;
         if (!ctx || !ctx->rt || socket_id == 0 || (!payload && payload_len > 0)) {
             if (payload) duckdb_free(payload);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    "ducknng: request_socket_raw requires socket id and payload") != 0) return;
             continue;
         }
         sock = ducknng_runtime_acquire_client_socket(ctx->rt, socket_id);
         if (!sock || !sock->open || !sock->connected || !ducknng_socket_is_req_protocol(sock)) {
             if (payload) duckdb_free(payload);
             if (sock) ducknng_runtime_release_client_socket(sock);
-            set_null(output, row);
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    "ducknng: connected req client socket not found") != 0) return;
             continue;
         }
         {
             nng_msg *req = ducknng_client_raw_request_message(payload, (size_t)payload_len, &errmsg);
+            int transact_called = 0;
             if (payload) duckdb_free(payload);
             payload = NULL;
             if (!req) {
                 if (sock) ducknng_runtime_release_client_socket(sock);
+                if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                        errmsg ? errmsg : "ducknng: failed to build socket request frame") != 0) {
+                    if (errmsg) duckdb_free(errmsg);
+                    return;
+                }
                 if (errmsg) duckdb_free(errmsg);
-                set_null(output, row);
                 continue;
             }
             ducknng_mutex_lock(&sock->mu);
             rv = ducknng_socket_set_timeout_ms(sock->sock, timeout_ms, timeout_ms);
-            if (rv == 0) rv = ducknng_req_transact(sock->sock, req, &resp);
+            if (rv == 0) {
+                transact_called = 1;
+                rv = ducknng_req_transact(sock->sock, req, &resp);
+            }
             if (rv == 0) {
                 sock->send_timeout_ms = timeout_ms;
                 sock->recv_timeout_ms = timeout_ms;
@@ -1167,13 +1259,19 @@ static void ducknng_request_socket_scalar(duckdb_function_info info, duckdb_data
             ducknng_mutex_unlock(&sock->mu);
             ducknng_runtime_release_client_socket(sock);
             if (rv != 0) {
-                set_null(output, row);
+                if (!transact_called) nng_msg_free(req);
+                if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                        ducknng_nng_strerror(rv)) != 0) return;
                 continue;
             }
         }
         if (!resp) {
+            if (ducknng_assign_local_error_frame(info, output, row, "transport",
+                    errmsg ? errmsg : "ducknng: request failed") != 0) {
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
             if (errmsg) duckdb_free(errmsg);
-            set_null(output, row);
             continue;
         }
         assign_blob(output, row, (const uint8_t *)nng_msg_body(resp), (idx_t)nng_msg_len(resp));
@@ -1559,12 +1657,16 @@ static void ducknng_request_bind_common_socket(ducknng_request_bind_data *bind, 
     if (rv != 0) {
         nng_msg_free(req_msg);
         bind->ok = false;
+        bind->has_nng_error = 1;
+        bind->nng_error = (int32_t)rv;
         bind->error = ducknng_strdup(ducknng_nng_strerror(rv));
         return;
     }
     rv = ducknng_req_transact(sock->sock, req_msg, &resp_msg);
     if (rv != 0) {
         bind->ok = false;
+        bind->has_nng_error = 1;
+        bind->nng_error = (int32_t)rv;
         bind->error = ducknng_strdup(ducknng_nng_strerror(rv));
         return;
     }
@@ -1630,6 +1732,12 @@ static void ducknng_request_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "error", type);
     duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+    duckdb_bind_add_result_column(info, "nng_error", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "nng_error_message", type);
+    duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
     duckdb_bind_add_result_column(info, "payload", type);
     duckdb_destroy_logical_type(&type);
@@ -1679,6 +1787,12 @@ static void ducknng_request_socket_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "error", type);
     duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+    duckdb_bind_add_result_column(info, "nng_error", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "nng_error_message", type);
+    duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
     duckdb_bind_add_result_column(info, "payload", type);
     duckdb_destroy_logical_type(&type);
@@ -1698,8 +1812,17 @@ static void ducknng_request_scan(duckdb_function_info info, duckdb_data_chunk ou
     ok_data[0] = bind->ok;
     if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->error);
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    if (bind->payload) assign_blob(duckdb_data_chunk_get_vector(output, 2), 0, bind->payload, bind->payload_len);
-    else set_null(duckdb_data_chunk_get_vector(output, 2), 0);
+    if (bind->has_nng_error) {
+        int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
+        nng_errors[0] = bind->nng_error;
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), 0,
+            ducknng_nng_strerror(bind->nng_error));
+    } else {
+        set_null(duckdb_data_chunk_get_vector(output, 2), 0);
+        set_null(duckdb_data_chunk_get_vector(output, 3), 0);
+    }
+    if (bind->payload) assign_blob(duckdb_data_chunk_get_vector(output, 4), 0, bind->payload, bind->payload_len);
+    else set_null(duckdb_data_chunk_get_vector(output, 4), 0);
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;
 }

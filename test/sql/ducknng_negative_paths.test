@@ -43,30 +43,124 @@ SELECT ducknng_set_service_limits('missing_service', 1::UBIGINT, 1::UBIGINT, 1::
 ----
 ducknng: service not found
 
-statement error
-SELECT ducknng_open_socket('not-a-protocol')
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_open_socket('not-a-protocol') AS r)
 ----
-ducknng: protocol must be one of bus, pair, pair0, pair1, poly, push, pull, pub, sub, req, rep, surveyor, respondent
+0	ducknng: protocol must be one of bus, pair, pair0, pair1, poly, push, pull, pub, sub, req, rep, surveyor, respondent	1
 
-statement error
-SELECT ducknng_close_socket(999::UBIGINT)
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_close_socket(999::UBIGINT) AS r)
 ----
-ducknng: client socket not found
+0	ducknng: client socket not found	1
 
-statement error
-SELECT ducknng_send_socket_raw(999::UBIGINT, from_hex('00'), 10)
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_send_socket_raw(999::UBIGINT, from_hex('00'), 10) AS r)
 ----
-ducknng: active client socket not found
+0	ducknng: active client socket not found	1
 
-statement error
-SELECT ducknng_recv_socket_raw(999::UBIGINT, 10)
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_recv_socket_raw(999::UBIGINT, 10) AS r)
 ----
-ducknng: active client socket not found
+0	ducknng: active client socket not found	1
+
+statement ok
+SET VARIABLE negative_pair_socket = (
+  SELECT (ducknng_open_socket('pair')).socket_id
+)
+
+statement ok
+SET VARIABLE negative_pair_listen = (
+  SELECT (ducknng_listen_socket(
+    getvariable('negative_pair_socket')::UBIGINT,
+    'inproc://ducknng_negative_paths_pair_timeout',
+    0::UBIGINT,
+    0::UBIGINT
+  )).ok
+)
+
+query IITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error IS NOT NULL, r.nng_error, r.nng_error_message
+FROM (SELECT ducknng_send_socket_raw(getvariable('negative_pair_socket')::UBIGINT, from_hex('00'), 10) AS r)
+----
+0	1	5	Timed out
 
 query I
-SELECT ducknng_request_socket_raw(999::UBIGINT, from_hex('00'), 10) IS NULL
+SELECT CASE WHEN (ducknng_close_socket(getvariable('negative_pair_socket')::UBIGINT)).ok THEN 1 ELSE 0 END
 ----
-true
+1
+
+query ITT
+SELECT ok, type_name, error
+FROM ducknng_decode_frame(ducknng_request_socket_raw(999::UBIGINT, from_hex('00'), 10))
+----
+0	error	ducknng: connected req client socket not found
+
+statement ok
+CREATE TEMP TABLE aio_transport_error AS
+SELECT ducknng_request_raw_aio('ftp://127.0.0.1:9', from_hex('00'), 10, 0::UBIGINT) AS aio_id
+
+query ITT
+SELECT aio_transport_error.aio_id > 0, state, error
+FROM aio_transport_error, ducknng_aio_status(aio_transport_error.aio_id)
+----
+1	error	ducknng: unsupported transport URL scheme
+
+query IIT
+SELECT aio_id > 0, ok, error
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM aio_transport_error), 0)
+----
+1	0	ducknng: unsupported transport URL scheme
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM aio_transport_error
+----
+1
+
+statement ok
+DROP TABLE aio_transport_error
+
+statement ok
+CREATE TEMP TABLE aio_ncurl_transport_error AS
+SELECT ducknng_ncurl_aio('ftp://127.0.0.1:9', 'GET', NULL, NULL, 10, 0::UBIGINT) AS aio_id
+
+query IIT
+SELECT aio_id > 0, ok, error
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM aio_ncurl_transport_error), 0)
+----
+1	0	ducknng: unsupported transport URL scheme
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM aio_ncurl_transport_error
+----
+1
+
+statement ok
+DROP TABLE aio_ncurl_transport_error
+
+statement ok
+CREATE TEMP TABLE aio_socket_error AS
+SELECT ducknng_request_socket_raw_aio(999::UBIGINT, from_hex('00'), 10) AS aio_id
+
+query IIT
+SELECT aio_id > 0, ok, error
+FROM ducknng_aio_collect((SELECT list_value(aio_id) FROM aio_socket_error), 0)
+----
+1	0	ducknng: connected req client socket is required for aio request
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM aio_socket_error
+----
+1
+
+statement ok
+DROP TABLE aio_socket_error
 
 query IT
 SELECT ok, error
@@ -74,10 +168,29 @@ FROM ducknng_get_rpc_manifest('ftp://127.0.0.1:9', 0::UBIGINT)
 ----
 0	ducknng: unsupported transport URL scheme
 
-query I
-SELECT ducknng_request_raw('ftp://127.0.0.1:9', from_hex('00'), 10, 0::UBIGINT) IS NULL
+query ITT
+SELECT ok, type_name, error
+FROM ducknng_decode_frame(
+  ducknng_request_raw('ftp://127.0.0.1:9', from_hex('00'), 10, 0::UBIGINT)
+)
 ----
-true
+0	error	ducknng: unsupported transport URL scheme
+
+query ITTT
+SELECT ok, type_name, name, error
+FROM ducknng_decode_frame(
+  ducknng_get_rpc_manifest_raw('ftp://127.0.0.1:9', 0::UBIGINT)
+)
+----
+0	error	manifest	ducknng: unsupported transport URL scheme
+
+query ITTT
+SELECT ok, type_name, name, error
+FROM ducknng_decode_frame(
+  ducknng_open_query_raw('ftp://127.0.0.1:9', 'SELECT 1', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+)
+----
+0	error	query_open	ducknng: unsupported transport URL scheme
 
 query IT
 SELECT ok, error
@@ -150,23 +263,42 @@ FROM ducknng_open_query('tcp://127.0.0.1:1', 'SELECT 1', 0::UBIGINT, 0::UBIGINT,
 ----
 0	ducknng: TLS configuration requires a tls+tcp:// or wss:// URL
 
-statement error
-SELECT ducknng_get_rpc_manifest_raw_aio('tcp://127.0.0.1:1', 100, getvariable('negative_tls_id')::UBIGINT)
+statement ok
+SET VARIABLE negative_tls_aio = ducknng_get_rpc_manifest_raw_aio(
+  'tcp://127.0.0.1:1',
+  100,
+  getvariable('negative_tls_id')::UBIGINT
+)
+
+query IT
+SELECT state, error
+FROM ducknng_aio_status(getvariable('negative_tls_aio')::UBIGINT)
 ----
-ducknng: TLS configuration requires a tls+tcp:// or wss:// URL
+error	ducknng: TLS configuration requires a tls+tcp:// or wss:// URL
+
+query I
+SELECT ducknng_aio_drop(getvariable('negative_tls_aio')::UBIGINT)
+----
+1
 
 statement ok
 SET VARIABLE negative_req_socket = (
-  SELECT ducknng_open_socket('req')
+  SELECT (ducknng_open_socket('req')).socket_id
 )
 
-statement error
-SELECT ducknng_dial_socket(getvariable('negative_req_socket')::UBIGINT, 'tcp://127.0.0.1:1', 100, getvariable('negative_tls_id')::UBIGINT)
+query ITI
+SELECT CASE WHEN r.ok THEN 1 ELSE 0 END, r.error, CASE WHEN r.nng_error IS NULL THEN 1 ELSE 0 END
+FROM (SELECT ducknng_dial_socket(
+  getvariable('negative_req_socket')::UBIGINT,
+  'tcp://127.0.0.1:1',
+  100,
+  getvariable('negative_tls_id')::UBIGINT
+) AS r)
 ----
-ducknng: TLS configuration requires a tls+tcp:// or wss:// URL
+0	ducknng: TLS configuration requires a tls+tcp:// or wss:// URL	1
 
 query I
-SELECT CASE WHEN ducknng_close_socket(getvariable('negative_req_socket')::UBIGINT) THEN 1 ELSE 0 END
+SELECT CASE WHEN (ducknng_close_socket(getvariable('negative_req_socket')::UBIGINT)).ok THEN 1 ELSE 0 END
 ----
 1
 

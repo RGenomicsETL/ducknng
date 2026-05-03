@@ -46,6 +46,7 @@
         "Transport family is chosen by URL scheme. Supported listeners and clients cover inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://, http://, and https:// where applicable.",
         "Arrow IPC is the normal row payload format. JSON is used for manifest documents and lightweight control metadata.",
         "Query sessions are explicit (`query_open`, `fetch`, `close`, `cancel`) and raw/session aio helpers follow the same future-like async contract through `nng_aio` handles.",
+        "Expected aio launch failures return immediate terminal error handles so callers inspect errors through aio status or collect helpers instead of catching DuckDB exceptions.",
         "The current server-side DuckDB execution model is `shared_serialized_connection`: query sessions are explicit RPC state, while service-owned DuckDB SQL is serialized through one shared backend connection.",
         "TLS configuration can come from filesystem paths, in-memory PEM content, or self-signed development helpers.",
         "The HTTP route layer is intentionally primitive and extensible; downstream users can build tenant routing, worker orchestration, and other control-plane logic without `ducknng` sealing those policies into the core extension.",
@@ -267,19 +268,20 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_open_socket(protocol)",
-      "returns": "UBIGINT",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Open a client socket handle for a supported NNG protocol.",
       "notes": [
         "Supported protocols now follow the nanonext-facing model: bus, pair, pair0, pair1, poly, push, pull, pub, sub, req, rep, surveyor, and respondent.",
         "pair is the nanonext-compatible alias for pair0, and poly opens pair1 in polyamorous mode.",
-        "request-oriented helpers such as ducknng_request_socket_raw() still require a req socket."
+        "request-oriented helpers such as ducknng_request_socket_raw() still require a req socket.",
+        "Expected failures are returned in-band with ok = false. NNG failures also populate nng_error and nng_error_message; ducknng validation failures leave those fields NULL."
       ],
       "examples": [
-        "SELECT ducknng_open_socket('req');",
-        "SELECT ducknng_open_socket('pair');",
-        "SELECT ducknng_open_socket('surveyor');"
+        "SELECT (ducknng_open_socket('req')).socket_id;",
+        "SELECT (ducknng_open_socket('pair')).socket_id;",
+        "SELECT r.ok, r.error, r.nng_error_message FROM (SELECT ducknng_open_socket('surveyor') AS r);"
       ]
     },
     {
@@ -287,17 +289,18 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_dial_socket(socket_id, url, timeout_ms, tls_config_id)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Dial a URL using an opened socket handle.",
       "notes": [
         "Transport is selected by the URL scheme.",
         "Pass tls_config_id = 0::UBIGINT for plaintext or a registered TLS handle for tls+tcp:// and wss:// dial targets.",
-        "This is the generic dial verb for the supported socket protocols."
+        "This is the generic dial verb for the supported socket protocols.",
+        "Expected failures are returned in-band with ok = false. NNG failures also populate nng_error and nng_error_message."
       ],
       "examples": [
-        "SELECT ducknng_dial_socket(ducknng_open_socket('req'), 'ipc:///tmp/ducknng_sql0.ipc', 1000, 0::UBIGINT);"
+        "WITH s AS (SELECT (ducknng_open_socket('req')).socket_id AS socket_id) SELECT (ducknng_dial_socket(socket_id, 'ipc:///tmp/ducknng_sql0.ipc', 1000, 0::UBIGINT)).ok FROM s;"
       ]
     },
     {
@@ -305,16 +308,17 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_listen_socket(socket_id, url, recv_max_bytes, tls_config_id)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Bind a socket handle to a listen URL and start its NNG listener.",
       "notes": [
         "Pass tls_config_id = 0::UBIGINT for plaintext URLs or a registered TLS handle for tls+tcp:// and wss:// listeners.",
-        "Use this for the generic socket surface rather than the RPC service lifecycle surface."
+        "Use this for the generic socket surface rather than the RPC service lifecycle surface.",
+        "The url field returns the resolved listen URL when NNG reports one, for example when binding to port 0."
       ],
       "examples": [
-        "SELECT ducknng_listen_socket(ducknng_open_socket('pair'), 'ipc:///tmp/ducknng_pair.ipc', 134217728, 0::UBIGINT);"
+        "WITH s AS (SELECT (ducknng_open_socket('pair')).socket_id AS socket_id) SELECT (ducknng_listen_socket(socket_id, 'ipc:///tmp/ducknng_pair.ipc', 134217728, 0::UBIGINT)).ok FROM s;"
       ]
     },
     {
@@ -322,13 +326,13 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_close_socket(socket_id)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Close a client socket handle.",
       "notes": [],
       "examples": [
-        "SELECT ducknng_close_socket(1);"
+        "SELECT (ducknng_close_socket(1)).ok;"
       ]
     },
     {
@@ -336,16 +340,17 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_send_socket_raw(socket_id, frame, timeout_ms)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Send one raw frame through an active socket handle.",
       "notes": [
         "This is the raw socket-level send primitive modeled on nanonext send(..., mode = 'raw').",
-        "A TRUE result means the send operation completed successfully at the NNG socket layer."
+        "The ok field means the send operation completed successfully at the NNG socket layer.",
+        "Timeouts and other NNG failures return ok = false and populate nng_error and nng_error_message."
       ],
       "examples": [
-        "SELECT ducknng_send_socket_raw(1::UBIGINT, from_hex('68656c6c6f'), 1000);"
+        "SELECT (ducknng_send_socket_raw(1::UBIGINT, from_hex('68656c6c6f'), 1000)).ok;"
       ]
     },
     {
@@ -353,15 +358,16 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_recv_socket_raw(socket_id, timeout_ms)",
-      "returns": "BLOB",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Receive one raw frame from an active socket handle.",
       "notes": [
-        "This is the raw socket-level receive primitive modeled on nanonext recv(..., mode = 'raw')."
+        "This is the raw socket-level receive primitive modeled on nanonext recv(..., mode = 'raw').",
+        "The payload field contains the received raw frame when ok = true."
       ],
       "examples": [
-        "SELECT hex(ducknng_recv_socket_raw(1::UBIGINT, 1000));"
+        "SELECT hex((ducknng_recv_socket_raw(1::UBIGINT, 1000)).payload);"
       ]
     },
     {
@@ -369,7 +375,7 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_subscribe_socket(socket_id, topic)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Register a raw topic prefix on a sub socket.",
@@ -378,7 +384,7 @@
         "This is only valid for sockets opened with protocol = 'sub'."
       ],
       "examples": [
-        "SELECT ducknng_subscribe_socket(1::UBIGINT, from_hex(''));"
+        "SELECT (ducknng_subscribe_socket(1::UBIGINT, from_hex(''))).ok;"
       ]
     },
     {
@@ -386,7 +392,7 @@
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_unsubscribe_socket(socket_id, topic)",
-      "returns": "BOOLEAN",
+      "returns": "STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Remove a raw topic prefix from a sub socket.",
@@ -395,7 +401,7 @@
         "This is only valid for sockets opened with protocol = 'sub'."
       ],
       "examples": [
-        "SELECT ducknng_unsubscribe_socket(1::UBIGINT, from_hex(''));"
+        "SELECT (ducknng_unsubscribe_socket(1::UBIGINT, from_hex(''))).ok;"
       ]
     },
     {
@@ -633,14 +639,15 @@
       "kind": "table",
       "category": "Primitive Transport",
       "signature": "ducknng_request(url, payload, timeout_ms, tls_config_id)",
-      "returns": "TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)",
+      "returns": "TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Perform a one-shot raw request and return a structured result row.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This is the preferred low-level primitive for one-shot req/rep from SQL.",
-        "Use ducknng_request_raw() only when a bare BLOB return is specifically needed."
+        "Use ducknng_request_raw() only when a bare BLOB return is specifically needed.",
+        "When the NNG carrier returns an NNG error directly, nng_error and nng_error_message carry the numeric code and nng_strerror() text."
       ],
       "examples": [
         "SELECT * FROM ducknng_request('ipc:///tmp/ducknng_sql0.ipc', from_hex('01000000000000000000000000000000000000000000'), 1000, 0::UBIGINT);"
@@ -651,13 +658,14 @@
       "kind": "table",
       "category": "Primitive Transport",
       "signature": "ducknng_request_socket(socket_id, payload, timeout_ms)",
-      "returns": "TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)",
+      "returns": "TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Perform a raw request through a previously dialed socket handle and return a structured result row.",
       "notes": [
         "This is the preferred low-level primitive when reusing a socket handle.",
-        "Use ducknng_request_socket_raw() only when a bare BLOB return is specifically needed."
+        "Use ducknng_request_socket_raw() only when a bare BLOB return is specifically needed.",
+        "When NNG returns the failure directly, nng_error and nng_error_message carry the numeric code and nng_strerror() text."
       ],
       "examples": [
         "SELECT * FROM ducknng_request_socket(1::UBIGINT, from_hex('01000000000000000000000000000000000000000000'), 1000);"
@@ -693,6 +701,7 @@
       "description": "Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.",
       "notes": [
         "This is the async companion to ducknng_ncurl(); it preserves the same raw status/header/body contract.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_ncurl_aio_collect().",
         "timeout_ms bounds the pending NNG HTTP operation itself; it is separate from the wait_ms argument used during collection.",
         "Collect with ducknng_ncurl_aio_collect(), not ducknng_aio_collect(), because HTTP results have status, headers_json, body, and body_text columns rather than a raw frame column.",
         "The operation is a local HTTP transport helper and does not add any new manifest method."
@@ -1188,6 +1197,7 @@
       "notes": [
         "Pass tls_config_id = 0::UBIGINT for plaintext or a registered TLS handle for tls+tcp:// or wss://.",
         "The returned handle represents one pending request operation backed by NNG aio state.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect with ducknng_aio_collect() and decode the reply frame explicitly.",
         "timeout_ms bounds the lifetime of that pending operation; it is separate from the later wait_ms argument passed to ducknng_aio_collect().",
         "Use ducknng_aio_status() to inspect whether the send phase has completed successfully.",
@@ -1208,6 +1218,7 @@
       "description": "Launch one asynchronous manifest RPC request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is a raw unary RPC aio wrapper layered on top of the ordinary request/reply aio substrate rather than a separate job system.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1226,6 +1237,7 @@
       "description": "Launch one asynchronous metadata-only exec RPC request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is the raw async companion to ducknng_run_rpc_raw().",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1244,6 +1256,7 @@
       "description": "Launch one asynchronous query_open request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is the raw async session-open companion to ducknng_open_query().",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1262,6 +1275,7 @@
       "description": "Launch one asynchronous fetch request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is the raw async companion to ducknng_fetch_query().",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1280,6 +1294,7 @@
       "description": "Launch one asynchronous close request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is the raw async companion to ducknng_close_query().",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1298,6 +1313,7 @@
       "description": "Launch one asynchronous cancel request and return an aio handle id for the raw reply frame.",
       "notes": [
         "This is the raw async companion to ducknng_cancel_query().",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "The stable async contract is raw-frame-first: collect the aio later and decode the returned frame with ducknng_decode_frame().",
         "timeout_ms bounds the launched request operation itself; it does not control how long a later ducknng_aio_collect() call waits."
       ],
@@ -1316,6 +1332,7 @@
       "description": "Launch one raw req/rep roundtrip asynchronously on an existing req socket handle and return an aio handle id.",
       "notes": [
         "The socket must already be opened, dialed, connected, and use protocol = req.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "Use ducknng_aio_collect() to retrieve the full reply frame later."
       ],
       "examples": [
@@ -1333,6 +1350,7 @@
       "description": "Launch one raw socket send asynchronously and return an aio handle id.",
       "notes": [
         "This is the nanonext-like send_aio analogue for the raw SQL socket surface.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "A successful collected result has ok = TRUE and frame = NULL because send-only operations do not produce reply frames."
       ],
       "examples": [
@@ -1350,6 +1368,7 @@
       "description": "Launch one raw socket receive asynchronously and return an aio handle id.",
       "notes": [
         "This is the nanonext-like recv_aio analogue for the raw SQL socket surface.",
+        "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_aio_collect().",
         "Collect the aio later to retrieve the received raw frame."
       ],
       "examples": [
@@ -1510,7 +1529,8 @@
       "description": "Request the RPC manifest and return the raw reply frame as BLOB.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "This is a raw helper: it returns the full reply frame and yields NULL on local request failure.",
+        "This is a framed raw helper: local setup and transport failures return a ducknng error frame.",
+        "Use ducknng_get_rpc_manifest() when a table-shaped ok/error/manifest result is more convenient.",
         "Use ducknng_decode_frame() to inspect the envelope and payload from SQL."
       ],
       "examples": [
@@ -1545,7 +1565,8 @@
       "description": "Execute the exec RPC and return the raw reply frame as BLOB.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "This is a raw helper: it returns the full reply frame and yields NULL on local request failure.",
+        "This is a framed raw helper: local setup and transport failures return a ducknng error frame.",
+        "Use ducknng_run_rpc() when a table-shaped ok/error result is more convenient.",
         "Use ducknng_decode_frame() or a payload-specific decoder after inspection.",
         "These helpers require the remote server to have explicitly registered the exec method."
       ],
@@ -1684,6 +1705,7 @@
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This is the raw synchronous companion to ducknng_open_query().",
+        "Local setup and transport failures return a ducknng error frame instead of throwing or returning NULL.",
         "Use ducknng_frame_payload_text() to read the JSON control payload and extract session_id/session_token in dynamic SQL such as HTTP route handlers."
       ],
       "examples": [
@@ -1702,6 +1724,7 @@
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This is the raw synchronous companion to ducknng_fetch_query().",
+        "Local setup and transport failures return a ducknng error frame instead of throwing or returning NULL.",
         "Use ducknng_frame_payload() for Arrow IPC row batches, ducknng_frame_payload_text() for JSON control replies, and ducknng_frame_error_text() for error frames."
       ],
       "examples": [
@@ -1720,6 +1743,7 @@
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This is the raw synchronous companion to ducknng_close_query().",
+        "Local setup and transport failures return a ducknng error frame instead of throwing or returning NULL.",
         "Use ducknng_frame_payload_text() to inspect the JSON control reply."
       ],
       "examples": [
@@ -1738,6 +1762,7 @@
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
         "This is the raw synchronous companion to ducknng_cancel_query().",
+        "Local setup and transport failures return a ducknng error frame instead of throwing or returning NULL.",
         "Use ducknng_frame_payload_text() to inspect the JSON control reply and ducknng_frame_error_text() on failure."
       ],
       "examples": [
@@ -1755,7 +1780,8 @@
       "description": "Perform a one-shot raw request and return the raw reply frame bytes.",
       "notes": [
         "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "Returns NULL on local request failure instead of throwing.",
+        "Local setup and transport failures return a ducknng error frame instead of throwing or returning NULL.",
+        "Use ducknng_request() when a table-shaped ok/error/payload result is more convenient.",
         "Use ducknng_decode_frame() to inspect the envelope and textual payload from SQL."
       ],
       "examples": [
@@ -1772,7 +1798,9 @@
       "implemented": true,
       "description": "Perform a raw request through a dialed socket handle and return the raw reply frame bytes.",
       "notes": [
-        "Returns NULL on local request failure instead of throwing.",
+        "This is a generic NNG req-socket helper for already-framed request bytes.",
+        "Local setup and NNG transaction failures return a ducknng error frame instead of throwing or returning NULL.",
+        "Use ducknng_request_socket() when a table-shaped ok/error/payload result is more convenient.",
         "Use ducknng_decode_frame() to inspect the envelope and textual payload from SQL."
       ],
       "examples": [

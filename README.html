@@ -891,21 +891,21 @@ registry.</td>
 <td><code>ducknng_open_socket</code></td>
 <td>scalar</td>
 <td><code>protocol</code></td>
-<td><code>UBIGINT</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Open a client socket handle for a supported NNG protocol.</td>
 </tr>
 <tr class="even">
 <td><code>ducknng_dial_socket</code></td>
 <td>scalar</td>
 <td><code>socket_id, url, timeout_ms, tls_config_id</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Dial a URL using an opened socket handle.</td>
 </tr>
 <tr class="odd">
 <td><code>ducknng_listen_socket</code></td>
 <td>scalar</td>
 <td><code>socket_id, url, recv_max_bytes, tls_config_id</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Bind a socket handle to a listen URL and start its NNG
 listener.</td>
 </tr>
@@ -913,35 +913,35 @@ listener.</td>
 <td><code>ducknng_close_socket</code></td>
 <td>scalar</td>
 <td><code>socket_id</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Close a client socket handle.</td>
 </tr>
 <tr class="odd">
 <td><code>ducknng_send_socket_raw</code></td>
 <td>scalar</td>
 <td><code>socket_id, frame, timeout_ms</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Send one raw frame through an active socket handle.</td>
 </tr>
 <tr class="even">
 <td><code>ducknng_recv_socket_raw</code></td>
 <td>scalar</td>
 <td><code>socket_id, timeout_ms</code></td>
-<td><code>BLOB</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Receive one raw frame from an active socket handle.</td>
 </tr>
 <tr class="odd">
 <td><code>ducknng_subscribe_socket</code></td>
 <td>scalar</td>
 <td><code>socket_id, topic</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Register a raw topic prefix on a sub socket.</td>
 </tr>
 <tr class="even">
 <td><code>ducknng_unsubscribe_socket</code></td>
 <td>scalar</td>
 <td><code>socket_id, topic</code></td>
-<td><code>BOOLEAN</code></td>
+<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
 <td>Remove a raw topic prefix from a sub socket.</td>
 </tr>
 <tr class="odd">
@@ -955,7 +955,7 @@ listener.</td>
 <td><code>ducknng_request</code></td>
 <td>table</td>
 <td><code>url, payload, timeout_ms, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)</code></td>
+<td><code>TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)</code></td>
 <td>Perform a one-shot raw request and return a structured result
 row.</td>
 </tr>
@@ -963,7 +963,7 @@ row.</td>
 <td><code>ducknng_request_socket</code></td>
 <td>table</td>
 <td><code>socket_id, payload, timeout_ms</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, payload BLOB)</code></td>
+<td><code>TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)</code></td>
 <td>Perform a raw request through a previously dialed socket handle and
 return a structured result row.</td>
 </tr>
@@ -1853,58 +1853,64 @@ client</h3>
 <span id="cb8-80"><a href="#cb8-80" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> a;</span>
 <span id="cb8-81"><a href="#cb8-81" tabindex="-1"></a></span>
 <span id="cb8-82"><a href="#cb8-82" tabindex="-1"></a><span class="co">-- Primitive transport layer: open a req socket handle, dial it, and inspect the registry.</span></span>
-<span id="cb8-83"><a href="#cb8-83" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_open_socket(<span class="st">&#39;req&#39;</span>);</span>
-<span id="cb8-84"><a href="#cb8-84" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_dial_socket(<span class="dv">1</span>, <span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="dv">1000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>);</span>
-<span id="cb8-85"><a href="#cb8-85" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span> <span class="kw">FROM</span> ducknng_list_sockets();</span>
-<span id="cb8-86"><a href="#cb8-86" tabindex="-1"></a></span>
-<span id="cb8-87"><a href="#cb8-87" tabindex="-1"></a><span class="co">-- Primitive transport layer: send the built-in manifest request frame.</span></span>
-<span id="cb8-88"><a href="#cb8-88" tabindex="-1"></a><span class="co">-- The hex literal here is the current wire-format request for the always-on manifest method.</span></span>
-<span id="cb8-89"><a href="#cb8-89" tabindex="-1"></a><span class="kw">SELECT</span> ok, error, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload</span>
-<span id="cb8-90"><a href="#cb8-90" tabindex="-1"></a><span class="kw">FROM</span> ducknng_request_socket(</span>
-<span id="cb8-91"><a href="#cb8-91" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span>,                                        <span class="co">-- socket_id</span></span>
-<span id="cb8-92"><a href="#cb8-92" tabindex="-1"></a>  from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
-<span id="cb8-93"><a href="#cb8-93" tabindex="-1"></a>  <span class="dv">1000</span>                                               <span class="co">-- timeout_ms</span></span>
-<span id="cb8-94"><a href="#cb8-94" tabindex="-1"></a>);</span>
-<span id="cb8-95"><a href="#cb8-95" tabindex="-1"></a></span>
-<span id="cb8-96"><a href="#cb8-96" tabindex="-1"></a><span class="kw">SELECT</span> ok, error, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload</span>
-<span id="cb8-97"><a href="#cb8-97" tabindex="-1"></a><span class="kw">FROM</span> ducknng_request(</span>
-<span id="cb8-98"><a href="#cb8-98" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>,          <span class="co">-- url</span></span>
-<span id="cb8-99"><a href="#cb8-99" tabindex="-1"></a>  from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
-<span id="cb8-100"><a href="#cb8-100" tabindex="-1"></a>  <span class="dv">1000</span>,                                              <span class="co">-- timeout_ms</span></span>
-<span id="cb8-101"><a href="#cb8-101" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                         <span class="co">-- tls_config_id</span></span>
-<span id="cb8-102"><a href="#cb8-102" tabindex="-1"></a>);</span>
-<span id="cb8-103"><a href="#cb8-103" tabindex="-1"></a></span>
-<span id="cb8-104"><a href="#cb8-104" tabindex="-1"></a><span class="co">-- Raw scalar forms now mean raw reply frames as BLOBs.</span></span>
-<span id="cb8-105"><a href="#cb8-105" tabindex="-1"></a><span class="kw">SELECT</span> <span class="fu">substr</span>(</span>
-<span id="cb8-106"><a href="#cb8-106" tabindex="-1"></a>  hex(</span>
-<span id="cb8-107"><a href="#cb8-107" tabindex="-1"></a>    ducknng_request_socket_raw(</span>
-<span id="cb8-108"><a href="#cb8-108" tabindex="-1"></a>      <span class="dv">1</span>,                                             <span class="co">-- socket_id</span></span>
-<span id="cb8-109"><a href="#cb8-109" tabindex="-1"></a>      from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
-<span id="cb8-110"><a href="#cb8-110" tabindex="-1"></a>      <span class="dv">1000</span>                                           <span class="co">-- timeout_ms</span></span>
-<span id="cb8-111"><a href="#cb8-111" tabindex="-1"></a>    )</span>
-<span id="cb8-112"><a href="#cb8-112" tabindex="-1"></a>  ),</span>
-<span id="cb8-113"><a href="#cb8-113" tabindex="-1"></a>  <span class="dv">1</span>,</span>
-<span id="cb8-114"><a href="#cb8-114" tabindex="-1"></a>  <span class="dv">28</span></span>
-<span id="cb8-115"><a href="#cb8-115" tabindex="-1"></a>);</span>
-<span id="cb8-116"><a href="#cb8-116" tabindex="-1"></a></span>
-<span id="cb8-117"><a href="#cb8-117" tabindex="-1"></a><span class="co">-- Decode raw manifest and exec replies into envelope fields plus extracted text payload.</span></span>
-<span id="cb8-118"><a href="#cb8-118" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
-<span id="cb8-119"><a href="#cb8-119" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(ducknng_get_rpc_manifest_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>));</span>
+<span id="cb8-83"><a href="#cb8-83" tabindex="-1"></a><span class="co">-- Low-level socket operations return one struct-shaped result:</span></span>
+<span id="cb8-84"><a href="#cb8-84" tabindex="-1"></a><span class="co">-- ok, error, nng_error, nng_error_message, socket_id, payload, url.</span></span>
+<span id="cb8-85"><a href="#cb8-85" tabindex="-1"></a><span class="kw">SELECT</span> (ducknng_open_socket(<span class="st">&#39;req&#39;</span>)).socket_id;</span>
+<span id="cb8-86"><a href="#cb8-86" tabindex="-1"></a><span class="kw">SELECT</span> (ducknng_dial_socket(<span class="dv">1</span>, <span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="dv">1000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb8-87"><a href="#cb8-87" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span> <span class="kw">FROM</span> ducknng_list_sockets();</span>
+<span id="cb8-88"><a href="#cb8-88" tabindex="-1"></a></span>
+<span id="cb8-89"><a href="#cb8-89" tabindex="-1"></a><span class="co">-- Primitive transport layer: send the built-in manifest request frame.</span></span>
+<span id="cb8-90"><a href="#cb8-90" tabindex="-1"></a><span class="co">-- The hex literal here is the current wire-format request for the always-on manifest method.</span></span>
+<span id="cb8-91"><a href="#cb8-91" tabindex="-1"></a><span class="kw">SELECT</span> ok, error, nng_error_message, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload</span>
+<span id="cb8-92"><a href="#cb8-92" tabindex="-1"></a><span class="kw">FROM</span> ducknng_request_socket(</span>
+<span id="cb8-93"><a href="#cb8-93" tabindex="-1"></a>  <span class="dv">1</span>:<span class="ch">:UBIGINT</span>,                                        <span class="co">-- socket_id</span></span>
+<span id="cb8-94"><a href="#cb8-94" tabindex="-1"></a>  from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
+<span id="cb8-95"><a href="#cb8-95" tabindex="-1"></a>  <span class="dv">1000</span>                                               <span class="co">-- timeout_ms</span></span>
+<span id="cb8-96"><a href="#cb8-96" tabindex="-1"></a>);</span>
+<span id="cb8-97"><a href="#cb8-97" tabindex="-1"></a></span>
+<span id="cb8-98"><a href="#cb8-98" tabindex="-1"></a><span class="kw">SELECT</span> ok, error, nng_error_message, octet_length(payload) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_payload</span>
+<span id="cb8-99"><a href="#cb8-99" tabindex="-1"></a><span class="kw">FROM</span> ducknng_request(</span>
+<span id="cb8-100"><a href="#cb8-100" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>,          <span class="co">-- url</span></span>
+<span id="cb8-101"><a href="#cb8-101" tabindex="-1"></a>  from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
+<span id="cb8-102"><a href="#cb8-102" tabindex="-1"></a>  <span class="dv">1000</span>,                                              <span class="co">-- timeout_ms</span></span>
+<span id="cb8-103"><a href="#cb8-103" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>                                         <span class="co">-- tls_config_id</span></span>
+<span id="cb8-104"><a href="#cb8-104" tabindex="-1"></a>);</span>
+<span id="cb8-105"><a href="#cb8-105" tabindex="-1"></a></span>
+<span id="cb8-106"><a href="#cb8-106" tabindex="-1"></a><span class="co">-- Framed request raw scalar forms return raw reply bytes as BLOBs.</span></span>
+<span id="cb8-107"><a href="#cb8-107" tabindex="-1"></a><span class="co">-- Framed RPC helpers return decodable ducknng error frames for setup</span></span>
+<span id="cb8-108"><a href="#cb8-108" tabindex="-1"></a><span class="co">-- or transport failures.</span></span>
+<span id="cb8-109"><a href="#cb8-109" tabindex="-1"></a><span class="kw">SELECT</span> <span class="fu">substr</span>(</span>
+<span id="cb8-110"><a href="#cb8-110" tabindex="-1"></a>  hex(</span>
+<span id="cb8-111"><a href="#cb8-111" tabindex="-1"></a>    ducknng_request_socket_raw(</span>
+<span id="cb8-112"><a href="#cb8-112" tabindex="-1"></a>      <span class="dv">1</span>,                                             <span class="co">-- socket_id</span></span>
+<span id="cb8-113"><a href="#cb8-113" tabindex="-1"></a>      from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="co">-- manifest request frame</span></span>
+<span id="cb8-114"><a href="#cb8-114" tabindex="-1"></a>      <span class="dv">1000</span>                                           <span class="co">-- timeout_ms</span></span>
+<span id="cb8-115"><a href="#cb8-115" tabindex="-1"></a>    )</span>
+<span id="cb8-116"><a href="#cb8-116" tabindex="-1"></a>  ),</span>
+<span id="cb8-117"><a href="#cb8-117" tabindex="-1"></a>  <span class="dv">1</span>,</span>
+<span id="cb8-118"><a href="#cb8-118" tabindex="-1"></a>  <span class="dv">28</span></span>
+<span id="cb8-119"><a href="#cb8-119" tabindex="-1"></a>);</span>
 <span id="cb8-120"><a href="#cb8-120" tabindex="-1"></a></span>
-<span id="cb8-121"><a href="#cb8-121" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
-<span id="cb8-122"><a href="#cb8-122" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb8-123"><a href="#cb8-123" tabindex="-1"></a>  ducknng_run_rpc_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="st">&#39;CREATE TABLE IF NOT EXISTS client_side_demo(i INTEGER)&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
-<span id="cb8-124"><a href="#cb8-124" tabindex="-1"></a>);</span>
-<span id="cb8-125"><a href="#cb8-125" tabindex="-1"></a></span>
-<span id="cb8-126"><a href="#cb8-126" tabindex="-1"></a><span class="co">-- The generic raw request helper can be decoded the same way.</span></span>
-<span id="cb8-127"><a href="#cb8-127" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_exec</span>
-<span id="cb8-128"><a href="#cb8-128" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
-<span id="cb8-129"><a href="#cb8-129" tabindex="-1"></a>  ducknng_request_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="dv">1000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
-<span id="cb8-130"><a href="#cb8-130" tabindex="-1"></a>);</span>
-<span id="cb8-131"><a href="#cb8-131" tabindex="-1"></a></span>
-<span id="cb8-132"><a href="#cb8-132" tabindex="-1"></a><span class="co">-- Close the client socket handle and stop the demo server.</span></span>
-<span id="cb8-133"><a href="#cb8-133" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(<span class="dv">1</span>);</span>
-<span id="cb8-134"><a href="#cb8-134" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_client_demo&#39;</span>);</span></code></pre></div>
+<span id="cb8-121"><a href="#cb8-121" tabindex="-1"></a><span class="co">-- Decode raw manifest and exec replies into envelope fields plus extracted text payload.</span></span>
+<span id="cb8-122"><a href="#cb8-122" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span></span>
+<span id="cb8-123"><a href="#cb8-123" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(ducknng_get_rpc_manifest_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>));</span>
+<span id="cb8-124"><a href="#cb8-124" tabindex="-1"></a></span>
+<span id="cb8-125"><a href="#cb8-125" tabindex="-1"></a><span class="kw">SELECT</span> ok, type_name, name</span>
+<span id="cb8-126"><a href="#cb8-126" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb8-127"><a href="#cb8-127" tabindex="-1"></a>  ducknng_run_rpc_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, <span class="st">&#39;CREATE TABLE IF NOT EXISTS client_side_demo(i INTEGER)&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
+<span id="cb8-128"><a href="#cb8-128" tabindex="-1"></a>);</span>
+<span id="cb8-129"><a href="#cb8-129" tabindex="-1"></a></span>
+<span id="cb8-130"><a href="#cb8-130" tabindex="-1"></a><span class="co">-- The generic raw request helper can be decoded the same way. Use the</span></span>
+<span id="cb8-131"><a href="#cb8-131" tabindex="-1"></a><span class="co">-- table-shaped ducknng_request(...) form when you want ok/error/payload</span></span>
+<span id="cb8-132"><a href="#cb8-132" tabindex="-1"></a><span class="co">-- columns without decoding a frame yourself.</span></span>
+<span id="cb8-133"><a href="#cb8-133" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, name, position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_exec</span>
+<span id="cb8-134"><a href="#cb8-134" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
+<span id="cb8-135"><a href="#cb8-135" tabindex="-1"></a>  ducknng_request_raw(<span class="st">&#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;</span>, from_hex(<span class="st">&#39;01000000000000000000000000000000000000000000&#39;</span>), <span class="dv">1000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
+<span id="cb8-136"><a href="#cb8-136" tabindex="-1"></a>);</span>
+<span id="cb8-137"><a href="#cb8-137" tabindex="-1"></a></span>
+<span id="cb8-138"><a href="#cb8-138" tabindex="-1"></a><span class="co">-- Close the client socket handle and stop the demo server.</span></span>
+<span id="cb8-139"><a href="#cb8-139" tabindex="-1"></a><span class="kw">SELECT</span> (ducknng_close_socket(<span class="dv">1</span>)).ok;</span>
+<span id="cb8-140"><a href="#cb8-140" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_client_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;sql_client_demo&#39;, &#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;, 1, 134217728, 300000, 0) |
 +------------------------------------------------------------------------------------------------------------+
@@ -1983,31 +1989,31 @@ client</h3>
 | 1 | x |
 | 2 | y |
 +---+---+
-+----------------------------+
-| ducknng_open_socket(&#39;req&#39;) |
-+----------------------------+
-| 1                          |
-+----------------------------+
-+----------------------------------------------------------------------------------------------+
-| ducknng_dial_socket(1, &#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;, 1000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+----------------------------------------------------------------------------------------------+
-| true                                                                                         |
-+----------------------------------------------------------------------------------------------+
++----------------------------------------+
+| (ducknng_open_socket(&#39;req&#39;)).socket_id |
++----------------------------------------+
+| 1                                      |
++----------------------------------------+
++---------------------------------------------------------------------------------------------------+
+| (ducknng_dial_socket(1, &#39;ipc:///tmp/ducknng_sql_client_demo.ipc&#39;, 1000, CAST(0 AS &quot;UBIGINT&quot;))).ok |
++---------------------------------------------------------------------------------------------------+
+| true                                                                                              |
++---------------------------------------------------------------------------------------------------+
 +-----------+----------+----------------------------------------+------+-----------+-----------+-----------------+-----------------+
 | socket_id | protocol |                  url                   | open | connected | listening | send_timeout_ms | recv_timeout_ms |
 +-----------+----------+----------------------------------------+------+-----------+-----------+-----------------+-----------------+
 | 1         | req      | ipc:///tmp/ducknng_sql_client_demo.ipc | true | true      | false     | 1000            | 1000            |
 +-----------+----------+----------------------------------------+------+-----------+-----------+-----------------+-----------------+
-+------+-------+-------------+
-|  ok  | error | has_payload |
-+------+-------+-------------+
-| true | NULL  | true        |
-+------+-------+-------------+
-+------+-------+-------------+
-|  ok  | error | has_payload |
-+------+-------+-------------+
-| true | NULL  | true        |
-+------+-------+-------------+
++------+-------+-------------------+-------------+
+|  ok  | error | nng_error_message | has_payload |
++------+-------+-------------------+-------------+
+| true | NULL  | NULL              | true        |
++------+-------+-------------------+-------------+
++------+-------+-------------------+-------------+
+|  ok  | error | nng_error_message | has_payload |
++------+-------+-------------------+-------------+
+| true | NULL  | NULL              | true        |
++------+-------+-------------------+-------------+
 +-------------------------------------------------------------------------------------------------------------------+
 | substr(hex(ducknng_request_socket_raw(1, from_hex(&#39;01000000000000000000000000000000000000000000&#39;), 1000)), 1, 28) |
 +-------------------------------------------------------------------------------------------------------------------+
@@ -2028,11 +2034,11 @@ client</h3>
 +------+---------+-----------+----------+----------+
 | true | 1       | result    | manifest | true     |
 +------+---------+-----------+----------+----------+
-+-------------------------+
-| ducknng_close_socket(1) |
-+-------------------------+
-| true                    |
-+-------------------------+
++------------------------------+
+| (ducknng_close_socket(1)).ok |
++------------------------------+
+| true                         |
++------------------------------+
 +----------------------------------------+
 | ducknng_stop_server(&#39;sql_client_demo&#39;) |
 +----------------------------------------+
@@ -2389,20 +2395,20 @@ raw socket send/recv airos and inspect send status explicitly</h3>
 <div class="sourceCode" id="cb17"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="co">-- Open one listening pair socket and one dialed peer.</span></span>
 <span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="co">-- SET VARIABLE keeps setup handles out of the rendered output.</span></span>
-<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_a <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;pair&#39;</span>);</span>
-<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_listen_ok <span class="op">=</span> ducknng_listen_socket(</span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_a <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;pair&#39;</span>)).socket_id;</span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_listen_ok <span class="op">=</span> (ducknng_listen_socket(</span>
 <span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a>  getvariable(<span class="st">&#39;pair_a&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pair_aio_demo.ipc&#39;</span>,</span>
 <span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
 <span id="cb17-9"><a href="#cb17-9" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a>);</span>
-<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_b <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;pair&#39;</span>);</span>
-<span id="cb17-12"><a href="#cb17-12" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a>)).ok;</span>
+<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_b <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;pair&#39;</span>)).socket_id;</span>
+<span id="cb17-12"><a href="#cb17-12" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb17-13"><a href="#cb17-13" tabindex="-1"></a>  getvariable(<span class="st">&#39;pair_b&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb17-14"><a href="#cb17-14" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pair_aio_demo.ipc&#39;</span>,</span>
 <span id="cb17-15"><a href="#cb17-15" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb17-16"><a href="#cb17-16" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb17-17"><a href="#cb17-17" tabindex="-1"></a>);</span>
+<span id="cb17-17"><a href="#cb17-17" tabindex="-1"></a>)).ok;</span>
 <span id="cb17-18"><a href="#cb17-18" tabindex="-1"></a></span>
 <span id="cb17-19"><a href="#cb17-19" tabindex="-1"></a><span class="co">-- Start one async receive and one async send.</span></span>
 <span id="cb17-20"><a href="#cb17-20" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> pair_recv <span class="kw">AS</span></span>
@@ -2432,8 +2438,8 @@ raw socket send/recv airos and inspect send status explicitly</h3>
 <span id="cb17-44"><a href="#cb17-44" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_drop_recv <span class="op">=</span> ducknng_aio_drop((<span class="kw">SELECT</span> recv_aio <span class="kw">FROM</span> pair_recv));</span>
 <span id="cb17-45"><a href="#cb17-45" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> pair_send;</span>
 <span id="cb17-46"><a href="#cb17-46" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> pair_recv;</span>
-<span id="cb17-47"><a href="#cb17-47" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_close_b <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;pair_b&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb17-48"><a href="#cb17-48" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_close_a <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;pair_a&#39;</span>):<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<span id="cb17-47"><a href="#cb17-47" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_close_b <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;pair_b&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb17-48"><a href="#cb17-48" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pair_close_a <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;pair_a&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span></code></pre></div>
 <pre><code>+--------+------+----------+
 | aio_id |  ok  | no_frame |
 +--------+------+----------+
@@ -2453,30 +2459,30 @@ raw socket send/recv airos and inspect send status explicitly</h3>
 through <code>push</code> / <code>pull</code></h3>
 <div class="sourceCode" id="cb19"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="co">-- Open one pull socket, listen on it, then dial it from a push peer.</span></span>
-<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;pull&#39;</span>);</span>
-<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_listen_ok <span class="op">=</span> ducknng_listen_socket(</span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;pull&#39;</span>)).socket_id;</span>
+<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_listen_ok <span class="op">=</span> (ducknng_listen_socket(</span>
 <span id="cb19-5"><a href="#cb19-5" tabindex="-1"></a>  getvariable(<span class="st">&#39;pull_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb19-6"><a href="#cb19-6" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pushpull_demo.ipc&#39;</span>,</span>
 <span id="cb19-7"><a href="#cb19-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
 <span id="cb19-8"><a href="#cb19-8" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb19-9"><a href="#cb19-9" tabindex="-1"></a>);</span>
-<span id="cb19-10"><a href="#cb19-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;push&#39;</span>);</span>
-<span id="cb19-11"><a href="#cb19-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb19-9"><a href="#cb19-9" tabindex="-1"></a>)).ok;</span>
+<span id="cb19-10"><a href="#cb19-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;push&#39;</span>)).socket_id;</span>
+<span id="cb19-11"><a href="#cb19-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb19-12"><a href="#cb19-12" tabindex="-1"></a>  getvariable(<span class="st">&#39;push_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb19-13"><a href="#cb19-13" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pushpull_demo.ipc&#39;</span>,</span>
 <span id="cb19-14"><a href="#cb19-14" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb19-15"><a href="#cb19-15" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb19-16"><a href="#cb19-16" tabindex="-1"></a>);</span>
+<span id="cb19-16"><a href="#cb19-16" tabindex="-1"></a>)).ok;</span>
 <span id="cb19-17"><a href="#cb19-17" tabindex="-1"></a></span>
 <span id="cb19-18"><a href="#cb19-18" tabindex="-1"></a><span class="co">-- Receive asynchronously on pull so the send side can return immediately.</span></span>
 <span id="cb19-19"><a href="#cb19-19" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> pushpull_recv <span class="kw">AS</span></span>
 <span id="cb19-20"><a href="#cb19-20" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_recv_socket_raw_aio(getvariable(<span class="st">&#39;pull_socket&#39;</span>):<span class="ch">:UBIGINT</span>, <span class="dv">1000</span>) <span class="kw">AS</span> recv_aio;</span>
 <span id="cb19-21"><a href="#cb19-21" tabindex="-1"></a></span>
-<span id="cb19-22"><a href="#cb19-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pushpull_sent <span class="op">=</span> ducknng_send_socket_raw(</span>
+<span id="cb19-22"><a href="#cb19-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pushpull_sent <span class="op">=</span> (ducknng_send_socket_raw(</span>
 <span id="cb19-23"><a href="#cb19-23" tabindex="-1"></a>  getvariable(<span class="st">&#39;push_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb19-24"><a href="#cb19-24" tabindex="-1"></a>  from_hex(<span class="st">&#39;707573682d70756c6c&#39;</span>),</span>
 <span id="cb19-25"><a href="#cb19-25" tabindex="-1"></a>  <span class="dv">1000</span></span>
-<span id="cb19-26"><a href="#cb19-26" tabindex="-1"></a>);</span>
+<span id="cb19-26"><a href="#cb19-26" tabindex="-1"></a>)).ok;</span>
 <span id="cb19-27"><a href="#cb19-27" tabindex="-1"></a></span>
 <span id="cb19-28"><a href="#cb19-28" tabindex="-1"></a><span class="kw">SELECT</span> getvariable(<span class="st">&#39;pushpull_sent&#39;</span>):<span class="ch">:BOOLEAN</span> <span class="kw">AS</span> sent,</span>
 <span id="cb19-29"><a href="#cb19-29" tabindex="-1"></a>       ok,</span>
@@ -2485,8 +2491,8 @@ through <code>push</code> / <code>pull</code></h3>
 <span id="cb19-32"><a href="#cb19-32" tabindex="-1"></a></span>
 <span id="cb19-33"><a href="#cb19-33" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pushpull_drop <span class="op">=</span> ducknng_aio_drop((<span class="kw">SELECT</span> recv_aio <span class="kw">FROM</span> pushpull_recv));</span>
 <span id="cb19-34"><a href="#cb19-34" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> pushpull_recv;</span>
-<span id="cb19-35"><a href="#cb19-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;push_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb19-36"><a href="#cb19-36" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;pull_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<span id="cb19-35"><a href="#cb19-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE push_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;push_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb19-36"><a href="#cb19-36" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pull_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;pull_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span></code></pre></div>
 <pre><code>+------+------+-------------+
 | sent |  ok  | got_payload |
 +------+------+-------------+
@@ -2496,30 +2502,30 @@ through <code>push</code> / <code>pull</code></h3>
 message through <code>pub</code> / <code>sub</code></h3>
 <div class="sourceCode" id="cb21"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a><span class="co">-- Open one publisher, then subscribe from a sub peer to all topics.</span></span>
-<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;pub&#39;</span>);</span>
-<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_listen_ok <span class="op">=</span> ducknng_listen_socket(</span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;pub&#39;</span>)).socket_id;</span>
+<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_listen_ok <span class="op">=</span> (ducknng_listen_socket(</span>
 <span id="cb21-5"><a href="#cb21-5" tabindex="-1"></a>  getvariable(<span class="st">&#39;pub_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb21-6"><a href="#cb21-6" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pubsub_demo.ipc&#39;</span>,</span>
 <span id="cb21-7"><a href="#cb21-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
 <span id="cb21-8"><a href="#cb21-8" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb21-9"><a href="#cb21-9" tabindex="-1"></a>);</span>
-<span id="cb21-10"><a href="#cb21-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;sub&#39;</span>);</span>
-<span id="cb21-11"><a href="#cb21-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_subscribe_ok <span class="op">=</span> ducknng_subscribe_socket(getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>, from_hex(<span class="st">&#39;&#39;</span>));</span>
-<span id="cb21-12"><a href="#cb21-12" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb21-9"><a href="#cb21-9" tabindex="-1"></a>)).ok;</span>
+<span id="cb21-10"><a href="#cb21-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;sub&#39;</span>)).socket_id;</span>
+<span id="cb21-11"><a href="#cb21-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_subscribe_ok <span class="op">=</span> (ducknng_subscribe_socket(getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>, from_hex(<span class="st">&#39;&#39;</span>))).ok;</span>
+<span id="cb21-12"><a href="#cb21-12" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb21-13"><a href="#cb21-13" tabindex="-1"></a>  getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb21-14"><a href="#cb21-14" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_pubsub_demo.ipc&#39;</span>,</span>
 <span id="cb21-15"><a href="#cb21-15" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb21-16"><a href="#cb21-16" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb21-17"><a href="#cb21-17" tabindex="-1"></a>);</span>
+<span id="cb21-17"><a href="#cb21-17" tabindex="-1"></a>)).ok;</span>
 <span id="cb21-18"><a href="#cb21-18" tabindex="-1"></a></span>
 <span id="cb21-19"><a href="#cb21-19" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> pubsub_recv <span class="kw">AS</span></span>
 <span id="cb21-20"><a href="#cb21-20" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_recv_socket_raw_aio(getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>, <span class="dv">1000</span>) <span class="kw">AS</span> recv_aio;</span>
 <span id="cb21-21"><a href="#cb21-21" tabindex="-1"></a></span>
-<span id="cb21-22"><a href="#cb21-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pubsub_sent <span class="op">=</span> ducknng_send_socket_raw(</span>
+<span id="cb21-22"><a href="#cb21-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pubsub_sent <span class="op">=</span> (ducknng_send_socket_raw(</span>
 <span id="cb21-23"><a href="#cb21-23" tabindex="-1"></a>  getvariable(<span class="st">&#39;pub_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb21-24"><a href="#cb21-24" tabindex="-1"></a>  from_hex(<span class="st">&#39;7075622d737562&#39;</span>),</span>
 <span id="cb21-25"><a href="#cb21-25" tabindex="-1"></a>  <span class="dv">1000</span></span>
-<span id="cb21-26"><a href="#cb21-26" tabindex="-1"></a>);</span>
+<span id="cb21-26"><a href="#cb21-26" tabindex="-1"></a>)).ok;</span>
 <span id="cb21-27"><a href="#cb21-27" tabindex="-1"></a></span>
 <span id="cb21-28"><a href="#cb21-28" tabindex="-1"></a><span class="kw">SELECT</span> getvariable(<span class="st">&#39;pubsub_sent&#39;</span>):<span class="ch">:BOOLEAN</span> <span class="kw">AS</span> sent,</span>
 <span id="cb21-29"><a href="#cb21-29" tabindex="-1"></a>       ok,</span>
@@ -2528,8 +2534,8 @@ message through <code>pub</code> / <code>sub</code></h3>
 <span id="cb21-32"><a href="#cb21-32" tabindex="-1"></a></span>
 <span id="cb21-33"><a href="#cb21-33" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pubsub_drop <span class="op">=</span> ducknng_aio_drop((<span class="kw">SELECT</span> recv_aio <span class="kw">FROM</span> pubsub_recv));</span>
 <span id="cb21-34"><a href="#cb21-34" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> pubsub_recv;</span>
-<span id="cb21-35"><a href="#cb21-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb21-36"><a href="#cb21-36" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;pub_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<span id="cb21-35"><a href="#cb21-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE sub_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;sub_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb21-36"><a href="#cb21-36" tabindex="-1"></a><span class="kw">SET</span> VARIABLE pub_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;pub_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span></code></pre></div>
 <pre><code>+------+------+-------------+
 | sent |  ok  | got_payload |
 +------+------+-------------+
@@ -2540,30 +2546,30 @@ one survey and one response through <code>surveyor</code> /
 <code>respondent</code></h3>
 <div class="sourceCode" id="cb23"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a><span class="co">-- Open one respondent listener and one surveyor peer.</span></span>
-<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;respondent&#39;</span>);</span>
-<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_listen_ok <span class="op">=</span> ducknng_listen_socket(</span>
+<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;respondent&#39;</span>)).socket_id;</span>
+<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_listen_ok <span class="op">=</span> (ducknng_listen_socket(</span>
 <span id="cb23-5"><a href="#cb23-5" tabindex="-1"></a>  getvariable(<span class="st">&#39;respondent_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb23-6"><a href="#cb23-6" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_survey_demo.ipc&#39;</span>,</span>
 <span id="cb23-7"><a href="#cb23-7" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
 <span id="cb23-8"><a href="#cb23-8" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb23-9"><a href="#cb23-9" tabindex="-1"></a>);</span>
-<span id="cb23-10"><a href="#cb23-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_socket <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;surveyor&#39;</span>);</span>
-<span id="cb23-11"><a href="#cb23-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb23-9"><a href="#cb23-9" tabindex="-1"></a>)).ok;</span>
+<span id="cb23-10"><a href="#cb23-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_socket <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;surveyor&#39;</span>)).socket_id;</span>
+<span id="cb23-11"><a href="#cb23-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb23-12"><a href="#cb23-12" tabindex="-1"></a>  getvariable(<span class="st">&#39;surveyor_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb23-13"><a href="#cb23-13" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_survey_demo.ipc&#39;</span>,</span>
 <span id="cb23-14"><a href="#cb23-14" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb23-15"><a href="#cb23-15" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb23-16"><a href="#cb23-16" tabindex="-1"></a>);</span>
+<span id="cb23-16"><a href="#cb23-16" tabindex="-1"></a>)).ok;</span>
 <span id="cb23-17"><a href="#cb23-17" tabindex="-1"></a></span>
 <span id="cb23-18"><a href="#cb23-18" tabindex="-1"></a><span class="co">-- Receive the survey on the respondent side first.</span></span>
 <span id="cb23-19"><a href="#cb23-19" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> respondent_recv <span class="kw">AS</span></span>
 <span id="cb23-20"><a href="#cb23-20" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_recv_socket_raw_aio(getvariable(<span class="st">&#39;respondent_socket&#39;</span>):<span class="ch">:UBIGINT</span>, <span class="dv">1000</span>) <span class="kw">AS</span> recv_aio;</span>
 <span id="cb23-21"><a href="#cb23-21" tabindex="-1"></a></span>
-<span id="cb23-22"><a href="#cb23-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE survey_sent <span class="op">=</span> ducknng_send_socket_raw(</span>
+<span id="cb23-22"><a href="#cb23-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE survey_sent <span class="op">=</span> (ducknng_send_socket_raw(</span>
 <span id="cb23-23"><a href="#cb23-23" tabindex="-1"></a>  getvariable(<span class="st">&#39;surveyor_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb23-24"><a href="#cb23-24" tabindex="-1"></a>  from_hex(<span class="st">&#39;737572766579&#39;</span>),</span>
 <span id="cb23-25"><a href="#cb23-25" tabindex="-1"></a>  <span class="dv">1000</span></span>
-<span id="cb23-26"><a href="#cb23-26" tabindex="-1"></a>);</span>
+<span id="cb23-26"><a href="#cb23-26" tabindex="-1"></a>)).ok;</span>
 <span id="cb23-27"><a href="#cb23-27" tabindex="-1"></a></span>
 <span id="cb23-28"><a href="#cb23-28" tabindex="-1"></a><span class="kw">SELECT</span> getvariable(<span class="st">&#39;survey_sent&#39;</span>):<span class="ch">:BOOLEAN</span> <span class="kw">AS</span> sent_survey,</span>
 <span id="cb23-29"><a href="#cb23-29" tabindex="-1"></a>       ok,</span>
@@ -2574,11 +2580,11 @@ one survey and one response through <code>surveyor</code> /
 <span id="cb23-34"><a href="#cb23-34" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> surveyor_recv <span class="kw">AS</span></span>
 <span id="cb23-35"><a href="#cb23-35" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_recv_socket_raw_aio(getvariable(<span class="st">&#39;surveyor_socket&#39;</span>):<span class="ch">:UBIGINT</span>, <span class="dv">1000</span>) <span class="kw">AS</span> recv_aio;</span>
 <span id="cb23-36"><a href="#cb23-36" tabindex="-1"></a></span>
-<span id="cb23-37"><a href="#cb23-37" tabindex="-1"></a><span class="kw">SET</span> VARIABLE response_sent <span class="op">=</span> ducknng_send_socket_raw(</span>
+<span id="cb23-37"><a href="#cb23-37" tabindex="-1"></a><span class="kw">SET</span> VARIABLE response_sent <span class="op">=</span> (ducknng_send_socket_raw(</span>
 <span id="cb23-38"><a href="#cb23-38" tabindex="-1"></a>  getvariable(<span class="st">&#39;respondent_socket&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb23-39"><a href="#cb23-39" tabindex="-1"></a>  from_hex(<span class="st">&#39;726573706f6e7365&#39;</span>),</span>
 <span id="cb23-40"><a href="#cb23-40" tabindex="-1"></a>  <span class="dv">1000</span></span>
-<span id="cb23-41"><a href="#cb23-41" tabindex="-1"></a>);</span>
+<span id="cb23-41"><a href="#cb23-41" tabindex="-1"></a>)).ok;</span>
 <span id="cb23-42"><a href="#cb23-42" tabindex="-1"></a></span>
 <span id="cb23-43"><a href="#cb23-43" tabindex="-1"></a><span class="kw">SELECT</span> getvariable(<span class="st">&#39;response_sent&#39;</span>):<span class="ch">:BOOLEAN</span> <span class="kw">AS</span> sent_response,</span>
 <span id="cb23-44"><a href="#cb23-44" tabindex="-1"></a>       ok,</span>
@@ -2589,8 +2595,8 @@ one survey and one response through <code>surveyor</code> /
 <span id="cb23-49"><a href="#cb23-49" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_drop <span class="op">=</span> ducknng_aio_drop((<span class="kw">SELECT</span> recv_aio <span class="kw">FROM</span> surveyor_recv));</span>
 <span id="cb23-50"><a href="#cb23-50" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> respondent_recv;</span>
 <span id="cb23-51"><a href="#cb23-51" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> surveyor_recv;</span>
-<span id="cb23-52"><a href="#cb23-52" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;surveyor_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb23-53"><a href="#cb23-53" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_close <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;respondent_socket&#39;</span>):<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<span id="cb23-52"><a href="#cb23-52" tabindex="-1"></a><span class="kw">SET</span> VARIABLE surveyor_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;surveyor_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb23-53"><a href="#cb23-53" tabindex="-1"></a><span class="kw">SET</span> VARIABLE respondent_close <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;respondent_socket&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span></code></pre></div>
 <pre><code>+-------------+------+------------+
 | sent_survey |  ok  | got_survey |
 +-------------+------+------------+
@@ -2606,30 +2612,30 @@ one raw message through a three-peer <code>bus</code> mesh</h3>
 <div class="sourceCode" id="cb25"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>
 <span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="co">-- Open three bus peers. Every peer in a bus sends to and receives from every</span></span>
 <span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a><span class="co">-- other peer, so a single send from peer A is delivered to both B and C.</span></span>
-<span id="cb25-4"><a href="#cb25-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_a <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;bus&#39;</span>);</span>
-<span id="cb25-5"><a href="#cb25-5" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_b <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;bus&#39;</span>);</span>
-<span id="cb25-6"><a href="#cb25-6" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_c <span class="op">=</span> ducknng_open_socket(<span class="st">&#39;bus&#39;</span>);</span>
+<span id="cb25-4"><a href="#cb25-4" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_a <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;bus&#39;</span>)).socket_id;</span>
+<span id="cb25-5"><a href="#cb25-5" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_b <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;bus&#39;</span>)).socket_id;</span>
+<span id="cb25-6"><a href="#cb25-6" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_c <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;bus&#39;</span>)).socket_id;</span>
 <span id="cb25-7"><a href="#cb25-7" tabindex="-1"></a></span>
 <span id="cb25-8"><a href="#cb25-8" tabindex="-1"></a><span class="co">-- A listens, B and C dial A. That gives every peer a direct edge to A; bus</span></span>
 <span id="cb25-9"><a href="#cb25-9" tabindex="-1"></a><span class="co">-- forwards the broadcast across the mesh.</span></span>
-<span id="cb25-10"><a href="#cb25-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_a_listen_ok <span class="op">=</span> ducknng_listen_socket(</span>
+<span id="cb25-10"><a href="#cb25-10" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_a_listen_ok <span class="op">=</span> (ducknng_listen_socket(</span>
 <span id="cb25-11"><a href="#cb25-11" tabindex="-1"></a>  getvariable(<span class="st">&#39;bus_a&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb25-12"><a href="#cb25-12" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_bus_demo.ipc&#39;</span>,</span>
 <span id="cb25-13"><a href="#cb25-13" tabindex="-1"></a>  <span class="dv">134217728</span>,</span>
 <span id="cb25-14"><a href="#cb25-14" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb25-15"><a href="#cb25-15" tabindex="-1"></a>);</span>
-<span id="cb25-16"><a href="#cb25-16" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_b_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb25-15"><a href="#cb25-15" tabindex="-1"></a>)).ok;</span>
+<span id="cb25-16"><a href="#cb25-16" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_b_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb25-17"><a href="#cb25-17" tabindex="-1"></a>  getvariable(<span class="st">&#39;bus_b&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb25-18"><a href="#cb25-18" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_bus_demo.ipc&#39;</span>,</span>
 <span id="cb25-19"><a href="#cb25-19" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb25-20"><a href="#cb25-20" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb25-21"><a href="#cb25-21" tabindex="-1"></a>);</span>
-<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_c_dial_ok <span class="op">=</span> ducknng_dial_socket(</span>
+<span id="cb25-21"><a href="#cb25-21" tabindex="-1"></a>)).ok;</span>
+<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_c_dial_ok <span class="op">=</span> (ducknng_dial_socket(</span>
 <span id="cb25-23"><a href="#cb25-23" tabindex="-1"></a>  getvariable(<span class="st">&#39;bus_c&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb25-24"><a href="#cb25-24" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_sql_bus_demo.ipc&#39;</span>,</span>
 <span id="cb25-25"><a href="#cb25-25" tabindex="-1"></a>  <span class="dv">1000</span>,</span>
 <span id="cb25-26"><a href="#cb25-26" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb25-27"><a href="#cb25-27" tabindex="-1"></a>);</span>
+<span id="cb25-27"><a href="#cb25-27" tabindex="-1"></a>)).ok;</span>
 <span id="cb25-28"><a href="#cb25-28" tabindex="-1"></a></span>
 <span id="cb25-29"><a href="#cb25-29" tabindex="-1"></a><span class="co">-- Arm one async receive on each non-sending peer before A broadcasts.</span></span>
 <span id="cb25-30"><a href="#cb25-30" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> bus_recv_b <span class="kw">AS</span></span>
@@ -2637,11 +2643,11 @@ one raw message through a three-peer <code>bus</code> mesh</h3>
 <span id="cb25-32"><a href="#cb25-32" tabindex="-1"></a><span class="kw">CREATE</span> TEMP <span class="kw">TABLE</span> bus_recv_c <span class="kw">AS</span></span>
 <span id="cb25-33"><a href="#cb25-33" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_recv_socket_raw_aio(getvariable(<span class="st">&#39;bus_c&#39;</span>):<span class="ch">:UBIGINT</span>, <span class="dv">1000</span>) <span class="kw">AS</span> recv_aio;</span>
 <span id="cb25-34"><a href="#cb25-34" tabindex="-1"></a></span>
-<span id="cb25-35"><a href="#cb25-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_sent <span class="op">=</span> ducknng_send_socket_raw(</span>
+<span id="cb25-35"><a href="#cb25-35" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_sent <span class="op">=</span> (ducknng_send_socket_raw(</span>
 <span id="cb25-36"><a href="#cb25-36" tabindex="-1"></a>  getvariable(<span class="st">&#39;bus_a&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
 <span id="cb25-37"><a href="#cb25-37" tabindex="-1"></a>  from_hex(<span class="st">&#39;6275732d62726f616463617374&#39;</span>),</span>
 <span id="cb25-38"><a href="#cb25-38" tabindex="-1"></a>  <span class="dv">1000</span></span>
-<span id="cb25-39"><a href="#cb25-39" tabindex="-1"></a>);</span>
+<span id="cb25-39"><a href="#cb25-39" tabindex="-1"></a>)).ok;</span>
 <span id="cb25-40"><a href="#cb25-40" tabindex="-1"></a></span>
 <span id="cb25-41"><a href="#cb25-41" tabindex="-1"></a><span class="kw">SELECT</span> getvariable(<span class="st">&#39;bus_sent&#39;</span>):<span class="ch">:BOOLEAN</span> <span class="kw">AS</span> sent,</span>
 <span id="cb25-42"><a href="#cb25-42" tabindex="-1"></a>       ok,</span>
@@ -2656,9 +2662,9 @@ one raw message through a three-peer <code>bus</code> mesh</h3>
 <span id="cb25-51"><a href="#cb25-51" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_drop_c <span class="op">=</span> ducknng_aio_drop((<span class="kw">SELECT</span> recv_aio <span class="kw">FROM</span> bus_recv_c));</span>
 <span id="cb25-52"><a href="#cb25-52" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> bus_recv_b;</span>
 <span id="cb25-53"><a href="#cb25-53" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> bus_recv_c;</span>
-<span id="cb25-54"><a href="#cb25-54" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_c <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;bus_c&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb25-55"><a href="#cb25-55" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_b <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;bus_b&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb25-56"><a href="#cb25-56" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_a <span class="op">=</span> ducknng_close_socket(getvariable(<span class="st">&#39;bus_a&#39;</span>):<span class="ch">:UBIGINT</span>);</span></code></pre></div>
+<span id="cb25-54"><a href="#cb25-54" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_c <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;bus_c&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb25-55"><a href="#cb25-55" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_b <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;bus_b&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span>
+<span id="cb25-56"><a href="#cb25-56" tabindex="-1"></a><span class="kw">SET</span> VARIABLE bus_close_a <span class="op">=</span> (ducknng_close_socket(getvariable(<span class="st">&#39;bus_a&#39;</span>):<span class="ch">:UBIGINT</span>)).ok;</span></code></pre></div>
 <pre><code>+------+------+-------------+
 | sent |  ok  | got_payload |
 +------+------+-------------+
@@ -2675,14 +2681,18 @@ raw requests asynchronously and collect the reply frames later</h3>
 collect raw reply frames through <code>ducknng_aio_collect(...)</code>,
 low-level HTTP aio helpers collect HTTP-shaped rows through
 <code>ducknng_ncurl_aio_collect(...)</code>, and callers explicitly
-decode frames or bodies afterward. <code>ducknng_aio_wait(...)</code> is
-the wait-without-consuming primitive for lifecycle code that needs to
-inspect or drop a terminal handle later.
-<code>ducknng_aio_collect_decoded(...)</code> is the first structured
-convenience wrapper on top of that same frame substrate: it still waits
-on the same terminal aio handles, but it projects the decoded envelope
-columns directly through the same low-level frame scalar accessors
-(<code>ducknng_frame_version(...)</code>,
+decode frames or bodies afterward. Expected aio launch failures, such as
+unsupported URL schemes, invalid TLS handles, or missing socket handles,
+return immediate terminal error handles so the caller can inspect
+<code>ducknng_aio_status(...)</code> or collect the error row without
+turning the launch itself into a DuckDB exception.
+<code>ducknng_aio_wait(...)</code> is the wait-without-consuming
+primitive for lifecycle code that needs to inspect or drop a terminal
+handle later. <code>ducknng_aio_collect_decoded(...)</code> is the first
+structured convenience wrapper on top of that same frame substrate: it
+still waits on the same terminal aio handles, but it projects the
+decoded envelope columns directly through the same low-level frame
+scalar accessors (<code>ducknng_frame_version(...)</code>,
 <code>ducknng_frame_type(...)</code>,
 <code>ducknng_frame_flags(...)</code>,
 <code>ducknng_frame_type_name(...)</code>,

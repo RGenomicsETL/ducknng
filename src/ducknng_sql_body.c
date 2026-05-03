@@ -350,7 +350,7 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
         bind->ok = false;
         bind->error = ducknng_strdup("ducknng: invalid frame envelope");
     } else {
-        bind->ok = true;
+        bind->ok = frame.type != DUCKNNG_RPC_ERROR;
         bind->version = frame.version;
         bind->type = frame.type;
         bind->flags = frame.flags;
@@ -359,6 +359,15 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
             bind->ok = false;
             bind->error = ducknng_strdup("ducknng: out of memory copying frame type name");
         } else {
+            if (frame.error_len > 0) {
+                bind->error = ducknng_dup_bytes(frame.error, (size_t)frame.error_len);
+                if (!bind->error) {
+                    bind->ok = false;
+                    bind->error = ducknng_strdup("ducknng: out of memory copying frame error text");
+                }
+            } else if (frame.type == DUCKNNG_RPC_ERROR) {
+                bind->error = ducknng_strdup("ducknng: error frame");
+            }
             if (frame.name_len > 0) bind->name = ducknng_dup_bytes(frame.name, (size_t)frame.name_len);
             bind->payload_len = (idx_t)frame.payload_len;
             if (frame.payload_len > 0) {
@@ -451,7 +460,7 @@ static int ducknng_body_parse_frame_copy(const uint8_t *data, size_t len,
         out->error = ducknng_strdup("ducknng: invalid frame envelope");
         return 0;
     }
-    out->ok = true;
+    out->ok = frame.type != DUCKNNG_RPC_ERROR;
     out->version = frame.version;
     out->type = frame.type;
     out->flags = frame.flags;
@@ -460,6 +469,16 @@ static int ducknng_body_parse_frame_copy(const uint8_t *data, size_t len,
         out->ok = false;
         out->error = ducknng_strdup("ducknng: out of memory copying frame type name");
         return -1;
+    }
+    if (frame.error_len > 0) {
+        out->error = ducknng_dup_bytes(frame.error, (size_t)frame.error_len);
+        if (!out->error) {
+            out->ok = false;
+            out->error = ducknng_strdup("ducknng: out of memory copying frame error text");
+            return -1;
+        }
+    } else if (frame.type == DUCKNNG_RPC_ERROR) {
+        out->error = ducknng_strdup("ducknng: error frame");
     }
     if (frame.name_len > 0) out->name = ducknng_dup_bytes(frame.name, (size_t)frame.name_len);
     out->payload_len = (idx_t)frame.payload_len;

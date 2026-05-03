@@ -56,9 +56,9 @@ Do not rely on database shutdown as the normal cleanup path for long-lived sessi
 
 If you open a socket with `ducknng_open_socket(...)`, close it with:
 
-- `ducknng_close_socket(socket_id)`
+- `(ducknng_close_socket(socket_id)).ok`
 
-This applies to `req`, `rep`, `pair`, `poly`, `push`, `pull`, `pub`, `sub`, `surveyor`, `respondent`, and the other exposed generic protocols.
+`ducknng_open_socket(...)` returns the handle as the `socket_id` field of its result struct. This applies to `req`, `rep`, `pair`, `poly`, `push`, `pull`, `pub`, `sub`, `surveyor`, `respondent`, and the other exposed generic protocols. Socket close failures are in-band result rows; they do not normally throw a DuckDB exception.
 
 ### AIO handles
 
