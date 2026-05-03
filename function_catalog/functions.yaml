@@ -1,4 +1,58 @@
 {
+  "manifest_version": 1,
+  "community_extension": {
+    "extension": {
+      "name": "ducknng",
+      "description": "DuckDB extension exposing DuckDB SQL and manifest-declared RPC over NNG and HTTP with Arrow IPC payloads",
+      "language": "C",
+      "build": "cmake",
+      "license": "MIT",
+      "excluded_platforms": "wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_arm64",
+      "maintainers": [
+        "sounkou-bioinfo"
+      ]
+    },
+    "repo": {
+      "github": "sounkou-bioinfo/ducknng",
+      "ref_source": "git_head"
+    },
+    "docs": {
+      "hello_world_lines": [
+        "-- Load the extension",
+        "LOAD ducknng;",
+        "",
+        "-- Start a local HTTP RPC service",
+        "SELECT ducknng_start_server(",
+        "  'api',",
+        "  'http://127.0.0.1:8080/_ducknng',",
+        "  1,",
+        "  134217728,",
+        "  300000,",
+        "  0::UBIGINT",
+        ");",
+        "",
+        "-- Inspect the running service",
+        "SELECT name, listen, execution_model",
+        "FROM ducknng_list_servers();",
+        "",
+        "-- Stop the service",
+        "SELECT ducknng_stop_server('api');"
+      ],
+      "extended_intro": [
+        "Ducknng turns DuckDB into a transport-and-protocol server: DuckDB-backed SQL and manifest-declared RPC exposed over NNG transports and the built-in HTTP/HTTPS carrier, with Arrow IPC used for row-bearing payloads.",
+        "The extension includes transport primitives, raw frame helpers, explicit query sessions, async aio handles, TLS helpers, and a low-level HTTP route layer that downstream users can extend into their own gateways, meshes, or application protocols."
+      ],
+      "feature_notes": [
+        "Transport family is chosen by URL scheme. Supported listeners and clients cover inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://, http://, and https:// where applicable.",
+        "Arrow IPC is the normal row payload format. JSON is used for manifest documents and lightweight control metadata.",
+        "Query sessions are explicit (`query_open`, `fetch`, `close`, `cancel`) and raw/session aio helpers follow the same future-like async contract through `nng_aio` handles.",
+        "The current server-side DuckDB execution model is `shared_serialized_connection`: query sessions are explicit RPC state, while service-owned DuckDB SQL is serialized through one shared backend connection.",
+        "TLS configuration can come from filesystem paths, in-memory PEM content, or self-signed development helpers.",
+        "The HTTP route layer is intentionally primitive and extensible; downstream users can build tenant routing, worker orchestration, and other control-plane logic without `ducknng` sealing those policies into the core extension.",
+        "Current excluded platforms are wasm and Windows."
+      ]
+    }
+  },
   "functions": [
     {
       "name": "ducknng_start_server",

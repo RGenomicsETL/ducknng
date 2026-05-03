@@ -4,6 +4,7 @@
 
 ### Latest additions
 
+- Reworked community-extension submission generation to follow the `duckhts` pattern: `function_catalog/functions.yaml` now carries a `community_extension` block, `function_catalog/generate_function_catalog.py` renders both the local catalog and the DuckDB community descriptor from one manifest plus the repo `description.yml` version, and the rendered submission lands in `community-extensions/extensions/ducknng/description.yml` through a checked-in template.
 - Split the subscriber gateway demo into dedicated support modules while keeping `demo/motherduck_gateway.py` as the stable public entrypoint for `make motherduck_demo` and the rendered Rmd walkthrough.
 - Added additive low-level HTTP route patterns with `ducknng_register_http_route_pattern(...)` and `ducknng_unregister_http_route_pattern(...)`, covering `exact`, `prefix`, and `template` matching, plus `route_match_kind` and `path_params_json` in `ducknng_http_request()` and `match_kind` in `ducknng_list_http_routes()`.
 - Added `ducknng_aio_collect_decoded(...)` as the first structured async convenience wrapper over the existing raw-frame aio substrate, projecting decoded envelope columns directly without changing the underlying one-operation aio contract.
