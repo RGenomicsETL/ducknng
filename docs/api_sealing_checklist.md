@@ -48,9 +48,9 @@ The HTTP transport direction is now in place:
 - the raw RPC aio helpers also route over `http://` and `https://`
 - `ducknng_ncurl_aio(...)` and `ducknng_ncurl_aio_collect(...)` provide the raw asynchronous HTTP/HTTPS client counterpart to `ducknng_ncurl(...)`
 
-The low-level HTTP route framework is now also part of the public SQL surface: `ducknng_register_http_route(...)`, `ducknng_register_http_route_pattern(...)`, `ducknng_unregister_http_route(...)`, `ducknng_unregister_http_route_pattern(...)`, `ducknng_list_http_routes()`, `ducknng_http_request()`, and `ducknng_http_request_body()` let an `http://` or `https://` service expose additional exact, prefix, or template routes beside the framed RPC mount. That route layer remains deliberately separate from the manifest-derived RPC surface: registered routes are not manifest methods, they do not mint `http_exec` or `http_fetch`, and they inherit the same service admission stack and `shared_serialized_connection` execution model as the rest of the service.
+The low-level HTTP route framework is now also part of the public SQL surface: `ducknng_register_http_route(...)`, `ducknng_register_http_route_pattern(...)`, `ducknng_unregister_http_route(...)`, `ducknng_unregister_http_route_pattern(...)`, `ducknng_list_http_routes()`, `ducknng_http_request()`, `ducknng_http_request_body()`, named request accessors, strict header/query/cookie/path parsers, and one-row response-builder macros let an `http://` or `https://` service expose additional exact, prefix, or template routes beside the framed RPC mount. That route layer remains deliberately separate from the manifest-derived RPC surface: registered routes are not manifest methods, they do not mint `http_exec` or `http_fetch`, and they inherit the same service admission stack and `shared_serialized_connection` execution model as the rest of the service.
 
-The remaining HTTP deferments are richer web-toolkit features rather than the existence of a route layer itself: automatic query-parameter helpers, static assets, HTTP-carrier streaming features, and higher-level route helpers remain additive future work.
+The remaining HTTP deferments are richer web-toolkit features rather than the existence of a route layer itself: static assets, HTTP-carrier streaming features, route-local authentication policy, worker lifecycle management, and application gateway products remain additive future work.
 
 ### 5. Transport matrix stance
 
@@ -99,12 +99,13 @@ These items were worth resolving before the API hardens further and should stay 
 - `docs/security.md` now states that arbitrary SQL execution is a deployment-owned capability, not an automatic sandbox, and names recommended exposure profiles plus the internal SQL-injection boundary
 - the transport matrix is documented in `docs/transports.md` and summarized in the README, including which schemes accept TLS handles and which surfaces reject the other family
 - the async contract is raw-result-first: NNG/RPC aio returns frames, HTTP aio returns HTTP-shaped rows, and structured async wrappers are optional future conveniences
+- the public catalog intentionally excludes `ducknng__*` macro helpers; those names are implementation details for stable-C-API macro plumbing and are not supported user APIs
 - user-defined body codec hooks are sealed: `ducknng_register_codec(content_type, function_name)` and `ducknng_unregister_codec(content_type)` install `BLOB → VARCHAR` SQL functions, the registry is gated to plain SQL identifiers spliced into a fixed `SELECT <fn>(?::BLOB) AS value` shape, user hooks take precedence over built-ins for matching content types, and `ducknng_list_codecs()` reports them with `kind = 'user'` alongside built-ins
 
 ## Not sealing blockers by themselves
 
 These are still important, but they do not need to be finished before the API can be considered sealed if the above items are settled:
 
-- richer HTTP route-framework features such as automatic query-parameter helpers, static assets, or HTTP-carrier streaming, because the sealed current layer is the low-level route surface beside the framed RPC endpoint
+- richer HTTP route-framework features such as static assets, HTTP-carrier streaming, route-local authentication policy, worker lifecycle management, or packaged gateway products, because the sealed current layer is the low-level route surface beside the framed RPC endpoint
 - scalarfs-style in-memory filesystem/provider research for CSV/TSV/Parquet body parsing, because the generic `body BLOB` fallback is an acceptable stable behavior until a clean provider exists
 - a future DuckDB-native Arrow re-plumb, if one ever becomes viable without unstable or deprecated APIs

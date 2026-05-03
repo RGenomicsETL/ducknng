@@ -18,9 +18,24 @@ ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pat
 ducknng_list_http_routes()
 ducknng_http_request()
 ducknng_http_request_body()
+ducknng_http_headers_get(headers_json, name)
+ducknng_http_headers_build(names, values)
+ducknng_http_query_param_get(query_string, name)
+ducknng_http_cookie_get(cookie_header, name)
+ducknng_http_path_params_get(path_params_json, name)
+ducknng_http_header(name)
+ducknng_http_query_param(name)
+ducknng_http_cookie(name)
+ducknng_http_path_param(name)
+ducknng_http_response(status, headers_json, content_type, body, body_text)
+ducknng_http_text(status, body_text)
+ducknng_http_json(status, body_text)
+ducknng_http_binary(status, body)
 ```
 
 `ducknng_register_http_route(...)` installs one exact method/path match on an existing `http://` or `https://` service. `ducknng_register_http_route_pattern(...)` is the additive generic form for richer low-level routing and currently supports `match_kind = 'exact' | 'prefix' | 'template'`. `ducknng_unregister_http_route(...)` and `ducknng_unregister_http_route_pattern(...)` remove installed routes and return `FALSE` when no matching route exists. `ducknng_list_http_routes()` exposes the current route registry as a table. `ducknng_http_request()` and `ducknng_http_request_body()` are request-context helpers that only emit a row while SQL is running inside an active route handler.
+
+The remaining helpers are small SQL-side toolkit primitives. The `*_get` scalars parse named values from the current canonical request shapes and reject ambiguous duplicates instead of choosing an arbitrary value. The route-local accessor macros read from `ducknng_http_request()` for the active route. The response table macros only build the same one-row response shape documented below; they do not define another RPC method namespace.
 
 ## Route registration rules
 
@@ -76,6 +91,8 @@ Inside an active route handler, `ducknng_http_request()` returns exactly one row
 
 `route_match_kind` and `route_path` identify the matched registered route pattern. For `template` routes, `path_params_json` exposes the extracted captures as a JSON object such as `{"tenant_id":"alice","item_id":"42"}`. Exact and prefix routes leave `path_params_json` as `NULL`.
 
+For common route SQL, `ducknng_http_header(name)`, `ducknng_http_query_param(name)`, `ducknng_http_cookie(name)`, and `ducknng_http_path_param(name)` read from the active request context directly. Outside an active route handler they return `NULL`, matching the zero-row behavior of `ducknng_http_request()`.
+
 ## Response contract
 
 `handler_sql` is executed as one DuckDB query. It must return exactly one row. The route layer recognizes these columns by name:
@@ -95,6 +112,8 @@ The rules are:
 - exactly one of `body` or `body_text` may be non-NULL
 - when `body_text` is used without `content_type`, the default content type is `text/plain; charset=utf-8`
 - when `body` is used without `content_type`, the default content type is `application/octet-stream`
+
+`ducknng_http_response(...)`, `ducknng_http_text(...)`, `ducknng_http_json(...)`, and `ducknng_http_binary(...)` are table macros for constructing that one-row shape. They exist to reduce response boilerplate while preserving the exact same validation rules.
 
 If the handler returns the wrong shape, returns more than one row, or raises a query error, the adapter fails closed with an HTTP 5xx response.
 
@@ -127,7 +146,7 @@ That is the stable current contract. It means:
 - handlers should stay short and explicit
 - handlers must not assume they can re-enter the same runtime arbitrarily
 
-The most important practical consequence is that a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs the shared execution lane. That pattern can block on itself. A MotherDuck-style public gateway should therefore target a separate backend DuckDB process or at least a separate `ducknng` runtime boundary, not a sibling service in the same runtime.
+The most important practical consequence is that a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs the shared execution lane. That pattern can block on itself. A public subscriber gateway should therefore target a separate backend DuckDB process or at least a separate `ducknng` runtime boundary, not a sibling service in the same runtime.
 
 ## Example
 
@@ -143,12 +162,15 @@ SELECT ducknng_register_http_route(
   'api',
   'POST',
   '/echo',
-  'SELECT 201 AS status,
-          ''text/plain; charset=utf-8'' AS content_type,
+  'SELECT * FROM ducknng_http_text(
+          201,
           (
-            SELECT method || '' '' || path || '' '' || coalesce(body_text, '''')
+            SELECT method || '' '' || path || '' '' ||
+                   coalesce(ducknng_http_query_param(''x''), '''') || '' '' ||
+                   coalesce(body_text, '''')
             FROM ducknng_http_request(), ducknng_http_request_body()
-          ) AS body_text'
+          )
+        )'
 );
 ```
 
@@ -156,10 +178,10 @@ SELECT ducknng_register_http_route(
 
 The landed layer is intentionally low-level. These are still deferred:
 
-- automatic query-parameter parsing helpers
 - static asset serving
 - HTTP-carrier WebSocket, SSE, or NDJSON streaming
 - HTTP-specific copies of manifest-derived RPC methods
 - automatic SQL-to-JSON marshalling for arbitrary rowsets
+- route-local authentication or worker-lifecycle policy
 
 Those may arrive later as additive tooling, but they must stay clearly separate from the framed RPC carrier and from the manifest-derived method surface.

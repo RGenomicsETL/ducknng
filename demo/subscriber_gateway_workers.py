@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import duckdb
 
-from motherduck_gateway_common import (
+from subscriber_gateway_common import (
     BACKEND_PREFIX,
     GATEWAY_NAME,
     ORPHAN_IDENTITY,

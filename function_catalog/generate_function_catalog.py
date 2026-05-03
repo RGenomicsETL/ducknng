@@ -70,8 +70,11 @@ def load_root_description(path: Path) -> dict[str, object]:
         current_list = metadata[key]
 
     version = metadata.get("version")
+    description = metadata.get("description")
     if not isinstance(version, str) or not version:
         die(f"{path} is missing a non-empty 'version' field")
+    if not isinstance(description, str) or not description:
+        die(f"{path} is missing a non-empty 'description' field")
 
     return metadata
 
@@ -290,7 +293,7 @@ def render_description_yaml(
 
     return template.substitute(
         extension_name=quote_yaml_scalar(str(extension["name"])),
-        extension_description=quote_yaml_scalar(str(extension["description"])),
+        extension_description=quote_yaml_scalar(str(root_description["description"])),
         extension_version=quote_yaml_scalar(str(root_description["version"])),
         extension_language=quote_yaml_scalar(str(extension["language"])),
         extension_build=quote_yaml_scalar(str(extension["build"])),

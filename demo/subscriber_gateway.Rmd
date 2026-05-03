@@ -2,7 +2,7 @@
 output: github_document
 ---
 
-<!-- demo/motherduck_gateway.md is generated from demo/motherduck_gateway.Rmd. Please edit that file -->
+<!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
 
 ```{r, include = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
@@ -16,7 +16,7 @@ extension_path <- normalizePath(
   file.path(project_root, "build", "release", "ducknng.duckdb_extension"),
   mustWork = FALSE
 )
-demo_script <- normalizePath(file.path(project_root, "demo", "motherduck_gateway.py"), mustWork = TRUE)
+demo_script <- normalizePath(file.path(project_root, "demo", "subscriber_gateway.py"), mustWork = TRUE)
 
 if (!file.exists(extension_path)) {
   stop("build/release/ducknng.duckdb_extension not found; run `make release` first.")
@@ -249,17 +249,17 @@ gateway_worker <- start_worker(
 wait_healthz(gateway_base_url)
 ```
 
-# MotherDuck-style gateway demo
+# Subscriber gateway demo
 
 This is the dedicated rendered walkthrough for the multi-process subscriber gateway topology in `ducknng`. Unlike the main `README`, this document is allowed to boot several private DuckDB workers during render, so it can show the honest public-gateway shape rather than an in-process sketch.
 
 Render it from the repo root with:
 
 ```sh
-make motherduck_rdm
+make subscriber_gateway_rdm
 ```
 
-The live helper behind this document is still [demo/motherduck_gateway.py](motherduck_gateway.py). The rendered walkthrough keeps the topology generic instead of hardwiring `user -> backend` logic into the public API.
+The live helper behind this document is [demo/subscriber_gateway.py](subscriber_gateway.py). The rendered walkthrough keeps the topology generic instead of hardwiring `user -> backend` logic into the public API.
 
 ## Topology
 

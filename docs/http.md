@@ -84,9 +84,22 @@ ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pat
 ducknng_list_http_routes()
 ducknng_http_request()
 ducknng_http_request_body()
+ducknng_http_headers_get(headers_json, name)
+ducknng_http_headers_build(names, values)
+ducknng_http_query_param_get(query_string, name)
+ducknng_http_cookie_get(cookie_header, name)
+ducknng_http_path_params_get(path_params_json, name)
+ducknng_http_header(name)
+ducknng_http_query_param(name)
+ducknng_http_cookie(name)
+ducknng_http_path_param(name)
+ducknng_http_response(status, headers_json, content_type, body, body_text)
+ducknng_http_text(status, body_text)
+ducknng_http_json(status, body_text)
+ducknng_http_binary(status, body)
 ```
 
-These helpers are transport-local service tooling, not manifest-derived RPC methods. A route handler is one SQL query that returns exactly one response row, with optional `status`, `headers_json`, `content_type`, `body`, and `body_text` columns. Request context comes from `ducknng_http_request()` and `ducknng_http_request_body()` while that handler runs.
+These helpers are transport-local service tooling, not manifest-derived RPC methods. A route handler is one SQL query that returns exactly one response row, with optional `status`, `headers_json`, `content_type`, `body`, and `body_text` columns. Request context comes from `ducknng_http_request()` and `ducknng_http_request_body()` while that handler runs. The named header, query, cookie, and path helpers are small accessors over those same context rows, and the response macros build the same one-row route response shape.
 
 When a route needs per-request dynamic backend session control, use the raw synchronous session helpers:
 
@@ -193,4 +206,4 @@ Human-friendly convenience routes such as `GET /manifest` are deferred. They may
 
 HTTP-carrier WebSocket, SSE, NDJSON, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG `ws://` and `wss://` transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.
 
-The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching, but richer web-toolkit features are still deferred. Automatic query-parameter parsing, static asset serving, HTTP-carrier WebSocket/SSE/NDJSON work, and any higher-level route helpers must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.
+The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching plus small request-accessor and response-builder helpers. Richer web-toolkit features are still deferred. Static asset serving, route-local authentication policy, HTTP-carrier WebSocket/SSE/NDJSON work, worker lifecycle management, and application gateway products must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.

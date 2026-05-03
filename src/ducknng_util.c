@@ -137,6 +137,532 @@ int ducknng_ascii_iends_with(const char *s, const char *suffix) {
     return ducknng_ascii_ieq(s + slen - suffix_len, suffix);
 }
 
+static char *ducknng_dup_bytes(const char *src, size_t len) {
+    char *out = (char *)duckdb_malloc(len + 1);
+    if (!out) return NULL;
+    if (len) memcpy(out, src, len);
+    out[len] = '\0';
+    return out;
+}
+
+static void ducknng_json_skip_ws(const char **p) {
+    while (p && *p && (**p == ' ' || **p == '\t' || **p == '\r' || **p == '\n')) (*p)++;
+}
+
+static int ducknng_hex_value(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    c = ducknng_ascii_tolower_int(c);
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    return -1;
+}
+
+static int ducknng_buf_append(char **buf, size_t *len, size_t *cap, const char *src, size_t src_len) {
+    char *next;
+    size_t new_cap;
+    if (!buf || !len || !cap) return -1;
+    if (*cap < *len + src_len + 1) {
+        new_cap = *cap ? *cap * 2 : 32;
+        while (new_cap < *len + src_len + 1) new_cap *= 2;
+        next = (char *)duckdb_malloc(new_cap);
+        if (!next) return -1;
+        if (*buf && *len) memcpy(next, *buf, *len);
+        if (*buf) duckdb_free(*buf);
+        *buf = next;
+        *cap = new_cap;
+    }
+    if (src_len) memcpy(*buf + *len, src, src_len);
+    *len += src_len;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+static char *ducknng_format_name_error(const char *fmt, const char *name) {
+    size_t need;
+    char *out;
+    if (!fmt || !name) return NULL;
+    need = (size_t)snprintf(NULL, 0, fmt, name) + 1;
+    out = (char *)duckdb_malloc(need);
+    if (!out) return NULL;
+    snprintf(out, need, fmt, name);
+    return out;
+}
+
+static char *ducknng_json_parse_string_dup(const char **p, char **errmsg) {
+    char *buf = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    if (errmsg) *errmsg = NULL;
+    if (!p || !*p || **p != '"') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: expected JSON string");
+        return NULL;
+    }
+    (*p)++;
+    while (**p) {
+        char c = *(*p)++;
+        if (c == '"') return buf ? buf : ducknng_strdup("");
+        if ((unsigned char)c < 0x20) {
+            if (buf) duckdb_free(buf);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid control character in JSON string");
+            return NULL;
+        }
+        if (c == '\\') {
+            char esc = *(*p)++;
+            switch (esc) {
+            case '"': c = '"'; break;
+            case '\\': c = '\\'; break;
+            case '/': c = '/'; break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'n': c = '\n'; break;
+            case 'r': c = '\r'; break;
+            case 't': c = '\t'; break;
+            case 'u': {
+                int i;
+                unsigned value = 0;
+                for (i = 0; i < 4; i++) {
+                    char h = *(*p)++;
+                    int v = ducknng_hex_value((unsigned char)h);
+                    if (v < 0) {
+                        if (buf) duckdb_free(buf);
+                        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid JSON unicode escape");
+                        return NULL;
+                    }
+                    value = (value << 4) | (unsigned)v;
+                }
+                if (value == 0) {
+                    if (buf) duckdb_free(buf);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: JSON strings may not contain NUL");
+                    return NULL;
+                }
+                if (value > 0x7f) {
+                    if (buf) duckdb_free(buf);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: only ASCII JSON unicode escapes are supported");
+                    return NULL;
+                }
+                c = (char)value;
+                break;
+            }
+            case '\0':
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: unterminated JSON escape");
+                return NULL;
+            default:
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: unsupported JSON escape");
+                return NULL;
+            }
+        }
+        if (ducknng_buf_append(&buf, &len, &cap, &c, 1) != 0) {
+            if (buf) duckdb_free(buf);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing JSON string");
+            return NULL;
+        }
+    }
+    if (buf) duckdb_free(buf);
+    if (errmsg) *errmsg = ducknng_strdup("ducknng: unterminated JSON string");
+    return NULL;
+}
+
+int ducknng_json_object_get_string(const char *json, const char *wanted_name,
+    int ascii_case_insensitive, int reject_duplicates, char **out_value, char **errmsg) {
+    const char *p = json;
+    char *found = NULL;
+    int found_match = 0;
+    if (out_value) *out_value = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!json || !wanted_name || !wanted_name[0]) return 0;
+    ducknng_json_skip_ws(&p);
+    if (*p != '{') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: expected JSON object");
+        return -1;
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p == '}') {
+        p++;
+        ducknng_json_skip_ws(&p);
+        if (*p != '\0') {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after JSON object");
+            return -1;
+        }
+        return 0;
+    }
+    for (;;) {
+        char *key = NULL;
+        char *value = NULL;
+        int is_match;
+        key = ducknng_json_parse_string_dup(&p, errmsg);
+        if (!key) goto fail;
+        ducknng_json_skip_ws(&p);
+        if (*p != ':') {
+            duckdb_free(key);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: expected ':' in JSON object");
+            goto fail;
+        }
+        p++;
+        ducknng_json_skip_ws(&p);
+        value = ducknng_json_parse_string_dup(&p, errmsg);
+        if (!value) {
+            duckdb_free(key);
+            goto fail;
+        }
+        is_match = ascii_case_insensitive ? ducknng_ascii_ieq(key, wanted_name) : strcmp(key, wanted_name) == 0;
+        if (is_match) {
+            if (found_match && reject_duplicates) {
+                duckdb_free(key);
+                duckdb_free(value);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: duplicate JSON field '%s'", wanted_name);
+                goto fail;
+            }
+            if (found) duckdb_free(found);
+            found = value;
+            value = NULL;
+            found_match = 1;
+        }
+        duckdb_free(key);
+        if (value) duckdb_free(value);
+        ducknng_json_skip_ws(&p);
+        if (*p == ',') {
+            p++;
+            ducknng_json_skip_ws(&p);
+            continue;
+        }
+        if (*p == '}') {
+            p++;
+            break;
+        }
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or '}' in JSON object");
+        goto fail;
+    }
+    ducknng_json_skip_ws(&p);
+    if (*p != '\0') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after JSON object");
+        goto fail;
+    }
+    if (out_value && found) *out_value = found;
+    else if (found) duckdb_free(found);
+    return found_match ? 1 : 0;
+fail:
+    if (found) duckdb_free(found);
+    return -1;
+}
+
+int ducknng_http_headers_json_get_header(const char *headers_json, const char *wanted_name,
+    int reject_duplicates, char **out_value, char **errmsg) {
+    const char *p = headers_json;
+    char *found = NULL;
+    char *key = NULL;
+    char *value = NULL;
+    char *name = NULL;
+    char *header_value = NULL;
+    int found_match = 0;
+    if (out_value) *out_value = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!headers_json || !wanted_name || !wanted_name[0]) return 0;
+    ducknng_json_skip_ws(&p);
+    if (*p != '[') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: headers_json must be a JSON array of {name,value} objects");
+        return -1;
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p == ']') {
+        p++;
+        ducknng_json_skip_ws(&p);
+        if (*p != '\0') {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after headers_json");
+            return -1;
+        }
+        return 0;
+    }
+    for (;;) {
+        key = NULL;
+        value = NULL;
+        name = NULL;
+        header_value = NULL;
+        ducknng_json_skip_ws(&p);
+        if (*p != '{') {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: expected header object in headers_json");
+            goto fail;
+        }
+        p++;
+        for (;;) {
+            ducknng_json_skip_ws(&p);
+            key = ducknng_json_parse_string_dup(&p, errmsg);
+            if (!key) goto fail;
+            ducknng_json_skip_ws(&p);
+            if (*p != ':') {
+                duckdb_free(key);
+                if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: expected ':' in headers_json");
+                goto fail;
+            }
+            p++;
+            ducknng_json_skip_ws(&p);
+            value = ducknng_json_parse_string_dup(&p, errmsg);
+            if (!value) {
+                duckdb_free(key);
+                goto fail;
+            }
+            if (strcmp(key, "name") == 0) {
+                if (name) {
+                    duckdb_free(key);
+                    duckdb_free(value);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: duplicate header name field in headers_json");
+                    goto fail;
+                }
+                name = value;
+                value = NULL;
+            } else if (strcmp(key, "value") == 0) {
+                if (header_value) {
+                    duckdb_free(key);
+                    duckdb_free(value);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: duplicate header value field in headers_json");
+                    goto fail;
+                }
+                header_value = value;
+                value = NULL;
+            } else {
+                duckdb_free(key);
+                duckdb_free(value);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: headers_json objects may contain only name and value fields");
+                goto fail;
+            }
+            duckdb_free(key);
+            key = NULL;
+            if (value) {
+                duckdb_free(value);
+                value = NULL;
+            }
+            ducknng_json_skip_ws(&p);
+            if (*p == ',') {
+                p++;
+                continue;
+            }
+            if (*p == '}') {
+                p++;
+                break;
+            }
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or '}' in headers_json");
+            goto fail;
+        }
+        if (!name || !name[0] || !header_value) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: each headers_json object must contain non-empty name and a string value");
+            goto fail;
+        }
+        if (ducknng_ascii_ieq(name, wanted_name)) {
+            if (found_match && reject_duplicates) {
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: duplicate HTTP header '%s'", wanted_name);
+                goto fail;
+            }
+            if (found) duckdb_free(found);
+            found = ducknng_strdup(header_value);
+            if (!found) {
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying header value");
+                goto fail;
+            }
+            found_match = 1;
+        }
+        duckdb_free(name);
+        duckdb_free(header_value);
+        name = NULL;
+        header_value = NULL;
+        ducknng_json_skip_ws(&p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == ']') {
+            p++;
+            break;
+        }
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or ']' in headers_json");
+        goto fail;
+    }
+    ducknng_json_skip_ws(&p);
+    if (*p != '\0') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after headers_json");
+        goto fail;
+    }
+    if (out_value && found) *out_value = found;
+    else if (found) duckdb_free(found);
+    return found_match ? 1 : 0;
+fail:
+    if (key) duckdb_free(key);
+    if (value) duckdb_free(value);
+    if (name) duckdb_free(name);
+    if (header_value) duckdb_free(header_value);
+    if (found) duckdb_free(found);
+    return -1;
+}
+
+static char *ducknng_percent_decode_dup(const char *src, size_t len, int plus_as_space,
+    const char *label, char **errmsg) {
+    char *out;
+    size_t i;
+    size_t j = 0;
+    if (errmsg) *errmsg = NULL;
+    if (!src) return NULL;
+    out = (char *)duckdb_malloc(len + 1);
+    if (!out) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory decoding URL component");
+        return NULL;
+    }
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '%') {
+            int hi;
+            int lo;
+            if (i + 2 >= len) {
+                duckdb_free(out);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: invalid percent escape in %s", label ? label : "URL component");
+                return NULL;
+            }
+            hi = ducknng_hex_value((unsigned char)src[i + 1]);
+            lo = ducknng_hex_value((unsigned char)src[i + 2]);
+            if (hi < 0 || lo < 0) {
+                duckdb_free(out);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: invalid percent escape in %s", label ? label : "URL component");
+                return NULL;
+            }
+            c = (unsigned char)((hi << 4) | lo);
+            if (c == 0) {
+                duckdb_free(out);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: %s contains NUL after percent decoding", label ? label : "URL component");
+                return NULL;
+            }
+            i += 2;
+        } else if (plus_as_space && c == '+') {
+            c = ' ';
+        }
+        out[j++] = (char)c;
+    }
+    out[j] = '\0';
+    return out;
+}
+
+int ducknng_query_string_get_param(const char *query_string, const char *wanted_name,
+    int reject_duplicates, char **out_value, char **errmsg) {
+    const char *p = query_string;
+    char *found = NULL;
+    int found_match = 0;
+    if (out_value) *out_value = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!query_string || !wanted_name || !wanted_name[0]) return 0;
+    while (p && *p) {
+        const char *segment_end = strchr(p, '&');
+        const char *eq;
+        size_t name_len;
+        char *name;
+        char *value = NULL;
+        char *decode_err = NULL;
+        if (!segment_end) segment_end = p + strlen(p);
+        eq = memchr(p, '=', (size_t)(segment_end - p));
+        name_len = eq ? (size_t)(eq - p) : (size_t)(segment_end - p);
+        name = ducknng_percent_decode_dup(p, name_len, 1, "query parameter name", &decode_err);
+        if (!name) {
+            if (errmsg) *errmsg = decode_err;
+            goto fail;
+        }
+        if (strcmp(name, wanted_name) == 0) {
+            size_t value_len = eq ? (size_t)(segment_end - eq - 1) : 0;
+            if (found_match && reject_duplicates) {
+                duckdb_free(name);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: duplicate query parameter '%s'", wanted_name);
+                goto fail;
+            }
+            value = ducknng_percent_decode_dup(eq ? eq + 1 : "", value_len, 1, "query parameter value", &decode_err);
+            if (!value) {
+                duckdb_free(name);
+                if (errmsg) *errmsg = decode_err;
+                goto fail;
+            }
+            if (found) duckdb_free(found);
+            found = value;
+            value = NULL;
+            found_match = 1;
+        }
+        duckdb_free(name);
+        if (value) duckdb_free(value);
+        p = *segment_end ? segment_end + 1 : segment_end;
+    }
+    if (out_value && found) *out_value = found;
+    else if (found) duckdb_free(found);
+    return found_match ? 1 : 0;
+fail:
+    if (found) duckdb_free(found);
+    return -1;
+}
+
+int ducknng_cookie_header_get_value(const char *cookie_header, const char *wanted_name,
+    int reject_duplicates, char **out_value, char **errmsg) {
+    const char *p = cookie_header;
+    char *found = NULL;
+    int found_match = 0;
+    if (out_value) *out_value = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!cookie_header || !wanted_name || !wanted_name[0]) return 0;
+    while (p && *p) {
+        const char *segment_end = strchr(p, ';');
+        const char *eq;
+        const char *name_start;
+        const char *name_end;
+        const char *value_start;
+        const char *value_end;
+        char *name;
+        char *value;
+        if (!segment_end) segment_end = p + strlen(p);
+        while (p < segment_end && (*p == ' ' || *p == '\t')) p++;
+        eq = memchr(p, '=', (size_t)(segment_end - p));
+        if (!eq) {
+            p = *segment_end ? segment_end + 1 : segment_end;
+            continue;
+        }
+        name_start = p;
+        name_end = eq;
+        while (name_end > name_start && (name_end[-1] == ' ' || name_end[-1] == '\t')) name_end--;
+        value_start = eq + 1;
+        while (value_start < segment_end && (*value_start == ' ' || *value_start == '\t')) value_start++;
+        value_end = segment_end;
+        while (value_end > value_start && (value_end[-1] == ' ' || value_end[-1] == '\t')) value_end--;
+        name = ducknng_dup_bytes(name_start, (size_t)(name_end - name_start));
+        if (!name) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing Cookie header");
+            goto fail;
+        }
+        if ((size_t)(value_end - value_start) >= 2 && value_start[0] == '"' && value_end[-1] == '"') {
+            value_start++;
+            value_end--;
+        }
+        value = ducknng_dup_bytes(value_start, (size_t)(value_end - value_start));
+        if (!value) {
+            duckdb_free(name);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing Cookie header");
+            goto fail;
+        }
+        if (strcmp(name, wanted_name) == 0) {
+            if (found_match && reject_duplicates) {
+                duckdb_free(name);
+                duckdb_free(value);
+                if (errmsg) *errmsg = ducknng_format_name_error("ducknng: duplicate cookie '%s'", wanted_name);
+                goto fail;
+            }
+            if (found) duckdb_free(found);
+            found = value;
+            value = NULL;
+            found_match = 1;
+        }
+        duckdb_free(name);
+        if (value) duckdb_free(value);
+        p = *segment_end ? segment_end + 1 : segment_end;
+    }
+    if (out_value && found) *out_value = found;
+    else if (found) duckdb_free(found);
+    return found_match ? 1 : 0;
+fail:
+    if (found) duckdb_free(found);
+    return -1;
+}
+
 uint16_t ducknng_le16_read(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
 uint32_t ducknng_le32_read(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 uint64_t ducknng_le64_read(const uint8_t *p) { return (uint64_t)ducknng_le32_read(p) | ((uint64_t)ducknng_le32_read(p + 4) << 32); }

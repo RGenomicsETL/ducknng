@@ -189,52 +189,6 @@ static char *ducknng_sql_quote_literal(const char *s) {
     return out;
 }
 
-static char *ducknng_headers_json_get_header(const char *headers_json, const char *wanted_name) {
-    const char *p = headers_json;
-    char *last_value = NULL;
-    if (!headers_json || !wanted_name) return NULL;
-    while ((p = strstr(p, "{\"name\":")) != NULL) {
-        const char *name_start;
-        const char *name_end;
-        const char *value_key;
-        const char *value_start;
-        const char *value_end;
-        char *name;
-        char *value;
-        p += strlen("{\"name\":");
-        if (*p != '\"') continue;
-        name_start = ++p;
-        name_end = strchr(name_start, '\"');
-        if (!name_end) break;
-        value_key = strstr(name_end, "\"value\":");
-        if (!value_key) break;
-        value_start = value_key + strlen("\"value\":");
-        if (*value_start != '\"') {
-            p = name_end + 1;
-            continue;
-        }
-        value_start++;
-        value_end = strchr(value_start, '\"');
-        if (!value_end) break;
-        name = ducknng_dup_bytes((const uint8_t *)name_start, (size_t)(name_end - name_start));
-        value = ducknng_dup_bytes((const uint8_t *)value_start, (size_t)(value_end - value_start));
-        if (!name || !value) {
-            if (name) duckdb_free(name);
-            if (value) duckdb_free(value);
-            break;
-        }
-        if (ducknng_ascii_ieq(name, wanted_name)) {
-            if (last_value) duckdb_free(last_value);
-            last_value = value;
-            value = NULL;
-        }
-        duckdb_free(name);
-        if (value) duckdb_free(value);
-        p = value_end + 1;
-    }
-    return last_value;
-}
-
 static void ducknng_frame_decode_bind_data_reset(ducknng_frame_decode_bind_data *data) {
     if (!data) return;
     if (data->error) duckdb_free(data->error);
@@ -1240,7 +1194,10 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
         duckdb_bind_set_error(info, status_msg);
         goto cleanup;
     }
-    content_type = ducknng_headers_json_get_header(resp_headers_json, "Content-Type");
+    if (ducknng_http_headers_json_get_header(resp_headers_json, "Content-Type", 0, &content_type, &errmsg) < 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: invalid response headers_json");
+        goto cleanup;
+    }
     (void)ducknng_body_parse_prepare(info, ctx, resp_body, resp_body_len, content_type);
 cleanup:
     if (url) duckdb_free(url);

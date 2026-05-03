@@ -604,13 +604,13 @@ padding-top: 0px;
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
 <h1 id="ducknng">ducknng</h1>
-<p><code>ducknng</code> is a pure C DuckDB extension that turns a DuckDB
-process into an <a href="https://nng.nanomsg.org/">NNG</a> endpoint —
-server, client, or both — and adds a small framed RPC layer so a SQL
-session can call another DuckDB session across <code>inproc://</code>,
-<code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>,
-<code>ws://</code>, <code>wss://</code>, <code>http://</code>, or
-<code>https://</code>. RPC row payloads ride on Arrow IPC.</p>
+<p><code>ducknng</code> is a pure C DuckDB extension that exposes DuckDB
+SQL and manifest-declared RPC over <a href="https://nng.nanomsg.org/">NNG</a> transports and HTTP/HTTPS
+carriers. A SQL session can call another DuckDB session across
+<code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>,
+<code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>,
+<code>http://</code>, or <code>https://</code>, and RPC row payloads
+ride on Arrow IPC.</p>
 <p>It draws on two R packages. <a href="https://github.com/r-lib/nanonext"><code>nanonext</code></a>
 supplies the socket and AIO ergonomics; <a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
 supplies the thin versioned envelope. The DuckDB integration keeps
@@ -727,8 +727,8 @@ model for a long-lived DuckDB process</li>
 <code>docs/security.md</code>, <code>docs/registry.md</code>,
 <code>docs/transports.md</code>, <code>docs/http.md</code>,
 <code>docs/http_server_framework.md</code>, <code>docs/codecs.md</code>,
-and <code>docs/types.md</code>. A MotherDuck-style multi-process gateway
-sketch now lives in <code>docs/motherduck_style_demo.md</code>; the
+and <code>docs/types.md</code>. A multi-process subscriber gateway
+sketch now lives in <code>docs/subscriber_gateway_demo.md</code>; the
 older non-sealed routing note remains in
 <code>docs/mesh_routing_demo.md</code>. <code>NEWS.md</code> summarizes
 landed changes. TLS supports both file-backed and in-memory PEM material
@@ -739,6 +739,10 @@ landed changes. TLS supports both file-backed and in-memory PEM material
 <code>tls+tcp://</code>, <code>wss://</code>, and <code>https://</code>
 services.</p>
 <h2 id="function-catalog">Function catalog</h2>
+<p>The generated catalog is the public SQL surface. Any loaded
+<code>ducknng__*</code> helper names are internal macro implementation
+details required by DuckDB’s stable C API path and are not supported
+user APIs.</p>
 <details>
 <summary>
 Expand the full generated function catalog
@@ -1316,6 +1320,101 @@ active route handler.</td>
 <td><code>TABLE(body BLOB, body_text VARCHAR)</code></td>
 <td>Expose the current HTTP request body while SQL runs inside an active
 route handler.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_headers_get</code></td>
+<td>scalar</td>
+<td><code>headers_json, name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Return one header value from ducknng’s canonical HTTP header
+JSON.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_headers_build</code></td>
+<td>scalar</td>
+<td><code>names, values</code></td>
+<td><code>VARCHAR</code></td>
+<td>Build ducknng’s canonical HTTP header JSON from parallel name and
+value lists.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_query_param_get</code></td>
+<td>scalar</td>
+<td><code>query_string, name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Return one decoded query-string parameter value.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_cookie_get</code></td>
+<td>scalar</td>
+<td><code>cookie_header, name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Return one cookie value from a Cookie header string.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_path_params_get</code></td>
+<td>scalar</td>
+<td><code>path_params_json, name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Return one template-route path parameter from path_params_json.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_header</code></td>
+<td>scalar</td>
+<td><code>name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Route-local shortcut for reading one request header by name.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_query_param</code></td>
+<td>scalar</td>
+<td><code>name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Route-local shortcut for reading one decoded query parameter by
+name.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_cookie</code></td>
+<td>scalar</td>
+<td><code>name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Route-local shortcut for reading one request cookie by name.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_path_param</code></td>
+<td>scalar</td>
+<td><code>name</code></td>
+<td><code>VARCHAR</code></td>
+<td>Route-local shortcut for reading one template path parameter by
+name.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_response</code></td>
+<td>table</td>
+<td><code>status, headers_json, content_type, body, body_text</code></td>
+<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
+<td>Build the one-row response shape expected by a route handler.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_text</code></td>
+<td>table</td>
+<td><code>status, body_text</code></td>
+<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
+<td>Build a one-row plain-text HTTP route response.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_http_json</code></td>
+<td>table</td>
+<td><code>status, body_text</code></td>
+<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
+<td>Build a one-row JSON HTTP route response from a text body.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_http_binary</code></td>
+<td>table</td>
+<td><code>status, body</code></td>
+<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
+<td>Build a one-row binary HTTP route response.</td>
 </tr>
 </tbody>
 </table>
@@ -2124,93 +2223,96 @@ inspect the in-flight request through
 <span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a>);</span>
 <span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a></span>
 <span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_route_echo_sql <span class="op">=</span></span>
-<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a><span class="st">&#39;SELECT 201 AS status,</span></span>
-<span id="cb15-13"><a href="#cb15-13" tabindex="-1"></a><span class="st">        </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type,</span></span>
+<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a><span class="st">&#39;SELECT * FROM ducknng_http_text(</span></span>
+<span id="cb15-13"><a href="#cb15-13" tabindex="-1"></a><span class="st">        201,</span></span>
 <span id="cb15-14"><a href="#cb15-14" tabindex="-1"></a><span class="st">        (</span></span>
 <span id="cb15-15"><a href="#cb15-15" tabindex="-1"></a><span class="st">          SELECT method || </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> || path || </span><span class="ch">&#39;&#39;</span><span class="st">?</span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(query_string, </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">) ||</span></span>
-<span id="cb15-16"><a href="#cb15-16" tabindex="-1"></a><span class="st">                 </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(content_type, </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">) ||</span></span>
-<span id="cb15-17"><a href="#cb15-17" tabindex="-1"></a><span class="st">                 </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(body_text, </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">)</span></span>
-<span id="cb15-18"><a href="#cb15-18" tabindex="-1"></a><span class="st">          FROM ducknng_http_request(), ducknng_http_request_body()</span></span>
-<span id="cb15-19"><a href="#cb15-19" tabindex="-1"></a><span class="st">        ) AS body_text&#39;</span>;</span>
-<span id="cb15-20"><a href="#cb15-20" tabindex="-1"></a></span>
-<span id="cb15-21"><a href="#cb15-21" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_route_template_sql <span class="op">=</span></span>
-<span id="cb15-22"><a href="#cb15-22" tabindex="-1"></a><span class="st">&#39;SELECT 202 AS status,</span></span>
-<span id="cb15-23"><a href="#cb15-23" tabindex="-1"></a><span class="st">        </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type,</span></span>
-<span id="cb15-24"><a href="#cb15-24" tabindex="-1"></a><span class="st">        (</span></span>
-<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a><span class="st">          SELECT route_match_kind || </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
-<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a><span class="st">                 json_extract_string(path_params_json::JSON, </span><span class="ch">&#39;&#39;</span><span class="st">$.tenant_id</span><span class="ch">&#39;&#39;</span><span class="st">) || </span><span class="ch">&#39;&#39;</span><span class="st">:</span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
-<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a><span class="st">                 json_extract_string(path_params_json::JSON, </span><span class="ch">&#39;&#39;</span><span class="st">$.item_id</span><span class="ch">&#39;&#39;</span><span class="st">)</span></span>
-<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a><span class="st">          FROM ducknng_http_request()</span></span>
-<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a><span class="st">        ) AS body_text&#39;</span>;</span>
-<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a></span>
-<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
-<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
-<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a>  <span class="st">&#39;/healthz&#39;</span>,</span>
-<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a>  <span class="st">&#39;SELECT 200 AS status, </span><span class="ch">&#39;&#39;</span><span class="st">text/plain; charset=utf-8</span><span class="ch">&#39;&#39;</span><span class="st"> AS content_type, </span><span class="ch">&#39;&#39;</span><span class="st">ok</span><span class="ch">&#39;&#39;</span><span class="st"> AS body_text&#39;</span></span>
-<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a>);</span>
-<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a></span>
-<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
-<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
-<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a>  <span class="st">&#39;/echo&#39;</span>,</span>
-<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_echo_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
-<span id="cb15-43"><a href="#cb15-43" tabindex="-1"></a>);</span>
-<span id="cb15-44"><a href="#cb15-44" tabindex="-1"></a></span>
-<span id="cb15-45"><a href="#cb15-45" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route_pattern(</span>
-<span id="cb15-46"><a href="#cb15-46" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
-<span id="cb15-47"><a href="#cb15-47" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-48"><a href="#cb15-48" tabindex="-1"></a>  <span class="st">&#39;template&#39;</span>,</span>
-<span id="cb15-49"><a href="#cb15-49" tabindex="-1"></a>  <span class="st">&#39;/tenant/{tenant_id}/items/{item_id}&#39;</span>,</span>
-<span id="cb15-50"><a href="#cb15-50" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_template_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
-<span id="cb15-51"><a href="#cb15-51" tabindex="-1"></a>);</span>
-<span id="cb15-52"><a href="#cb15-52" tabindex="-1"></a></span>
-<span id="cb15-53"><a href="#cb15-53" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">200</span>, body_text</span>
-<span id="cb15-54"><a href="#cb15-54" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb15-55"><a href="#cb15-55" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/healthz&#39;</span>,</span>
-<span id="cb15-56"><a href="#cb15-56" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-57"><a href="#cb15-57" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-58"><a href="#cb15-58" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-59"><a href="#cb15-59" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb15-60"><a href="#cb15-60" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb15-61"><a href="#cb15-61" tabindex="-1"></a>);</span>
-<span id="cb15-62"><a href="#cb15-62" tabindex="-1"></a></span>
-<span id="cb15-63"><a href="#cb15-63" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">201</span>, body_text</span>
-<span id="cb15-64"><a href="#cb15-64" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb15-65"><a href="#cb15-65" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/echo?x=1&#39;</span>,</span>
-<span id="cb15-66"><a href="#cb15-66" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb15-67"><a href="#cb15-67" tabindex="-1"></a>  <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/plain&quot;}]&#39;</span>,</span>
-<span id="cb15-68"><a href="#cb15-68" tabindex="-1"></a>  <span class="st">&#39;hello&#39;</span>:<span class="ch">:BLOB</span>,</span>
-<span id="cb15-69"><a href="#cb15-69" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb15-70"><a href="#cb15-70" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb15-71"><a href="#cb15-71" tabindex="-1"></a>);</span>
-<span id="cb15-72"><a href="#cb15-72" tabindex="-1"></a></span>
-<span id="cb15-73"><a href="#cb15-73" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">202</span>, body_text</span>
-<span id="cb15-74"><a href="#cb15-74" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb15-75"><a href="#cb15-75" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/tenant/alice/items/42&#39;</span>,</span>
-<span id="cb15-76"><a href="#cb15-76" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
-<span id="cb15-77"><a href="#cb15-77" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-78"><a href="#cb15-78" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
-<span id="cb15-79"><a href="#cb15-79" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb15-80"><a href="#cb15-80" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
-<span id="cb15-81"><a href="#cb15-81" tabindex="-1"></a>);</span>
-<span id="cb15-82"><a href="#cb15-82" tabindex="-1"></a></span>
-<span id="cb15-83"><a href="#cb15-83" tabindex="-1"></a><span class="kw">SELECT</span> service_name, <span class="kw">method</span>, match_kind, path</span>
-<span id="cb15-84"><a href="#cb15-84" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_http_routes()</span>
-<span id="cb15-85"><a href="#cb15-85" tabindex="-1"></a><span class="kw">WHERE</span> service_name <span class="op">=</span> <span class="st">&#39;http_route_demo&#39;</span></span>
-<span id="cb15-86"><a href="#cb15-86" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> match_kind, path;</span>
-<span id="cb15-87"><a href="#cb15-87" tabindex="-1"></a></span>
-<span id="cb15-88"><a href="#cb15-88" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_route_demo&#39;</span>);</span></code></pre></div>
+<span id="cb15-16"><a href="#cb15-16" tabindex="-1"></a><span class="st">                 </span><span class="ch">&#39;&#39;</span><span class="st"> x=</span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(ducknng_http_query_param(</span><span class="ch">&#39;&#39;</span><span class="st">x</span><span class="ch">&#39;&#39;</span><span class="st">), </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">) ||</span></span>
+<span id="cb15-17"><a href="#cb15-17" tabindex="-1"></a><span class="st">                 </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(content_type, </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">) ||</span></span>
+<span id="cb15-18"><a href="#cb15-18" tabindex="-1"></a><span class="st">                 </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> || coalesce(body_text, </span><span class="ch">&#39;&#39;&#39;&#39;</span><span class="st">)</span></span>
+<span id="cb15-19"><a href="#cb15-19" tabindex="-1"></a><span class="st">          FROM ducknng_http_request(), ducknng_http_request_body()</span></span>
+<span id="cb15-20"><a href="#cb15-20" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb15-21"><a href="#cb15-21" tabindex="-1"></a><span class="st">      )&#39;</span>;</span>
+<span id="cb15-22"><a href="#cb15-22" tabindex="-1"></a></span>
+<span id="cb15-23"><a href="#cb15-23" tabindex="-1"></a><span class="kw">SET</span> VARIABLE http_route_template_sql <span class="op">=</span></span>
+<span id="cb15-24"><a href="#cb15-24" tabindex="-1"></a><span class="st">&#39;SELECT * FROM ducknng_http_text(</span></span>
+<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a><span class="st">        202,</span></span>
+<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a><span class="st">        (</span></span>
+<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a><span class="st">          SELECT route_match_kind || </span><span class="ch">&#39;&#39;</span><span class="st"> </span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
+<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a><span class="st">                 ducknng_http_path_param(</span><span class="ch">&#39;&#39;</span><span class="st">tenant_id</span><span class="ch">&#39;&#39;</span><span class="st">) || </span><span class="ch">&#39;&#39;</span><span class="st">:</span><span class="ch">&#39;&#39;</span><span class="st"> ||</span></span>
+<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a><span class="st">                 ducknng_http_path_param(</span><span class="ch">&#39;&#39;</span><span class="st">item_id</span><span class="ch">&#39;&#39;</span><span class="st">)</span></span>
+<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a><span class="st">          FROM ducknng_http_request()</span></span>
+<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a><span class="st">      )&#39;</span>;</span>
+<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a></span>
+<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
+<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a>  <span class="st">&#39;/healthz&#39;</span>,</span>
+<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a>  <span class="st">&#39;SELECT * FROM ducknng_http_text(200, </span><span class="ch">&#39;&#39;</span><span class="st">ok</span><span class="ch">&#39;&#39;</span><span class="st">)&#39;</span></span>
+<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a>);</span>
+<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a></span>
+<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route(</span>
+<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-43"><a href="#cb15-43" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb15-44"><a href="#cb15-44" tabindex="-1"></a>  <span class="st">&#39;/echo&#39;</span>,</span>
+<span id="cb15-45"><a href="#cb15-45" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_echo_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
+<span id="cb15-46"><a href="#cb15-46" tabindex="-1"></a>);</span>
+<span id="cb15-47"><a href="#cb15-47" tabindex="-1"></a></span>
+<span id="cb15-48"><a href="#cb15-48" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_register_http_route_pattern(</span>
+<span id="cb15-49"><a href="#cb15-49" tabindex="-1"></a>  <span class="st">&#39;http_route_demo&#39;</span>,</span>
+<span id="cb15-50"><a href="#cb15-50" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-51"><a href="#cb15-51" tabindex="-1"></a>  <span class="st">&#39;template&#39;</span>,</span>
+<span id="cb15-52"><a href="#cb15-52" tabindex="-1"></a>  <span class="st">&#39;/tenant/{tenant_id}/items/{item_id}&#39;</span>,</span>
+<span id="cb15-53"><a href="#cb15-53" tabindex="-1"></a>  getvariable(<span class="st">&#39;http_route_template_sql&#39;</span>):<span class="ch">:VARCHAR</span></span>
+<span id="cb15-54"><a href="#cb15-54" tabindex="-1"></a>);</span>
+<span id="cb15-55"><a href="#cb15-55" tabindex="-1"></a></span>
+<span id="cb15-56"><a href="#cb15-56" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">200</span>, body_text</span>
+<span id="cb15-57"><a href="#cb15-57" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-58"><a href="#cb15-58" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/healthz&#39;</span>,</span>
+<span id="cb15-59"><a href="#cb15-59" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-60"><a href="#cb15-60" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-61"><a href="#cb15-61" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-62"><a href="#cb15-62" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-63"><a href="#cb15-63" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-64"><a href="#cb15-64" tabindex="-1"></a>);</span>
+<span id="cb15-65"><a href="#cb15-65" tabindex="-1"></a></span>
+<span id="cb15-66"><a href="#cb15-66" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">201</span>, body_text</span>
+<span id="cb15-67"><a href="#cb15-67" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-68"><a href="#cb15-68" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/echo?x=1&#39;</span>,</span>
+<span id="cb15-69"><a href="#cb15-69" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb15-70"><a href="#cb15-70" tabindex="-1"></a>  <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/plain&quot;}]&#39;</span>,</span>
+<span id="cb15-71"><a href="#cb15-71" tabindex="-1"></a>  <span class="st">&#39;hello&#39;</span>:<span class="ch">:BLOB</span>,</span>
+<span id="cb15-72"><a href="#cb15-72" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-73"><a href="#cb15-73" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-74"><a href="#cb15-74" tabindex="-1"></a>);</span>
+<span id="cb15-75"><a href="#cb15-75" tabindex="-1"></a></span>
+<span id="cb15-76"><a href="#cb15-76" tabindex="-1"></a><span class="kw">SELECT</span> ok, status <span class="op">=</span> <span class="dv">202</span>, body_text</span>
+<span id="cb15-77"><a href="#cb15-77" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb15-78"><a href="#cb15-78" tabindex="-1"></a>  <span class="st">&#39;http://127.0.0.1:18445/tenant/alice/items/42&#39;</span>,</span>
+<span id="cb15-79"><a href="#cb15-79" tabindex="-1"></a>  <span class="st">&#39;GET&#39;</span>,</span>
+<span id="cb15-80"><a href="#cb15-80" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-81"><a href="#cb15-81" tabindex="-1"></a>  <span class="kw">NULL</span>,</span>
+<span id="cb15-82"><a href="#cb15-82" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb15-83"><a href="#cb15-83" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb15-84"><a href="#cb15-84" tabindex="-1"></a>);</span>
+<span id="cb15-85"><a href="#cb15-85" tabindex="-1"></a></span>
+<span id="cb15-86"><a href="#cb15-86" tabindex="-1"></a><span class="kw">SELECT</span> service_name, <span class="kw">method</span>, match_kind, path</span>
+<span id="cb15-87"><a href="#cb15-87" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_http_routes()</span>
+<span id="cb15-88"><a href="#cb15-88" tabindex="-1"></a><span class="kw">WHERE</span> service_name <span class="op">=</span> <span class="st">&#39;http_route_demo&#39;</span></span>
+<span id="cb15-89"><a href="#cb15-89" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> match_kind, path;</span>
+<span id="cb15-90"><a href="#cb15-90" tabindex="-1"></a></span>
+<span id="cb15-91"><a href="#cb15-91" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;http_route_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+------------------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;http_route_demo&#39;, &#39;http://127.0.0.1:18445/_ducknng&#39;, 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
 +------------------------------------------------------------------------------------------------------------------------+
 | true                                                                                                                   |
 +------------------------------------------------------------------------------------------------------------------------+
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_register_http_route(&#39;http_route_demo&#39;, &#39;GET&#39;, &#39;/healthz&#39;, &#39;SELECT 200 AS status, &#39;&#39;text/plain; charset=utf-8&#39;&#39; AS content_type, &#39;&#39;ok&#39;&#39; AS body_text&#39;) |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                                          |
-+---------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------+
+| ducknng_register_http_route(&#39;http_route_demo&#39;, &#39;GET&#39;, &#39;/healthz&#39;, &#39;SELECT * FROM ducknng_http_text(200, &#39;&#39;ok&#39;&#39;)&#39;) |
++-------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                              |
++-------------------------------------------------------------------------------------------------------------------+
 +----------------------------------------------------------------------------------------------------------------------+
 | ducknng_register_http_route(&#39;http_route_demo&#39;, &#39;POST&#39;, &#39;/echo&#39;, CAST(getvariable(&#39;http_route_echo_sql&#39;) AS VARCHAR)) |
 +----------------------------------------------------------------------------------------------------------------------+
@@ -2226,11 +2328,11 @@ inspect the in-flight request through
 +------+----------------+-----------+
 | true | true           | ok        |
 +------+----------------+-----------+
-+------+----------------+---------------------------------+
-|  ok  | (status = 201) |            body_text            |
-+------+----------------+---------------------------------+
-| true | true           | POST /echo?x=1 text/plain hello |
-+------+----------------+---------------------------------+
++------+----------------+-------------------------------------+
+|  ok  | (status = 201) |              body_text              |
++------+----------------+-------------------------------------+
+| true | true           | POST /echo?x=1 x=1 text/plain hello |
++------+----------------+-------------------------------------+
 +------+----------------+-------------------+
 |  ok  | (status = 202) |     body_text     |
 +------+----------------+-------------------+
@@ -2251,24 +2353,28 @@ inspect the in-flight request through
 <p>These route handlers still run inside the service-owned DuckDB
 execution lane, so keep them short and explicit. They are a good fit for
 health checks, thin JSON APIs, and gateway-style fixed operations.
-Prefix and template routes stay low-level on purpose: the current
-request helper exposes <code>route_match_kind</code>,
-<code>route_path</code>, and <code>path_params_json</code>, and the
-handler decides what to do with them. That keeps the route framework
-additive instead of turning it into a second RPC namespace. They are not
-a safe excuse to expose arbitrary SQL to the public internet, and they
-should not synchronously call back into another <code>ducknng</code>
-service in the same runtime when that backend also needs the shared
-serialized execution lane.</p>
-<p>A MotherDuck-style public gateway is still a good fit for this layer,
-but it should use separate backend DuckDB processes or runtime
-boundaries. The main README still stays single-session, so the
-multi-process walkthrough lives separately:
-<code>docs/motherduck_style_demo.md</code> explains the topology,
-<code>demo/motherduck_gateway.py</code> is the live helper,
-<code>make motherduck_demo</code> runs the end-to-end check, and
-<code>make motherduck_rdm</code> renders a dedicated
-<code>demo/motherduck_gateway.Rmd</code> walkthrough with hidden worker
+Prefix and template routes stay low-level on purpose: the request
+context remains explicit, while <code>ducknng_http_header(...)</code>,
+<code>ducknng_http_query_param(...)</code>,
+<code>ducknng_http_cookie(...)</code>, and
+<code>ducknng_http_path_param(...)</code> remove the repetitive
+JSON/string parsing from common handlers. The response helpers such as
+<code>ducknng_http_text(...)</code> and
+<code>ducknng_http_json(...)</code> only build the existing one-row
+route response shape. That keeps the route framework additive instead of
+turning it into a second RPC namespace. They are not a safe excuse to
+expose arbitrary SQL to the public internet, and they should not
+synchronously call back into another <code>ducknng</code> service in the
+same runtime when that backend also needs the shared serialized
+execution lane.</p>
+<p>A public subscriber gateway is a good fit for this layer, but it
+should use separate backend DuckDB processes or runtime boundaries. The
+main README still stays single-session, so the multi-process walkthrough
+lives separately: <code>docs/subscriber_gateway_demo.md</code> explains
+the topology, <code>demo/subscriber_gateway.py</code> is the live
+helper, <code>make subscriber_gateway_demo</code> runs the end-to-end
+check, and <code>make subscriber_gateway_rdm</code> renders a dedicated
+<code>demo/subscriber_gateway.Rmd</code> walkthrough with hidden worker
 setup and live HTTP requests.</p>
 <h3 id="launch-raw-socket-sendrecv-airos-and-inspect-send-status-explicitly">Launch
 raw socket send/recv airos and inspect send status explicitly</h3>
@@ -3909,23 +4015,23 @@ protocol-socket pipe events; a broader HTTP server framework can reuse
 the same request context and monitor concepts without changing the
 framed RPC wire protocol.</p>
 <h2 id="status">Status</h2>
-<p>What is sealed and runnable in v1: NNG transports and socket
+<p>What is sealed and runnable in 0.1.0: NNG transports and socket
 patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP,
 and unary RPC; framed RPC (<code>manifest</code>, opt-in
 <code>exec</code>, raw unary, query sessions); low-level HTTP routes
-with exact, prefix, or template matching plus SQL response rows and
-request-context/body helpers; fast C admission (mTLS, exact
-peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
-authorizer callbacks; bounded per-service pipe-event monitor and
-active-pipe snapshot; body codec layer with built-in providers and
-user-registered codec hooks. See
-<code>function_catalog/functions.md</code> for the exact surface and
-<code>NEWS.md</code> for landed changes.</p>
+with exact, prefix, or template matching plus SQL response rows,
+request-context/body helpers, named request accessors, and one-row
+response builders; fast C admission (mTLS, exact peer-identity
+allowlists, IP/CIDR allowlists, service limits); SQL authorizer
+callbacks; bounded per-service pipe-event monitor and active-pipe
+snapshot; body codec layer with built-in providers and user-registered
+codec hooks. See <code>function_catalog/functions.md</code> for the
+exact surface and <code>NEWS.md</code> for landed changes.</p>
 <p>Intentionally deferred:</p>
 <ul>
-<li>Route-local auth policies, automatic query-parameter helpers, and
-richer web-toolkit conveniences beyond the current low-level route
-framework.</li>
+<li>Route-local auth policies, static asset serving, streaming HTTP
+route helpers, worker lifecycle management, and richer web-toolkit
+conveniences beyond the current low-level route framework.</li>
 <li>CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.</li>
 <li>Full SQL-side decoding of session <code>fetch</code> Arrow batch
 BLOBs into a table-function path.</li>

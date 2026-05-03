@@ -1,7 +1,7 @@
 
-<!-- demo/motherduck_gateway.md is generated from demo/motherduck_gateway.Rmd. Please edit that file -->
+<!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
 
-# MotherDuck-style gateway demo
+# Subscriber gateway demo
 
 This is the dedicated rendered walkthrough for the multi-process
 subscriber gateway topology in `ducknng`. Unlike the main `README`, this
@@ -12,11 +12,11 @@ in-process sketch.
 Render it from the repo root with:
 
 ``` sh
-make motherduck_rdm
+make subscriber_gateway_rdm
 ```
 
-The live helper behind this document is still
-[demo/motherduck_gateway.py](motherduck_gateway.py). The rendered
+The live helper behind this document is
+[demo/subscriber_gateway.py](subscriber_gateway.py). The rendered
 walkthrough keeps the topology generic instead of hardwiring
 `user -> backend` logic into the public API.
 

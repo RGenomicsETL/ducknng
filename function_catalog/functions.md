@@ -101,6 +101,19 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_list_http_routes` | table |  | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)` | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
 | `ducknng_http_request` | table |  | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler. |
 | `ducknng_http_request_body` | table |  | `TABLE(body BLOB, body_text VARCHAR)` | Expose the current HTTP request body while SQL runs inside an active route handler. |
+| `ducknng_http_headers_get` | scalar | `headers_json, name` | `VARCHAR` | Return one header value from ducknng's canonical HTTP header JSON. |
+| `ducknng_http_headers_build` | scalar | `names, values` | `VARCHAR` | Build ducknng's canonical HTTP header JSON from parallel name and value lists. |
+| `ducknng_http_query_param_get` | scalar | `query_string, name` | `VARCHAR` | Return one decoded query-string parameter value. |
+| `ducknng_http_cookie_get` | scalar | `cookie_header, name` | `VARCHAR` | Return one cookie value from a Cookie header string. |
+| `ducknng_http_path_params_get` | scalar | `path_params_json, name` | `VARCHAR` | Return one template-route path parameter from path_params_json. |
+| `ducknng_http_header` | scalar | `name` | `VARCHAR` | Route-local shortcut for reading one request header by name. |
+| `ducknng_http_query_param` | scalar | `name` | `VARCHAR` | Route-local shortcut for reading one decoded query parameter by name. |
+| `ducknng_http_cookie` | scalar | `name` | `VARCHAR` | Route-local shortcut for reading one request cookie by name. |
+| `ducknng_http_path_param` | scalar | `name` | `VARCHAR` | Route-local shortcut for reading one template path parameter by name. |
+| `ducknng_http_response` | table | `status, headers_json, content_type, body, body_text` | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)` | Build the one-row response shape expected by a route handler. |
+| `ducknng_http_text` | table | `status, body_text` | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)` | Build a one-row plain-text HTTP route response. |
+| `ducknng_http_json` | table | `status, body_text` | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)` | Build a one-row JSON HTTP route response from a text body. |
+| `ducknng_http_binary` | table | `status, body` | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)` | Build a one-row binary HTTP route response. |
 
 ## Async I/O
 

@@ -1,6 +1,6 @@
 name: ducknng
 version: 0.1.0
-description: DuckDB binding to the NNG Scalability Protocols library and an Arrow IPC-based RPC framework
+description: DuckDB extension exposing DuckDB SQL and manifest-declared RPC over NNG and HTTP with Arrow IPC payloads
 license: MIT
 excluded_platforms: wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_arm64
 maintainers:

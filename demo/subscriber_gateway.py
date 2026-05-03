@@ -11,7 +11,7 @@ import time
 
 import duckdb
 
-from motherduck_gateway_common import (
+from subscriber_gateway_common import (
     BACKEND_PREFIX,
     GATEWAY_NAME,
     ORPHAN_IDENTITY,
@@ -27,7 +27,7 @@ from motherduck_gateway_common import (
     stop_worker,
     wait_healthz,
 )
-from motherduck_gateway_workers import backend_worker, gateway_worker
+from subscriber_gateway_workers import backend_worker, gateway_worker
 
 
 def run_demo(ext_path: pathlib.Path) -> int:
@@ -163,7 +163,7 @@ def run_demo(ext_path: pathlib.Path) -> int:
             if bad_close_status != 400:
                 raise RuntimeError(f"unexpected invalid close status {bad_close_status}: {bad_close_body!r}")
 
-            print("motherduck gateway demo: ok")
+            print("subscriber gateway demo: ok")
             print("alice rows:", len(alice_rows), alice_rows[0], alice_rows[-1])
             print("bob rows:", len(bob_rows), bob_rows[0], bob_rows[-1])
             return 0
@@ -219,7 +219,7 @@ def worker_main(args: argparse.Namespace) -> int:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the ducknng MotherDuck-style gateway demo.")
+    parser = argparse.ArgumentParser(description="Run the ducknng subscriber gateway demo.")
     parser.add_argument("extension_path", nargs="?", help="Path to the built ducknng.duckdb_extension")
     parser.add_argument("--role", choices=("backend", "gateway"))
     parser.add_argument("--extension", type=pathlib.Path)
@@ -238,7 +238,7 @@ def main() -> int:
             raise SystemExit("worker mode requires --extension and --ready-file")
         return worker_main(args)
     if not args.extension_path:
-        raise SystemExit("usage: demo/motherduck_gateway.py <extension_path>")
+        raise SystemExit("usage: demo/subscriber_gateway.py <extension_path>")
     ext_path = pathlib.Path(args.extension_path).resolve()
     if not ext_path.exists():
         raise SystemExit(f"extension not found: {ext_path}")

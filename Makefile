@@ -1,4 +1,4 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke motherduck_demo motherduck_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke subscriber_gateway_demo subscriber_gateway_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -6,11 +6,11 @@ rpc_smoke: check_configure
 http_smoke: release
 	python3 test/http_smoke.py build/release/ducknng.duckdb_extension
 
-motherduck_demo: release
-	python3 demo/motherduck_gateway.py build/release/ducknng.duckdb_extension
+subscriber_gateway_demo: release
+	python3 demo/subscriber_gateway.py build/release/ducknng.duckdb_extension
 
-motherduck_rdm: release
-	R -e "rmarkdown::render('demo/motherduck_gateway.Rmd')"
+subscriber_gateway_rdm: release
+	R -e "rmarkdown::render('demo/subscriber_gateway.Rmd')"
 
 check_news:
 ifdef BASE
@@ -19,7 +19,7 @@ else
 	python3 scripts/check_news.py
 endif
 
-docs: rdm motherduck_rdm
+docs: rdm subscriber_gateway_rdm
 
 rpc_smoke_r:
 	@if command -v Rscript >/dev/null 2>&1; then \

@@ -71,7 +71,7 @@ query IIIIIIII
 SELECT kind = 'recv', state = 'collected', phase = 'recv', send_done = false, send_ok IS NULL, recv_done, recv_ok, has_reply_frame
 FROM ducknng_aio_status((SELECT recv_aio FROM recv_launch))
 ----
-1	1	1	1	1	1	1	1
+1	1	1	1	1	1	1	0
 
 query III
 SELECT exists, terminal, state IS NULL

@@ -27,7 +27,7 @@ knitr::knit_engines$set(sql = function(options) {
 
 # ducknng
 
-`ducknng` is a pure C DuckDB extension that turns a DuckDB process into an [NNG](https://nng.nanomsg.org/) endpoint — server, client, or both — and adds a small framed RPC layer so a SQL session can call another DuckDB session across `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, or `https://`. RPC row payloads ride on Arrow IPC.
+`ducknng` is a pure C DuckDB extension that exposes DuckDB SQL and manifest-declared RPC over [NNG](https://nng.nanomsg.org/) transports and HTTP/HTTPS carriers. A SQL session can call another DuckDB session across `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, or `https://`, and RPC row payloads ride on Arrow IPC.
 
 It draws on two R packages. [`nanonext`](https://github.com/r-lib/nanonext) supplies the socket and AIO ergonomics; [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) supplies the thin versioned envelope. The DuckDB integration keeps generated SQL injection-safe but assumes the deployment owns the trust boundary — see **Deployment and admission policy** below.
 
@@ -92,9 +92,11 @@ Important details:
 - `ducknng_cancel_query(...)` is best-effort session control, not a replacement for the normal explicit close path
 - runtime teardown is fallback cleanup, not the primary lifecycle model for a long-lived DuckDB process
 
-For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`, `docs/manifest.md`, `docs/security.md`, `docs/registry.md`, `docs/transports.md`, `docs/http.md`, `docs/http_server_framework.md`, `docs/codecs.md`, and `docs/types.md`. A MotherDuck-style multi-process gateway sketch now lives in `docs/motherduck_style_demo.md`; the older non-sealed routing note remains in `docs/mesh_routing_demo.md`. `NEWS.md` summarizes landed changes. TLS supports both file-backed and in-memory PEM material (`ducknng_tls_config_from_files(...)`, `ducknng_tls_config_from_pem(...)`, `ducknng_self_signed_tls_config(...)`); `auth_mode = 2` enables required mTLS peer verification for `tls+tcp://`, `wss://`, and `https://` services.
+For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`, `docs/manifest.md`, `docs/security.md`, `docs/registry.md`, `docs/transports.md`, `docs/http.md`, `docs/http_server_framework.md`, `docs/codecs.md`, and `docs/types.md`. A multi-process subscriber gateway sketch now lives in `docs/subscriber_gateway_demo.md`; the older non-sealed routing note remains in `docs/mesh_routing_demo.md`. `NEWS.md` summarizes landed changes. TLS supports both file-backed and in-memory PEM material (`ducknng_tls_config_from_files(...)`, `ducknng_tls_config_from_pem(...)`, `ducknng_self_signed_tls_config(...)`); `auth_mode = 2` enables required mTLS peer verification for `tls+tcp://`, `wss://`, and `https://` services.
 
 ## Function catalog
+
+The generated catalog is the public SQL surface. Any loaded `ducknng__*` helper names are internal macro implementation details required by DuckDB's stable C API path and are not supported user APIs.
 
 <details>
 <summary>Expand the full generated function catalog</summary>
@@ -493,30 +495,33 @@ SELECT ducknng_start_server(
 );
 
 SET VARIABLE http_route_echo_sql =
-'SELECT 201 AS status,
-        ''text/plain; charset=utf-8'' AS content_type,
+'SELECT * FROM ducknng_http_text(
+        201,
         (
           SELECT method || '' '' || path || ''?'' || coalesce(query_string, '''') ||
+                 '' x='' || coalesce(ducknng_http_query_param(''x''), '''') ||
                  '' '' || coalesce(content_type, '''') ||
                  '' '' || coalesce(body_text, '''')
           FROM ducknng_http_request(), ducknng_http_request_body()
-        ) AS body_text';
+        )
+      )';
 
 SET VARIABLE http_route_template_sql =
-'SELECT 202 AS status,
-        ''text/plain; charset=utf-8'' AS content_type,
+'SELECT * FROM ducknng_http_text(
+        202,
         (
           SELECT route_match_kind || '' '' ||
-                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
-                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+                 ducknng_http_path_param(''tenant_id'') || '':'' ||
+                 ducknng_http_path_param(''item_id'')
           FROM ducknng_http_request()
-        ) AS body_text';
+        )
+      )';
 
 SELECT ducknng_register_http_route(
   'http_route_demo',
   'GET',
   '/healthz',
-  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+  'SELECT * FROM ducknng_http_text(200, ''ok'')'
 );
 
 SELECT ducknng_register_http_route(
@@ -572,9 +577,9 @@ ORDER BY match_kind, path;
 SELECT ducknng_stop_server('http_route_demo');
 ```
 
-These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. Prefix and template routes stay low-level on purpose: the current request helper exposes `route_match_kind`, `route_path`, and `path_params_json`, and the handler decides what to do with them. That keeps the route framework additive instead of turning it into a second RPC namespace. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
+These route handlers still run inside the service-owned DuckDB execution lane, so keep them short and explicit. They are a good fit for health checks, thin JSON APIs, and gateway-style fixed operations. Prefix and template routes stay low-level on purpose: the request context remains explicit, while `ducknng_http_header(...)`, `ducknng_http_query_param(...)`, `ducknng_http_cookie(...)`, and `ducknng_http_path_param(...)` remove the repetitive JSON/string parsing from common handlers. The response helpers such as `ducknng_http_text(...)` and `ducknng_http_json(...)` only build the existing one-row route response shape. That keeps the route framework additive instead of turning it into a second RPC namespace. They are not a safe excuse to expose arbitrary SQL to the public internet, and they should not synchronously call back into another `ducknng` service in the same runtime when that backend also needs the shared serialized execution lane.
 
-A MotherDuck-style public gateway is still a good fit for this layer, but it should use separate backend DuckDB processes or runtime boundaries. The main README still stays single-session, so the multi-process walkthrough lives separately: `docs/motherduck_style_demo.md` explains the topology, `demo/motherduck_gateway.py` is the live helper, `make motherduck_demo` runs the end-to-end check, and `make motherduck_rdm` renders a dedicated `demo/motherduck_gateway.Rmd` walkthrough with hidden worker setup and live HTTP requests.
+A public subscriber gateway is a good fit for this layer, but it should use separate backend DuckDB processes or runtime boundaries. The main README still stays single-session, so the multi-process walkthrough lives separately: `docs/subscriber_gateway_demo.md` explains the topology, `demo/subscriber_gateway.py` is the live helper, `make subscriber_gateway_demo` runs the end-to-end check, and `make subscriber_gateway_rdm` renders a dedicated `demo/subscriber_gateway.Rmd` walkthrough with hidden worker setup and live HTTP requests.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
 
@@ -1698,11 +1703,11 @@ The same pipe-event family is useful beyond admission. NNG exposes `ADD_PRE`, `A
 
 ## Status
 
-What is sealed and runnable in v1: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level HTTP routes with exact, prefix, or template matching plus SQL response rows and request-context/body helpers; fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
+What is sealed and runnable in 0.1.0: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level HTTP routes with exact, prefix, or template matching plus SQL response rows, request-context/body helpers, named request accessors, and one-row response builders; fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks. See `function_catalog/functions.md` for the exact surface and `NEWS.md` for landed changes.
 
 Intentionally deferred:
 
-- Route-local auth policies, automatic query-parameter helpers, and richer web-toolkit conveniences beyond the current low-level route framework.
+- Route-local auth policies, static asset serving, streaming HTTP route helpers, worker lifecycle management, and richer web-toolkit conveniences beyond the current low-level route framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a table-function path.
 - Routing/forwarding and mesh scheduling as sealed APIs — the pipe monitor and active-pipe snapshot are the membership/telemetry foundation that comes first.

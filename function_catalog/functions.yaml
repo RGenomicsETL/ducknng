@@ -943,6 +943,240 @@
       ]
     },
     {
+      "name": "ducknng_http_headers_get",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_headers_get(headers_json, name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return one header value from ducknng's canonical HTTP header JSON.",
+      "notes": [
+        "Header names are matched case-insensitively.",
+        "Duplicate matching header names are rejected instead of returning an arbitrary value.",
+        "Malformed header JSON raises an error; missing names return NULL."
+      ],
+      "examples": [
+        "SELECT ducknng_http_headers_get('[{\"name\":\"Content-Type\",\"value\":\"application/json\"}]', 'content-type');"
+      ]
+    },
+    {
+      "name": "ducknng_http_headers_build",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_headers_build(names, values)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Build ducknng's canonical HTTP header JSON from parallel name and value lists.",
+      "notes": [
+        "names and values must be LIST<VARCHAR> values with the same length.",
+        "Header names are validated as HTTP tokens.",
+        "The output is the same array-of-objects form consumed by ducknng_ncurl() and route response headers_json."
+      ],
+      "examples": [
+        "SELECT ducknng_http_headers_build(list_value('Content-Type'), list_value('application/json'));"
+      ]
+    },
+    {
+      "name": "ducknng_http_query_param_get",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_query_param_get(query_string, name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return one decoded query-string parameter value.",
+      "notes": [
+        "The query string is the raw string without a leading question mark.",
+        "Duplicate matching parameter names are rejected instead of returning an arbitrary value.",
+        "Malformed percent encoding or decoded NUL bytes raise an error; missing names return NULL."
+      ],
+      "examples": [
+        "SELECT ducknng_http_query_param_get('x=1%202', 'x');"
+      ]
+    },
+    {
+      "name": "ducknng_http_cookie_get",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_cookie_get(cookie_header, name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return one cookie value from a Cookie header string.",
+      "notes": [
+        "Duplicate matching cookie names are rejected instead of returning an arbitrary value.",
+        "Malformed cookie strings raise an error; missing names return NULL.",
+        "Use ducknng_http_headers_get(headers_json, 'Cookie') to extract the Cookie header from canonical header JSON."
+      ],
+      "examples": [
+        "SELECT ducknng_http_cookie_get('session=abc; theme=dark', 'theme');"
+      ]
+    },
+    {
+      "name": "ducknng_http_path_params_get",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_path_params_get(path_params_json, name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return one template-route path parameter from path_params_json.",
+      "notes": [
+        "path_params_json is populated by ducknng_http_request() for template routes.",
+        "The JSON value for the requested name must be a string.",
+        "Malformed JSON raises an error; missing names return NULL."
+      ],
+      "examples": [
+        "SELECT ducknng_http_path_params_get('{\"tenant_id\":\"alice\"}', 'tenant_id');"
+      ]
+    },
+    {
+      "name": "ducknng_http_header",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_header(name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Route-local shortcut for reading one request header by name.",
+      "notes": [
+        "This scalar macro reads headers_json from ducknng_http_request() for the active route.",
+        "Outside an active route handler it returns NULL.",
+        "It preserves the strict duplicate and malformed-header behavior of ducknng_http_headers_get()."
+      ],
+      "examples": [
+        "SELECT ducknng_http_header('Authorization');"
+      ]
+    },
+    {
+      "name": "ducknng_http_query_param",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_query_param(name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Route-local shortcut for reading one decoded query parameter by name.",
+      "notes": [
+        "This scalar macro reads query_string from ducknng_http_request() for the active route.",
+        "Outside an active route handler it returns NULL.",
+        "It preserves the strict duplicate and malformed-query behavior of ducknng_http_query_param_get()."
+      ],
+      "examples": [
+        "SELECT ducknng_http_query_param('page');"
+      ]
+    },
+    {
+      "name": "ducknng_http_cookie",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_cookie(name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Route-local shortcut for reading one request cookie by name.",
+      "notes": [
+        "This scalar macro reads the Cookie header from ducknng_http_request() for the active route.",
+        "Outside an active route handler it returns NULL.",
+        "It preserves the strict duplicate and malformed-cookie behavior of ducknng_http_cookie_get()."
+      ],
+      "examples": [
+        "SELECT ducknng_http_cookie('session');"
+      ]
+    },
+    {
+      "name": "ducknng_http_path_param",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_path_param(name)",
+      "returns": "VARCHAR",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Route-local shortcut for reading one template path parameter by name.",
+      "notes": [
+        "This scalar macro reads path_params_json from ducknng_http_request() for the active route.",
+        "Outside an active route handler it returns NULL.",
+        "It preserves the strict malformed-JSON behavior of ducknng_http_path_params_get()."
+      ],
+      "examples": [
+        "SELECT ducknng_http_path_param('tenant_id');"
+      ]
+    },
+    {
+      "name": "ducknng_http_response",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_response(status, headers_json, content_type, body, body_text)",
+      "returns": "TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Build the one-row response shape expected by a route handler.",
+      "notes": [
+        "This table macro preserves the existing route response contract rather than creating a new routing namespace.",
+        "Exactly one of body or body_text should be non-NULL.",
+        "Use ducknng_http_headers_build() when custom response headers are needed."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_response(200, NULL, 'text/plain; charset=utf-8', NULL, 'ok');"
+      ]
+    },
+    {
+      "name": "ducknng_http_text",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_text(status, body_text)",
+      "returns": "TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Build a one-row plain-text HTTP route response.",
+      "notes": [
+        "This is a table macro over ducknng_http_response().",
+        "The content type is text/plain; charset=utf-8.",
+        "It is route-handler ergonomics only and does not add a manifest RPC method."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_text(200, 'ok');"
+      ]
+    },
+    {
+      "name": "ducknng_http_json",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_json(status, body_text)",
+      "returns": "TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Build a one-row JSON HTTP route response from a text body.",
+      "notes": [
+        "This is a table macro over ducknng_http_response().",
+        "The content type is application/json; charset=utf-8.",
+        "The macro does not validate that body_text is valid JSON."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_json(200, '{\"ok\":true}');"
+      ]
+    },
+    {
+      "name": "ducknng_http_binary",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_binary(status, body)",
+      "returns": "TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Build a one-row binary HTTP route response.",
+      "notes": [
+        "This is a table macro over ducknng_http_response().",
+        "The content type is application/octet-stream.",
+        "Use ducknng_http_response() directly when custom headers or a different binary content type are needed."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_binary(200, from_hex('0102'));"
+      ]
+    },
+    {
       "name": "ducknng_request_raw_aio",
       "kind": "scalar",
       "category": "Async I/O",

@@ -1,15 +1,15 @@
-# MotherDuck-style gateway demo
+# Subscriber gateway demo
 
-The live helper for the multi-process subscriber gateway now lives in [demo/motherduck_gateway.py](/root/ducknng/demo/motherduck_gateway.py:1):
+The live helper for the multi-process subscriber gateway now lives in `demo/subscriber_gateway.py`:
 
 ```sh
-make motherduck_demo
+make subscriber_gateway_demo
 ```
 
-The rendered walkthrough for the same topology lives in [demo/motherduck_gateway.Rmd](/root/ducknng/demo/motherduck_gateway.Rmd:1):
+The rendered walkthrough for the same topology lives in `demo/subscriber_gateway.Rmd`:
 
 ```sh
-make motherduck_rdm
+make subscriber_gateway_rdm
 ```
 
 This is the honest `ducknng` shape today:
@@ -21,7 +21,7 @@ This is the honest `ducknng` shape today:
 - backend query sessions stay private to those workers
 - the gateway owns the public continuation-token contract
 
-That is the important MotherDuck/OpenDuck property at this layer: public API edge in front of a worker plane, with query-session affinity staying on the private side.
+That is the important property at this layer: a public API edge in front of a worker plane, with query-session affinity staying on the private side.
 
 ## Why the gateway uses raw session helpers
 

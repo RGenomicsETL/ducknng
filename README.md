@@ -3,12 +3,11 @@
 
 # ducknng
 
-`ducknng` is a pure C DuckDB extension that turns a DuckDB process into
-an [NNG](https://nng.nanomsg.org/) endpoint — server, client, or both —
-and adds a small framed RPC layer so a SQL session can call another
-DuckDB session across `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`,
-`ws://`, `wss://`, `http://`, or `https://`. RPC row payloads ride on
-Arrow IPC.
+`ducknng` is a pure C DuckDB extension that exposes DuckDB SQL and
+manifest-declared RPC over [NNG](https://nng.nanomsg.org/) transports
+and HTTP/HTTPS carriers. A SQL session can call another DuckDB session
+across `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`,
+`http://`, or `https://`, and RPC row payloads ride on Arrow IPC.
 
 It draws on two R packages.
 [`nanonext`](https://github.com/r-lib/nanonext) supplies the socket and
@@ -133,8 +132,8 @@ Important details:
 For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`,
 `docs/manifest.md`, `docs/security.md`, `docs/registry.md`,
 `docs/transports.md`, `docs/http.md`, `docs/http_server_framework.md`,
-`docs/codecs.md`, and `docs/types.md`. A MotherDuck-style multi-process
-gateway sketch now lives in `docs/motherduck_style_demo.md`; the older
+`docs/codecs.md`, and `docs/types.md`. A multi-process subscriber
+gateway sketch now lives in `docs/subscriber_gateway_demo.md`; the older
 non-sealed routing note remains in `docs/mesh_routing_demo.md`.
 `NEWS.md` summarizes landed changes. TLS supports both file-backed and
 in-memory PEM material (`ducknng_tls_config_from_files(...)`,
@@ -144,6 +143,10 @@ mTLS peer verification for `tls+tcp://`, `wss://`, and `https://`
 services.
 
 ## Function catalog
+
+The generated catalog is the public SQL surface. Any loaded `ducknng__*`
+helper names are internal macro implementation details required by
+DuckDB’s stable C API path and are not supported user APIs.
 
 <details>
 <summary>
@@ -253,6 +256,19 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_list_http_routes`              | table  |                                                                                    | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR)`                                                                                                                                                                                                                   | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
 | `ducknng_http_request`                  | table  |                                                                                    | `TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)` | Expose the current HTTP request context while SQL runs inside an active route handler.                                 |
 | `ducknng_http_request_body`             | table  |                                                                                    | `TABLE(body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                                                                                   | Expose the current HTTP request body while SQL runs inside an active route handler.                                    |
+| `ducknng_http_headers_get`              | scalar | `headers_json, name`                                                               | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Return one header value from ducknng’s canonical HTTP header JSON.                                                     |
+| `ducknng_http_headers_build`            | scalar | `names, values`                                                                    | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Build ducknng’s canonical HTTP header JSON from parallel name and value lists.                                         |
+| `ducknng_http_query_param_get`          | scalar | `query_string, name`                                                               | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Return one decoded query-string parameter value.                                                                       |
+| `ducknng_http_cookie_get`               | scalar | `cookie_header, name`                                                              | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Return one cookie value from a Cookie header string.                                                                   |
+| `ducknng_http_path_params_get`          | scalar | `path_params_json, name`                                                           | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Return one template-route path parameter from path_params_json.                                                        |
+| `ducknng_http_header`                   | scalar | `name`                                                                             | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Route-local shortcut for reading one request header by name.                                                           |
+| `ducknng_http_query_param`              | scalar | `name`                                                                             | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Route-local shortcut for reading one decoded query parameter by name.                                                  |
+| `ducknng_http_cookie`                   | scalar | `name`                                                                             | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Route-local shortcut for reading one request cookie by name.                                                           |
+| `ducknng_http_path_param`               | scalar | `name`                                                                             | `VARCHAR`                                                                                                                                                                                                                                                                                                                                                                               | Route-local shortcut for reading one template path parameter by name.                                                  |
+| `ducknng_http_response`                 | table  | `status, headers_json, content_type, body, body_text`                              | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                       | Build the one-row response shape expected by a route handler.                                                          |
+| `ducknng_http_text`                     | table  | `status, body_text`                                                                | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                       | Build a one-row plain-text HTTP route response.                                                                        |
+| `ducknng_http_json`                     | table  | `status, body_text`                                                                | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                       | Build a one-row JSON HTTP route response from a text body.                                                             |
+| `ducknng_http_binary`                   | table  | `status, body`                                                                     | `TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                                                                                                                       | Build a one-row binary HTTP route response.                                                                            |
 
 ## Async I/O
 
@@ -850,30 +866,33 @@ SELECT ducknng_start_server(
 );
 
 SET VARIABLE http_route_echo_sql =
-'SELECT 201 AS status,
-        ''text/plain; charset=utf-8'' AS content_type,
+'SELECT * FROM ducknng_http_text(
+        201,
         (
           SELECT method || '' '' || path || ''?'' || coalesce(query_string, '''') ||
+                 '' x='' || coalesce(ducknng_http_query_param(''x''), '''') ||
                  '' '' || coalesce(content_type, '''') ||
                  '' '' || coalesce(body_text, '''')
           FROM ducknng_http_request(), ducknng_http_request_body()
-        ) AS body_text';
+        )
+      )';
 
 SET VARIABLE http_route_template_sql =
-'SELECT 202 AS status,
-        ''text/plain; charset=utf-8'' AS content_type,
+'SELECT * FROM ducknng_http_text(
+        202,
         (
           SELECT route_match_kind || '' '' ||
-                 json_extract_string(path_params_json::JSON, ''$.tenant_id'') || '':'' ||
-                 json_extract_string(path_params_json::JSON, ''$.item_id'')
+                 ducknng_http_path_param(''tenant_id'') || '':'' ||
+                 ducknng_http_path_param(''item_id'')
           FROM ducknng_http_request()
-        ) AS body_text';
+        )
+      )';
 
 SELECT ducknng_register_http_route(
   'http_route_demo',
   'GET',
   '/healthz',
-  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text'
+  'SELECT * FROM ducknng_http_text(200, ''ok'')'
 );
 
 SELECT ducknng_register_http_route(
@@ -934,11 +953,11 @@ SELECT ducknng_stop_server('http_route_demo');
     +------------------------------------------------------------------------------------------------------------------------+
     | true                                                                                                                   |
     +------------------------------------------------------------------------------------------------------------------------+
-    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | ducknng_register_http_route('http_route_demo', 'GET', '/healthz', 'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type, ''ok'' AS body_text') |
-    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | true                                                                                                                                                          |
-    +---------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    +-------------------------------------------------------------------------------------------------------------------+
+    | ducknng_register_http_route('http_route_demo', 'GET', '/healthz', 'SELECT * FROM ducknng_http_text(200, ''ok'')') |
+    +-------------------------------------------------------------------------------------------------------------------+
+    | true                                                                                                              |
+    +-------------------------------------------------------------------------------------------------------------------+
     +----------------------------------------------------------------------------------------------------------------------+
     | ducknng_register_http_route('http_route_demo', 'POST', '/echo', CAST(getvariable('http_route_echo_sql') AS VARCHAR)) |
     +----------------------------------------------------------------------------------------------------------------------+
@@ -954,11 +973,11 @@ SELECT ducknng_stop_server('http_route_demo');
     +------+----------------+-----------+
     | true | true           | ok        |
     +------+----------------+-----------+
-    +------+----------------+---------------------------------+
-    |  ok  | (status = 201) |            body_text            |
-    +------+----------------+---------------------------------+
-    | true | true           | POST /echo?x=1 text/plain hello |
-    +------+----------------+---------------------------------+
+    +------+----------------+-------------------------------------+
+    |  ok  | (status = 201) |              body_text              |
+    +------+----------------+-------------------------------------+
+    | true | true           | POST /echo?x=1 x=1 text/plain hello |
+    +------+----------------+-------------------------------------+
     +------+----------------+-------------------+
     |  ok  | (status = 202) |     body_text     |
     +------+----------------+-------------------+
@@ -980,23 +999,27 @@ SELECT ducknng_stop_server('http_route_demo');
 These route handlers still run inside the service-owned DuckDB execution
 lane, so keep them short and explicit. They are a good fit for health
 checks, thin JSON APIs, and gateway-style fixed operations. Prefix and
-template routes stay low-level on purpose: the current request helper
-exposes `route_match_kind`, `route_path`, and `path_params_json`, and
-the handler decides what to do with them. That keeps the route framework
+template routes stay low-level on purpose: the request context remains
+explicit, while `ducknng_http_header(...)`,
+`ducknng_http_query_param(...)`, `ducknng_http_cookie(...)`, and
+`ducknng_http_path_param(...)` remove the repetitive JSON/string parsing
+from common handlers. The response helpers such as
+`ducknng_http_text(...)` and `ducknng_http_json(...)` only build the
+existing one-row route response shape. That keeps the route framework
 additive instead of turning it into a second RPC namespace. They are not
 a safe excuse to expose arbitrary SQL to the public internet, and they
 should not synchronously call back into another `ducknng` service in the
 same runtime when that backend also needs the shared serialized
 execution lane.
 
-A MotherDuck-style public gateway is still a good fit for this layer,
-but it should use separate backend DuckDB processes or runtime
-boundaries. The main README still stays single-session, so the
-multi-process walkthrough lives separately:
-`docs/motherduck_style_demo.md` explains the topology,
-`demo/motherduck_gateway.py` is the live helper, `make motherduck_demo`
-runs the end-to-end check, and `make motherduck_rdm` renders a dedicated
-`demo/motherduck_gateway.Rmd` walkthrough with hidden worker setup and
+A public subscriber gateway is a good fit for this layer, but it should
+use separate backend DuckDB processes or runtime boundaries. The main
+README still stays single-session, so the multi-process walkthrough
+lives separately: `docs/subscriber_gateway_demo.md` explains the
+topology, `demo/subscriber_gateway.py` is the live helper,
+`make subscriber_gateway_demo` runs the end-to-end check, and
+`make subscriber_gateway_rdm` renders a dedicated
+`demo/subscriber_gateway.Rmd` walkthrough with hidden worker setup and
 live HTTP requests.
 
 ### Launch raw socket send/recv airos and inspect send status explicitly
@@ -2663,22 +2686,24 @@ framed RPC wire protocol.
 
 ## Status
 
-What is sealed and runnable in v1: NNG transports and socket patterns;
-first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary
-RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions);
-low-level HTTP routes with exact, prefix, or template matching plus SQL
-response rows and request-context/body helpers; fast C admission (mTLS,
-exact peer-identity allowlists, IP/CIDR allowlists, service limits); SQL
-authorizer callbacks; bounded per-service pipe-event monitor and
-active-pipe snapshot; body codec layer with built-in providers and
-user-registered codec hooks. See `function_catalog/functions.md` for the
-exact surface and `NEWS.md` for landed changes.
+What is sealed and runnable in 0.1.0: NNG transports and socket
+patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP,
+and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query
+sessions); low-level HTTP routes with exact, prefix, or template
+matching plus SQL response rows, request-context/body helpers, named
+request accessors, and one-row response builders; fast C admission
+(mTLS, exact peer-identity allowlists, IP/CIDR allowlists, service
+limits); SQL authorizer callbacks; bounded per-service pipe-event
+monitor and active-pipe snapshot; body codec layer with built-in
+providers and user-registered codec hooks. See
+`function_catalog/functions.md` for the exact surface and `NEWS.md` for
+landed changes.
 
 Intentionally deferred:
 
-- Route-local auth policies, automatic query-parameter helpers, and
-  richer web-toolkit conveniences beyond the current low-level route
-  framework.
+- Route-local auth policies, static asset serving, streaming HTTP route
+  helpers, worker lifecycle management, and richer web-toolkit
+  conveniences beyond the current low-level route framework.
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
   table-function path.

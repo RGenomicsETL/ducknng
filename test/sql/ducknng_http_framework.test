@@ -188,6 +188,155 @@ FROM ducknng_ncurl(
 ----
 1	1	template alice:42
 
+query T
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-Test', 'Content-Type'),
+    list_value('alpha', 'text/plain; charset=utf-8')
+  ),
+  'content-type'
+)
+----
+text/plain; charset=utf-8
+
+query T
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-Test'),
+    list_value('a"b')
+  ),
+  'X-Test'
+)
+----
+a"b
+
+query T
+SELECT ducknng_http_path_params_get('{"tenant_id":"al' || chr(92) || '"ice"}', 'tenant_id')
+----
+al"ice
+
+statement error
+SELECT ducknng_http_headers_get(
+  ducknng_http_headers_build(
+    list_value('X-User', 'X-User'),
+    list_value('alice', 'mallory')
+  ),
+  'X-User'
+)
+----
+ducknng: duplicate HTTP header 'X-User'
+
+statement error
+SELECT ducknng_http_query_param_get('role=user&role=admin', 'role')
+----
+ducknng: duplicate query parameter 'role'
+
+statement error
+SELECT ducknng_http_query_param_get('auth%00=1', 'auth')
+----
+ducknng: query parameter name contains NUL after percent decoding
+
+statement error
+SELECT ducknng_http_cookie_get('theme=light; theme=dark', 'theme')
+----
+ducknng: duplicate cookie 'theme'
+
+statement ok
+SET VARIABLE http_route_helpers_sql =
+'SELECT * FROM ducknng_http_text(
+   200,
+   (
+     SELECT coalesce(ducknng_http_query_param(''x''), '''') || ''|'' ||
+            coalesce(ducknng_http_header(''X-Test''), '''') || ''|'' ||
+            coalesce(ducknng_http_cookie(''theme''), '''') || ''|'' ||
+            coalesce(ducknng_http_path_param(''tenant_id''), '''')
+   )
+ )'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route_pattern(
+  'http_route_api',
+  'GET',
+  'template',
+  '/inspect/{tenant_id}',
+  getvariable('http_route_helpers_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT ok, status = 200, body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/inspect/alice?x=1%202',
+  'GET',
+  ducknng_http_headers_build(
+    list_value('Cookie', 'X-Test'),
+    list_value('session=abc; theme=dark', 'beta')
+  ),
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1 2|beta|dark|alice
+
+statement ok
+SET VARIABLE http_route_json_sql =
+'SELECT * FROM ducknng_http_json(200, ''{"ok":true}'')'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'GET',
+  '/json',
+  getvariable('http_route_json_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIIT
+SELECT ok,
+       status = 200,
+       ducknng_http_headers_get(headers_json, 'Content-Type') = 'application/json; charset=utf-8',
+       body_text
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/json',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	1	{"ok":true}
+
+statement ok
+SET VARIABLE http_route_binary_sql =
+'SELECT * FROM ducknng_http_binary(200, from_hex(''0102''))'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_route_api',
+  'GET',
+  '/bin',
+  getvariable('http_route_binary_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT ok, status = 200, octet_length(body), body_text IS NULL
+FROM ducknng_ncurl(
+  getvariable('http_route_base')::VARCHAR || '/bin',
+  'GET',
+  NULL,
+  NULL,
+  2000,
+  0::UBIGINT
+)
+----
+1	1	2	1
+
 query IIII
 SELECT count(*)::INTEGER,
        sum(CASE WHEN match_kind = 'exact' THEN 1 ELSE 0 END)::INTEGER,
@@ -196,7 +345,7 @@ SELECT count(*)::INTEGER,
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_route_api'
 ----
-5	3	1	1
+8	5	1	2
 
 query III
 SELECT ok, status = 413, error IS NULL

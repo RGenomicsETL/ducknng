@@ -11,8 +11,8 @@ NEWS_PATH = "NEWS.md"
 GENERATED_ONLY = {
     "README.md",
     "README.html",
-    "demo/motherduck_gateway.md",
-    "demo/motherduck_gateway.html",
+    "demo/subscriber_gateway.md",
+    "demo/subscriber_gateway.html",
     "function_catalog/functions.md",
     "function_catalog/functions.tsv",
 }
