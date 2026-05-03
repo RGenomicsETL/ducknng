@@ -150,7 +150,7 @@ DuckDB’s stable C API path and are not supported user APIs.
 
 <details>
 <summary>
-Expand the full generated function catalog
+<strong>Expand the full generated function catalog</strong>
 </summary>
 
 # Function Catalog

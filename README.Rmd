@@ -98,14 +98,15 @@ For the deeper write-ups see `docs/lifetime.md`, `docs/protocol.md`, `docs/manif
 
 The generated catalog is the public SQL surface. Any loaded `ducknng__*` helper names are internal macro implementation details required by DuckDB's stable C API path and are not supported user APIs.
 
-<details>
-<summary>Expand the full generated function catalog</summary>
-
 ```{r function-catalog, echo=FALSE, results='asis'}
-knitr::asis_output(paste(readLines("function_catalog/functions.md"), collapse = "\n"))
+catalog <- paste(readLines("function_catalog/functions.md"), collapse = "\n")
+knitr::asis_output(paste0(
+  "<details>\n",
+  "<summary><strong>Expand the full generated function catalog</strong></summary>\n\n",
+  catalog,
+  "\n\n</details>\n"
+))
 ```
-
-</details>
 
 ## Examples
 
