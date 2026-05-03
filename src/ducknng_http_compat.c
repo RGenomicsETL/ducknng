@@ -279,7 +279,15 @@ static int ducknng_http_apply_headers_json_common(const char *headers_json,
     }
     p++;
     ducknng_http_skip_ws(&p);
-    if (*p == ']') return 0;
+    if (*p == ']') {
+        p++;
+        ducknng_http_skip_ws(&p);
+        if (*p != '\0') {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after headers_json");
+            return -1;
+        }
+        return 0;
+    }
     for (;;) {
         char *key = NULL;
         char *value = NULL;
@@ -356,6 +364,12 @@ static int ducknng_http_apply_headers_json_common(const char *headers_json,
             if (errmsg) *errmsg = ducknng_strdup("ducknng: each headers_json object must contain non-empty name and value strings");
             return -1;
         }
+        if (!ducknng_http_token_is_valid(name)) {
+            duckdb_free(name);
+            duckdb_free(header_value);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header name must be an HTTP token");
+            return -1;
+        }
         rv = add_header(target, name, header_value);
         duckdb_free(name);
         duckdb_free(header_value);
@@ -368,7 +382,15 @@ static int ducknng_http_apply_headers_json_common(const char *headers_json,
             p++;
             continue;
         }
-        if (*p == ']') return 0;
+        if (*p == ']') {
+            p++;
+            ducknng_http_skip_ws(&p);
+            if (*p != '\0') {
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after headers_json");
+                return -1;
+            }
+            return 0;
+        }
         if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or ']' in headers_json");
         return -1;
     }

@@ -1764,7 +1764,7 @@ static int register_aio_status_macro(duckdb_connection con) {
 static int register_aio_collect_macro(duckdb_connection con) {
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_aio_collect(aio_ids, wait_ms) AS TABLE "
-        "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng__aio_wait_any(aio_ids, wait_ms) AS have_ready) "
+        "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng_aio_wait(aio_ids, wait_ms) AS have_ready) "
         "SELECT struct_extract(r, 'aio_id') AS aio_id, "
         "       struct_extract(r, 'ok') AS ok, "
         "       struct_extract(r, 'error') AS error, "
@@ -1801,7 +1801,7 @@ static int register_aio_collect_decoded_macro(duckdb_connection con) {
 static int register_ncurl_aio_collect_macro(duckdb_connection con) {
     const char *sql =
         "CREATE OR REPLACE MACRO ducknng_ncurl_aio_collect(aio_ids, wait_ms) AS TABLE "
-        "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng__aio_wait_any(aio_ids, wait_ms) AS have_ready) "
+        "WITH _input AS (SELECT aio_ids AS aio_ids, ducknng_aio_wait(aio_ids, wait_ms) AS have_ready) "
         "SELECT struct_extract(r, 'aio_id') AS aio_id, "
         "       struct_extract(r, 'ok') AS ok, "
         "       struct_extract(r, 'status') AS status, "
@@ -1848,9 +1848,9 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_aio_ready", 1, ducknng_aio_ready_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_aio_cancel", 1, ducknng_aio_cancel_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_aio_drop", 1, ducknng_aio_drop_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!register_aio_wait_any_scalar_named(con, ctx, "ducknng_aio_wait")) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng__aio_collectable", 1, ducknng_aio_collectable_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng__ncurl_aio_collectable", 1, ducknng_ncurl_aio_collectable_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!register_aio_wait_any_scalar_named(con, ctx, "ducknng__aio_wait_any")) return 0;
     if (!register_aio_collect_row_scalar_named(con, ctx, "ducknng__aio_collect_row")) return 0;
     if (!register_ncurl_aio_collect_row_scalar_named(con, ctx, "ducknng__ncurl_aio_collect_row")) return 0;
     if (!register_aio_status_scalar_named(con, ctx, "ducknng__aio_status_row")) return 0;

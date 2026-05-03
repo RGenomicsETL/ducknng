@@ -137,6 +137,24 @@ int ducknng_ascii_iends_with(const char *s, const char *suffix) {
     return ducknng_ascii_ieq(s + slen - suffix_len, suffix);
 }
 
+int ducknng_http_token_is_valid(const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    if (!s || !s[0]) return 0;
+    while (*p) {
+        unsigned char ch = *p++;
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '0' && ch <= '9') || ch == '!' || ch == '#' ||
+            ch == '$' || ch == '%' || ch == '&' || ch == '\'' ||
+            ch == '*' || ch == '+' || ch == '-' || ch == '.' ||
+            ch == '^' || ch == '_' || ch == '`' || ch == '|' ||
+            ch == '~') {
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
 static char *ducknng_dup_bytes(const char *src, size_t len) {
     char *out = (char *)duckdb_malloc(len + 1);
     if (!out) return NULL;

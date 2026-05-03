@@ -15,6 +15,18 @@ FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '{}', NULL, 1000, 0::UBIGINT)
 ----
 0	1	1
 
+query III
+SELECT ok, status IS NULL, error = 'ducknng: trailing characters after headers_json'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[] trailing', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
+query III
+SELECT ok, status IS NULL, error = 'ducknng: HTTP header name must be an HTTP token'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[{"name":"Bad Header","value":"x"}]', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
 statement ok
 CREATE TEMP TABLE ncurl_bad_aio AS
 SELECT ducknng_ncurl_aio('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, 0::UBIGINT) AS aio

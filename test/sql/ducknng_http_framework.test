@@ -210,6 +210,11 @@ SELECT ducknng_http_headers_get(
 ----
 a"b
 
+statement error
+SELECT ducknng_http_headers_build(list_value('Bad Header'), list_value('x'))
+----
+ducknng: headers_build requires header names to be HTTP tokens
+
 query T
 SELECT ducknng_http_path_params_get('{"tenant_id":"al' || chr(92) || '"ice"}', 'tenant_id')
 ----

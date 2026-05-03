@@ -1778,14 +1778,14 @@ static char *ducknng_http_route_method_normalize_dup(const char *method, char **
     for (i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)method[i];
         if ((ch >= 'a' && ch <= 'z')) ch = (unsigned char)(ch - ('a' - 'A'));
-        if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-')) {
-            duckdb_free(out);
-            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route method must be an HTTP token");
-            return NULL;
-        }
         out[i] = (char)ch;
     }
     out[len] = '\0';
+    if (!ducknng_http_token_is_valid(out)) {
+        duckdb_free(out);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route method must be an HTTP token");
+        return NULL;
+    }
     return out;
 }
 

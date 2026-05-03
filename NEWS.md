@@ -5,6 +5,8 @@
 ### Latest additions
 
 - Reworked community-extension submission generation to follow the `duckhts` pattern: `function_catalog/functions.yaml` now carries a `community_extension` block, `function_catalog/generate_function_catalog.py` renders both the local catalog and the DuckDB community descriptor from one manifest plus the repo `description.yml` version, and the rendered submission lands in `community-extensions/extensions/ducknng/description.yml` through a checked-in template.
+- Added public `ducknng_aio_wait(...)` as the AIO lifecycle primitive for waiting on one of several handles without collecting or dropping the result, and removed direct test reliance on the internal macro helper that previously backed collection.
+- Tightened HTTP header JSON handling so request/response header adapters reject trailing garbage and non-token header names consistently with the SQL header-builder contract.
 - Sealed the small HTTP route toolkit surface around strict header/query/cookie/path accessors plus one-row response-builder macros, updated the generated function catalog to match the loaded SQL surface, and removed the unused destructive internal `ducknng__aio_mark_collected` helper from registration.
 - Updated extension metadata to describe the current product shape: DuckDB SQL and manifest-declared RPC over NNG and HTTP with Arrow IPC payloads.
 - Renamed the multi-process topology docs and demo from the earlier branded wording to the generic subscriber-gateway shape: `docs/subscriber_gateway_demo.md`, `demo/subscriber_gateway.py`, `make subscriber_gateway_demo`, and `make subscriber_gateway_rdm`.
@@ -48,7 +50,7 @@
 - Sealed the current query-session ownership contract around `session_token` plus optional verified mTLS owner identity; future envelope-level application authentication is treated as additive rather than a prerequisite for the current session family.
 - Clarified resource-quota ownership: current built-in quotas are service-wide plus verified-peer-identity session caps; SQL-authorizer principals remain deployment policy/audit metadata until a future principal-owned quota model lands.
 - Documented and tested SQL-side decoding of `ducknng_fetch_query(...)` Arrow IPC payloads through `ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream')`.
-- Froze the async contract as raw-result-first: NNG/RPC AIO collection returns frames, HTTP AIO collection returns HTTP-shaped rows, and structured async wrappers are optional future conveniences rather than a second job protocol.
+- Froze the async contract as raw-result-first: NNG/RPC AIO collection returns frames, HTTP AIO collection returns HTTP-shaped rows, and structured async wrappers must remain layered conveniences rather than a second job protocol.
 - Added a stable transport scheme matrix covering which SQL surfaces accept NNG schemes, HTTP/HTTPS schemes, and TLS handles, and expanded AIO lifecycle/family-mismatch regression coverage.
 - Extended `ducknng_set_service_limits(name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity]]])`; the manifest continues to expose server-owned session policy, while `ducknng_list_servers()` exposes live service limits. Exceeding the service-wide session cap makes `query_open` fail with `ducknng: max open sessions exceeded`, the per-verified-peer-identity session cap fails with `ducknng: max sessions per peer identity exceeded`, the active-pipe cap rejects excess NNG pipes at `ADD_PRE`, and the in-flight cap rejects excess requests before SQL authorizers and dispatch.
 - Added `ducknng_read_monitor(name, after_seq, max_events)` for bounded per-service NNG pipe event streams based on `nng_pipe_notify(..., ADD_PRE/ADD_POST/REM_POST, ...)`, including sequence, timestamp, pipe id, transport, admission result, denial reason, remote address, and verified peer identity when available. Added `ducknng_monitor_status(name)` for ring/counter metadata and `ducknng_list_pipes(name)` for the current active NNG pipe snapshot, plus `active_pipes`/`max_active_pipes` and `inflight_requests`/`max_inflight_requests` in `ducknng_list_servers()`.
@@ -117,7 +119,7 @@
 
 ## Planned next steps
 
-- Extend the async RPC wrapper family beyond the first raw unary slice only where that can be done honestly on top of the existing aio substrate, now that the raw HTTP/HTTPS `ducknng_ncurl_aio(...)` helper is in place.
-- Continue Arrow type coverage beyond the current practical core where needed, and add a clean SQL-side decoder path for fetched Arrow payloads if richer session ergonomics are desired.
-- Decide whether the current bearer-token plus optional mTLS owner-identity model is the sealed session identity contract, document the single serialized DuckDB execution-lane model clearly, and reserve isolated per-session/per-request DuckDB execution for deployments that need hard state isolation.
+- Keep future async additions on the current aio substrate: add lifecycle, wait, collect, and decode conveniences only when they preserve the one-pending-operation handle model.
+- Continue Arrow type coverage beyond the current practical core only where the mapping can be documented and tested precisely.
+- Keep the current session identity and shared serialized execution-lane contracts explicit, while leaving harder per-session/per-request DuckDB isolation to deployment topologies or future opt-in work.
 - Keep tightening lifetime and concurrency behavior around runtime-owned sockets, sessions, and aio handles now that the transport matrix is broader.

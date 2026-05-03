@@ -98,7 +98,7 @@ These items were worth resolving before the API hardens further and should stay 
 - fetched Arrow IPC session payloads are decoded through `ducknng_parse_body(payload, 'application/vnd.apache.arrow.stream')`, with regression coverage in the session smoke test
 - `docs/security.md` now states that arbitrary SQL execution is a deployment-owned capability, not an automatic sandbox, and names recommended exposure profiles plus the internal SQL-injection boundary
 - the transport matrix is documented in `docs/transports.md` and summarized in the README, including which schemes accept TLS handles and which surfaces reject the other family
-- the async contract is raw-result-first: NNG/RPC aio returns frames, HTTP aio returns HTTP-shaped rows, and structured async wrappers are optional future conveniences
+- the async contract is raw-result-first: NNG/RPC aio returns frames, HTTP aio returns HTTP-shaped rows, and any additional structured async wrappers should remain layered conveniences
 - the public catalog intentionally excludes `ducknng__*` macro helpers; those names are implementation details for stable-C-API macro plumbing and are not supported user APIs
 - user-defined body codec hooks are sealed: `ducknng_register_codec(content_type, function_name)` and `ducknng_unregister_codec(content_type)` install `BLOB → VARCHAR` SQL functions, the registry is gated to plain SQL identifiers spliced into a fixed `SELECT <fn>(?::BLOB) AS value` shape, user hooks take precedence over built-ins for matching content types, and `ducknng_list_codecs()` reports them with `kind = 'user'` alongside built-ins
 

@@ -833,7 +833,7 @@ SET VARIABLE bus_close_a = ducknng_close_socket(getvariable('bus_a')::UBIGINT);
 
 ### Launch raw requests asynchronously and collect the reply frames later
 
-The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper on top of that same frame substrate: it still waits on the same terminal aio handles, but it projects the decoded envelope columns directly through the same low-level frame scalar accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Aio handles still represent one pending operation, not a background job or streaming protocol.
+The stable async contract is raw-result-first. Framed RPC aio helpers collect raw reply frames through `ducknng_aio_collect(...)`, low-level HTTP aio helpers collect HTTP-shaped rows through `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames or bodies afterward. `ducknng_aio_wait(...)` is the wait-without-consuming primitive for lifecycle code that needs to inspect or drop a terminal handle later. `ducknng_aio_collect_decoded(...)` is the first structured convenience wrapper on top of that same frame substrate: it still waits on the same terminal aio handles, but it projects the decoded envelope columns directly through the same low-level frame scalar accessors (`ducknng_frame_version(...)`, `ducknng_frame_type(...)`, `ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`, `ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers keep the same operation-oriented routing as the synchronous helpers: NNG URLs use NNG's background dial path, HTTP/HTTPS URLs use NNG's asynchronous HTTP client path, and both still terminate as one collected reply frame or one terminal error. Aio handles still represent one pending operation, not a background job or streaming protocol.
 
 ```{sql eval=TRUE, collapse=FALSE, comment=""}
 -- Start a local listener that the aio requests will target.
@@ -868,9 +868,12 @@ SELECT
 SELECT aio1 > 0 AS aio1_started, aio2 > aio1 AS aio2_started_after_aio1
 FROM aio_demo;
 
--- Wait for terminal results and return the full reply frames for later decoding.
+-- Wait without consuming so status/drop logic can still decide what to do.
+SELECT ducknng_aio_wait((SELECT list_value(aio1, aio2) FROM aio_demo), 1000) AS any_ready;
+
+-- Return the terminal full reply frames for later decoding.
 SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
-FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_demo), 1000)
+FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_demo), 0)
 ORDER BY aio_id;
 
 -- A collected aio is terminal, so ready() stays true until the handle is dropped.

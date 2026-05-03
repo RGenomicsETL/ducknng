@@ -285,6 +285,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_send_socket_raw_aio`      | scalar | `socket_id, frame, timeout_ms`                                                       | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket send asynchronously and return an aio handle id.                                             |
 | `ducknng_recv_socket_raw_aio`      | scalar | `socket_id, timeout_ms`                                                              | `UBIGINT`                                                                                                                                                                                                             | Launch one raw socket receive asynchronously and return an aio handle id.                                          |
 | `ducknng_aio_ready`                | scalar | `aio_id`                                                                             | `BOOLEAN`                                                                                                                                                                                                             | Return whether an aio handle has reached a terminal state.                                                         |
+| `ducknng_aio_wait`                 | scalar | `aio_ids, wait_ms`                                                                   | `BOOLEAN`                                                                                                                                                                                                             | Wait until any requested aio handle reaches a terminal state without collecting or dropping it.                    |
 | `ducknng_aio_status`               | table  | `aio_id`                                                                             | `TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR)` | Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion.          |
 | `ducknng_aio_collect`              | table  | `aio_ids, wait_ms`                                                                   | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB)`                                                                                                                                                        | Wait for any requested aio handles to finish and return one row per newly collected terminal result.               |
 | `ducknng_aio_collect_decoded`      | table  | `aio_ids, wait_ms`                                                                   | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)`       | Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly. |
@@ -1332,15 +1333,17 @@ The stable async contract is raw-result-first. Framed RPC aio helpers
 collect raw reply frames through `ducknng_aio_collect(...)`, low-level
 HTTP aio helpers collect HTTP-shaped rows through
 `ducknng_ncurl_aio_collect(...)`, and callers explicitly decode frames
-or bodies afterward. `ducknng_aio_collect_decoded(...)` is the first
-structured convenience wrapper on top of that same frame substrate: it
-still waits on the same terminal aio handles, but it projects the
-decoded envelope columns directly through the same low-level frame
-scalar accessors (`ducknng_frame_version(...)`,
-`ducknng_frame_type(...)`, `ducknng_frame_flags(...)`,
-`ducknng_frame_type_name(...)`, `ducknng_frame_name(...)`,
-`ducknng_frame_payload(...)`, `ducknng_frame_payload_text(...)`,
-`ducknng_frame_error_text(...)`, and
+or bodies afterward. `ducknng_aio_wait(...)` is the
+wait-without-consuming primitive for lifecycle code that needs to
+inspect or drop a terminal handle later.
+`ducknng_aio_collect_decoded(...)` is the first structured convenience
+wrapper on top of that same frame substrate: it still waits on the same
+terminal aio handles, but it projects the decoded envelope columns
+directly through the same low-level frame scalar accessors
+(`ducknng_frame_version(...)`, `ducknng_frame_type(...)`,
+`ducknng_frame_flags(...)`, `ducknng_frame_type_name(...)`,
+`ducknng_frame_name(...)`, `ducknng_frame_payload(...)`,
+`ducknng_frame_payload_text(...)`, `ducknng_frame_error_text(...)`, and
 `ducknng_frame_end_of_stream(...)`). URL-launched request aio helpers
 keep the same operation-oriented routing as the synchronous helpers: NNG
 URLs use NNG’s background dial path, HTTP/HTTPS URLs use NNG’s
@@ -1382,9 +1385,12 @@ SELECT
 SELECT aio1 > 0 AS aio1_started, aio2 > aio1 AS aio2_started_after_aio1
 FROM aio_demo;
 
--- Wait for terminal results and return the full reply frames for later decoding.
+-- Wait without consuming so status/drop logic can still decide what to do.
+SELECT ducknng_aio_wait((SELECT list_value(aio1, aio2) FROM aio_demo), 1000) AS any_ready;
+
+-- Return the terminal full reply frames for later decoding.
 SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
-FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_demo), 1000)
+FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_demo), 0)
 ORDER BY aio_id;
 
 -- A collected aio is terminal, so ready() stays true until the handle is dropped.
@@ -1410,6 +1416,11 @@ SELECT ducknng_stop_server('sql_aio_demo');
     +--------------+-------------------------+
     | true         | true                    |
     +--------------+-------------------------+
+    +-----------+
+    | any_ready |
+    +-----------+
+    | true      |
+    +-----------+
     +--------+------+-----------+
     | aio_id |  ok  | has_frame |
     +--------+------+-----------+

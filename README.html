@@ -1518,6 +1518,14 @@ handle id.</td>
 <td>Return whether an aio handle has reached a terminal state.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_aio_wait</code></td>
+<td>scalar</td>
+<td><code>aio_ids, wait_ms</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Wait until any requested aio handle reaches a terminal state without
+collecting or dropping it.</td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_aio_status</code></td>
 <td>table</td>
 <td><code>aio_id</code></td>
@@ -1525,7 +1533,7 @@ handle id.</td>
 <td>Inspect the current or terminal status of one aio handle, including
 send-phase and recv-phase completion.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_aio_collect</code></td>
 <td>table</td>
 <td><code>aio_ids, wait_ms</code></td>
@@ -1533,7 +1541,7 @@ send-phase and recv-phase completion.</td>
 <td>Wait for any requested aio handles to finish and return one row per
 newly collected terminal result.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>ducknng_aio_collect_decoded</code></td>
 <td>table</td>
 <td><code>aio_ids, wait_ms</code></td>
@@ -1541,14 +1549,14 @@ newly collected terminal result.</td>
 <td>Wait for framed aio handles, collect their terminal frame rows, and
 project the decoded envelope columns directly.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_aio_cancel</code></td>
 <td>scalar</td>
 <td><code>aio_id</code></td>
 <td><code>BOOLEAN</code></td>
 <td>Request cancellation of a pending aio handle.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>ducknng_aio_drop</code></td>
 <td>scalar</td>
 <td><code>aio_id</code></td>
@@ -2667,7 +2675,9 @@ raw requests asynchronously and collect the reply frames later</h3>
 collect raw reply frames through <code>ducknng_aio_collect(...)</code>,
 low-level HTTP aio helpers collect HTTP-shaped rows through
 <code>ducknng_ncurl_aio_collect(...)</code>, and callers explicitly
-decode frames or bodies afterward.
+decode frames or bodies afterward. <code>ducknng_aio_wait(...)</code> is
+the wait-without-consuming primitive for lifecycle code that needs to
+inspect or drop a terminal handle later.
 <code>ducknng_aio_collect_decoded(...)</code> is the first structured
 convenience wrapper on top of that same frame substrate: it still waits
 on the same terminal aio handles, but it projects the decoded envelope
@@ -2719,22 +2729,25 @@ one pending operation, not a background job or streaming protocol.</p>
 <span id="cb27-31"><a href="#cb27-31" tabindex="-1"></a><span class="kw">SELECT</span> aio1 <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> aio1_started, aio2 <span class="op">&gt;</span> aio1 <span class="kw">AS</span> aio2_started_after_aio1</span>
 <span id="cb27-32"><a href="#cb27-32" tabindex="-1"></a><span class="kw">FROM</span> aio_demo;</span>
 <span id="cb27-33"><a href="#cb27-33" tabindex="-1"></a></span>
-<span id="cb27-34"><a href="#cb27-34" tabindex="-1"></a><span class="co">-- Wait for terminal results and return the full reply frames for later decoding.</span></span>
-<span id="cb27-35"><a href="#cb27-35" tabindex="-1"></a><span class="kw">SELECT</span> aio_id, ok, octet_length(frame) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_frame</span>
-<span id="cb27-36"><a href="#cb27-36" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect((<span class="kw">SELECT</span> list_value(aio1, aio2) <span class="kw">FROM</span> aio_demo), <span class="dv">1000</span>)</span>
-<span id="cb27-37"><a href="#cb27-37" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> aio_id;</span>
-<span id="cb27-38"><a href="#cb27-38" tabindex="-1"></a></span>
-<span id="cb27-39"><a href="#cb27-39" tabindex="-1"></a><span class="co">-- A collected aio is terminal, so ready() stays true until the handle is dropped.</span></span>
-<span id="cb27-40"><a href="#cb27-40" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_ready(aio1) <span class="kw">AS</span> aio1_ready, ducknng_aio_ready(aio2) <span class="kw">AS</span> aio2_ready</span>
-<span id="cb27-41"><a href="#cb27-41" tabindex="-1"></a><span class="kw">FROM</span> aio_demo;</span>
-<span id="cb27-42"><a href="#cb27-42" tabindex="-1"></a></span>
-<span id="cb27-43"><a href="#cb27-43" tabindex="-1"></a><span class="co">-- Drop the terminal aio handles explicitly because SQL has no destructor hook.</span></span>
-<span id="cb27-44"><a href="#cb27-44" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(aio1) <span class="kw">AND</span> ducknng_aio_drop(aio2) <span class="kw">AS</span> dropped</span>
-<span id="cb27-45"><a href="#cb27-45" tabindex="-1"></a><span class="kw">FROM</span> aio_demo;</span>
-<span id="cb27-46"><a href="#cb27-46" tabindex="-1"></a></span>
-<span id="cb27-47"><a href="#cb27-47" tabindex="-1"></a><span class="co">-- Remove the temp state and stop the demo listener.</span></span>
-<span id="cb27-48"><a href="#cb27-48" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> aio_demo;</span>
-<span id="cb27-49"><a href="#cb27-49" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_aio_demo&#39;</span>);</span></code></pre></div>
+<span id="cb27-34"><a href="#cb27-34" tabindex="-1"></a><span class="co">-- Wait without consuming so status/drop logic can still decide what to do.</span></span>
+<span id="cb27-35"><a href="#cb27-35" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_wait((<span class="kw">SELECT</span> list_value(aio1, aio2) <span class="kw">FROM</span> aio_demo), <span class="dv">1000</span>) <span class="kw">AS</span> any_ready;</span>
+<span id="cb27-36"><a href="#cb27-36" tabindex="-1"></a></span>
+<span id="cb27-37"><a href="#cb27-37" tabindex="-1"></a><span class="co">-- Return the terminal full reply frames for later decoding.</span></span>
+<span id="cb27-38"><a href="#cb27-38" tabindex="-1"></a><span class="kw">SELECT</span> aio_id, ok, octet_length(frame) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_frame</span>
+<span id="cb27-39"><a href="#cb27-39" tabindex="-1"></a><span class="kw">FROM</span> ducknng_aio_collect((<span class="kw">SELECT</span> list_value(aio1, aio2) <span class="kw">FROM</span> aio_demo), <span class="dv">0</span>)</span>
+<span id="cb27-40"><a href="#cb27-40" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> aio_id;</span>
+<span id="cb27-41"><a href="#cb27-41" tabindex="-1"></a></span>
+<span id="cb27-42"><a href="#cb27-42" tabindex="-1"></a><span class="co">-- A collected aio is terminal, so ready() stays true until the handle is dropped.</span></span>
+<span id="cb27-43"><a href="#cb27-43" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_ready(aio1) <span class="kw">AS</span> aio1_ready, ducknng_aio_ready(aio2) <span class="kw">AS</span> aio2_ready</span>
+<span id="cb27-44"><a href="#cb27-44" tabindex="-1"></a><span class="kw">FROM</span> aio_demo;</span>
+<span id="cb27-45"><a href="#cb27-45" tabindex="-1"></a></span>
+<span id="cb27-46"><a href="#cb27-46" tabindex="-1"></a><span class="co">-- Drop the terminal aio handles explicitly because SQL has no destructor hook.</span></span>
+<span id="cb27-47"><a href="#cb27-47" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_aio_drop(aio1) <span class="kw">AND</span> ducknng_aio_drop(aio2) <span class="kw">AS</span> dropped</span>
+<span id="cb27-48"><a href="#cb27-48" tabindex="-1"></a><span class="kw">FROM</span> aio_demo;</span>
+<span id="cb27-49"><a href="#cb27-49" tabindex="-1"></a></span>
+<span id="cb27-50"><a href="#cb27-50" tabindex="-1"></a><span class="co">-- Remove the temp state and stop the demo listener.</span></span>
+<span id="cb27-51"><a href="#cb27-51" tabindex="-1"></a><span class="kw">DROP</span> <span class="kw">TABLE</span> aio_demo;</span>
+<span id="cb27-52"><a href="#cb27-52" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;sql_aio_demo&#39;</span>);</span></code></pre></div>
 <pre><code>+------------------------------------------------------------------------------------------------------+
 | ducknng_start_server(&#39;sql_aio_demo&#39;, &#39;ipc:///tmp/ducknng_sql_aio_demo.ipc&#39;, 1, 134217728, 300000, 0) |
 +------------------------------------------------------------------------------------------------------+
@@ -2745,6 +2758,11 @@ one pending operation, not a background job or streaming protocol.</p>
 +--------------+-------------------------+
 | true         | true                    |
 +--------------+-------------------------+
++-----------+
+| any_ready |
++-----------+
+| true      |
++-----------+
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+

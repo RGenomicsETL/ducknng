@@ -1374,6 +1374,25 @@
       ]
     },
     {
+      "name": "ducknng_aio_wait",
+      "kind": "scalar",
+      "category": "Async I/O",
+      "signature": "ducknng_aio_wait(aio_ids, wait_ms)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Wait until any requested aio handle reaches a terminal state without collecting or dropping it.",
+      "notes": [
+        "Pass a LIST<UBIGINT> of aio handle ids, for example list_value(aio1, aio2).",
+        "Returns TRUE when at least one listed handle is ready, otherwise FALSE.",
+        "wait_ms = 0 performs a pure poll.",
+        "Use this when route or lifecycle code needs to wait before inspecting status or dropping a terminal handle without consuming the result row."
+      ],
+      "examples": [
+        "SELECT ducknng_aio_wait(list_value(1::UBIGINT, 2::UBIGINT), 1000);"
+      ]
+    },
+    {
       "name": "ducknng_aio_status",
       "kind": "table",
       "category": "Async I/O",

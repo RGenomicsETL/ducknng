@@ -55,6 +55,7 @@ This checklist tracks the implementation status of the main architecture, transp
   - `ducknng_send_socket_raw_aio()`
   - `ducknng_recv_socket_raw_aio()`
   - `ducknng_aio_ready()`
+  - `ducknng_aio_wait()`
   - `ducknng_aio_status()`
   - `ducknng_aio_collect()`
   - `ducknng_aio_cancel()`
@@ -94,7 +95,7 @@ This checklist tracks the implementation status of the main architecture, transp
 ## Partial / clarified but not fully solved
 
 - [x] Keep structured-vs-raw helper duplication under explicit review.
-  - Resolved: signatures and transport reach are unified, and the raw/structured twins are kept intentionally as the v1 surface. The raw helpers feed `ducknng_decode_frame()` / aio collection paths and the structured helpers wrap them as ergonomic table forms; deleting either side would force every caller through the other style without removing real complexity.
+  - Resolved: signatures and transport reach are unified, and the raw/structured twins are kept intentionally as the current 0.1.0 surface. The raw helpers feed `ducknng_decode_frame()` / aio collection paths and the structured helpers wrap them as ergonomic table forms; deleting either side would force every caller through the other style without removing real complexity.
 - [x] Prepare HTTP / HTTPS transport adapters without inventing a second RPC surface.
   - Current state: `docs/transports.md` and `docs/http.md` now fix the intended boundary, `ducknng_start_server(...)` covers `http://` and `https://` listeners with `contexts = 1`, `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` provide low-level synchronous/asynchronous HTTP/HTTPS client slices, synchronous request/RPC/session helpers route by URL scheme, and the low-level route layer now covers exact, prefix, and template matching while staying explicitly beside rather than inside the manifest-derived RPC surface.
 

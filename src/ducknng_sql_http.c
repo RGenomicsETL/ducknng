@@ -444,6 +444,11 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
                 failed = 1;
                 goto cleanup_headers_build;
             }
+            if (!ducknng_http_token_is_valid(names[i])) {
+                duckdb_scalar_function_set_error(info, "ducknng: headers_build requires header names to be HTTP tokens");
+                failed = 1;
+                goto cleanup_headers_build;
+            }
             escaped_names[i] = ducknng_http_json_escape_dup(names[i]);
             escaped_values[i] = ducknng_http_json_escape_dup(values[i]);
             if (!escaped_names[i] || !escaped_values[i]) {

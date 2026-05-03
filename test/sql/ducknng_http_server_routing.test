@@ -83,7 +83,7 @@ CREATE TEMP TABLE http_ncurl_drop_aio AS
 SELECT ducknng_ncurl_aio('http://127.0.0.1:45458/_ducknng', 'GET', NULL, NULL, 2000, 0::UBIGINT) AS aio_id
 
 query I
-SELECT ducknng__aio_wait_any((SELECT list_value(aio_id) FROM http_ncurl_drop_aio), 2000)
+SELECT ducknng_aio_wait((SELECT list_value(aio_id) FROM http_ncurl_drop_aio), 2000)
 ----
 1
 

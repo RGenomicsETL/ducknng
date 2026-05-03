@@ -222,7 +222,7 @@ FROM ducknng_query_rpc(
 VARCHAR	12345678-1234-5678-1234-567812345678	1
 
 # ENUM is emitted as the resolved utf8 string per types.md (no dictionary
-# round-trip is promised for the v1 contract).
+# round-trip is promised for the current type contract).
 query III
 SELECT typeof(e), e, e = 'happy'
 FROM ducknng_query_rpc(
@@ -251,7 +251,7 @@ MAP(VARCHAR, INTEGER)	a	b	1	2
 
 # UNION is emitted as Arrow dense_union; the raw frame is well-formed but the
 # DuckDB-facing decoder for dense_union vectors is not implemented yet, so the
-# v1 contract surfaces UNION values via raw frames / ducknng_parse_body rather
+# The current contract surfaces UNION values via raw frames / ducknng_parse_body rather
 # than ducknng_query_rpc.
 statement error
 SELECT *
