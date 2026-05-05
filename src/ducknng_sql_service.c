@@ -58,6 +58,56 @@ static void destroy_servers_init_data(void *ptr) {
     if (data) duckdb_free(data);
 }
 
+static ducknng_service *ducknng_sql_find_service_by_name(ducknng_runtime *rt, const char *name) {
+    size_t i;
+    if (!rt || !name) return NULL;
+    for (i = 0; i < rt->service_count; i++) {
+        if (rt->services[i] && rt->services[i]->name && strcmp(rt->services[i]->name, name) == 0) return rt->services[i];
+    }
+    return NULL;
+}
+
+static void ducknng_set_service_execution_model_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    for (row = 0; row < count; row++) {
+        char *name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *model = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        ducknng_service *svc = NULL;
+        char *errmsg = NULL;
+        if (!ctx || !ctx->rt || !name || !name[0] || !model || !model[0]) {
+            if (name) duckdb_free(name);
+            if (model) duckdb_free(model);
+            duckdb_scalar_function_set_error(info, "ducknng: service name and execution model are required");
+            return;
+        }
+        ducknng_mutex_lock(&ctx->rt->mu);
+        svc = ducknng_sql_find_service_by_name(ctx->rt, name);
+        if (!svc) {
+            ducknng_mutex_unlock(&ctx->rt->mu);
+            duckdb_free(name);
+            duckdb_free(model);
+            duckdb_scalar_function_set_error(info, "ducknng: service not found");
+            return;
+        }
+        if (ducknng_service_set_execution_model(svc, model, &errmsg) != 0) {
+            ducknng_mutex_unlock(&ctx->rt->mu);
+            duckdb_free(name);
+            duckdb_free(model);
+            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to set service execution model");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        ducknng_mutex_unlock(&ctx->rt->mu);
+        duckdb_free(name);
+        duckdb_free(model);
+        out[row] = true;
+    }
+}
+
 static void ducknng_set_service_limits_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t ncols = duckdb_data_chunk_get_column_count(input);
@@ -73,19 +123,13 @@ static void ducknng_set_service_limits_scalar(duckdb_function_info info, duckdb_
         uint64_t max_sessions_per_peer_identity = 0;
         ducknng_service *svc = NULL;
         char *errmsg = NULL;
-        size_t i;
         if (!ctx || !ctx->rt || !name || !name[0]) {
             if (name) duckdb_free(name);
             duckdb_scalar_function_set_error(info, "ducknng: service name is required");
             return;
         }
         ducknng_mutex_lock(&ctx->rt->mu);
-        for (i = 0; i < ctx->rt->service_count; i++) {
-            if (ctx->rt->services[i] && ctx->rt->services[i]->name && strcmp(ctx->rt->services[i]->name, name) == 0) {
-                svc = ctx->rt->services[i];
-                break;
-            }
-        }
+        svc = ducknng_sql_find_service_by_name(ctx->rt, name);
         if (!svc) {
             ducknng_mutex_unlock(&ctx->rt->mu);
             duckdb_free(name);
@@ -351,11 +395,13 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     duckdb_type service_limits_extended_types[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     duckdb_type service_limits_full_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     duckdb_type service_limits_identity_types[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
+    duckdb_type execution_model_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 2, ducknng_set_service_limits_scalar, ctx, service_limits_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 3, ducknng_set_service_limits_scalar, ctx, service_limits_extended_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 4, ducknng_set_service_limits_scalar, ctx, service_limits_full_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 5, ducknng_set_service_limits_scalar, ctx, service_limits_identity_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_execution_model", 2, ducknng_set_service_execution_model_scalar, ctx, execution_model_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_servers", ctx, 0, NULL,
             ducknng_servers_bind, ducknng_servers_init, ducknng_servers_scan)) return 0;
     return 1;

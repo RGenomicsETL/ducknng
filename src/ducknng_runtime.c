@@ -7,8 +7,10 @@
 
 DUCKDB_EXTENSION_EXTERN
 
+#define DUCKNNG_EXECUTION_POOL_SIZE 8
+
 typedef struct {
-    duckdb_database *db;
+    duckdb_database db;
     ducknng_runtime *rt;
 } ducknng_registry_entry;
 
@@ -25,7 +27,7 @@ static _Thread_local const ducknng_authorizer_context *g_thread_authorizer_conte
 
 static void reg_lock(void) { while (atomic_flag_test_and_set_explicit(&g_registry_lock, memory_order_acquire)) {} }
 static void reg_unlock(void) { atomic_flag_clear_explicit(&g_registry_lock, memory_order_release); }
-static long reg_find(duckdb_database *db) {
+static long reg_find(duckdb_database db) {
     size_t i;
     for (i = 0; i < g_entry_count; i++) if (g_entries[i].db == db) return (long)i;
     return -1;
@@ -44,7 +46,7 @@ static int reg_reserve(size_t want) {
     g_entry_cap = new_cap;
     return 1;
 }
-static void reg_remove(duckdb_database *db) {
+static void reg_remove(duckdb_database db) {
     long idx;
     if (!db) return;
     idx = reg_find(db);
@@ -60,17 +62,19 @@ static void reg_remove(duckdb_database *db) {
 
 int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info info,
     struct duckdb_extension_access *access, ducknng_runtime **out_rt, int *out_created) {
-    duckdb_database *db = NULL;
+    duckdb_database *db_ptr = NULL;
+    duckdb_database db = NULL;
     ducknng_runtime *rt = NULL;
     long idx;
     char *errmsg = NULL;
     if (!access || !info || !out_rt) return 0;
     if (out_created) *out_created = 0;
-    db = access->get_database(info);
-    if (!db || !*db) {
+    db_ptr = access->get_database(info);
+    if (!db_ptr || !*db_ptr) {
         access->set_error(info, "ducknng: missing database handle");
         return 0;
     }
+    db = *db_ptr;
     reg_lock();
     idx = reg_find(db);
     if (idx >= 0) {
@@ -111,11 +115,41 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         return 0;
     }
     rt->init_con_mu_initialized = 1;
+    if (ducknng_mutex_init(&rt->execution_pool_mu) != 0) {
+        ducknng_mutex_destroy(&rt->init_con_mu);
+        ducknng_mutex_destroy(&rt->mu);
+        duckdb_free(rt);
+        reg_unlock();
+        access->set_error(info, "ducknng: failed to initialize runtime execution pool mutex");
+        return 0;
+    }
+    rt->execution_pool_mu_initialized = 1;
+    rt->execution_pool = (duckdb_connection *)duckdb_malloc(sizeof(*rt->execution_pool) * DUCKNNG_EXECUTION_POOL_SIZE);
+    rt->execution_pool_busy = (int *)duckdb_malloc(sizeof(*rt->execution_pool_busy) * DUCKNNG_EXECUTION_POOL_SIZE);
+    if (rt->execution_pool && rt->execution_pool_busy) {
+        size_t pi;
+        memset(rt->execution_pool, 0, sizeof(*rt->execution_pool) * DUCKNNG_EXECUTION_POOL_SIZE);
+        memset(rt->execution_pool_busy, 0, sizeof(*rt->execution_pool_busy) * DUCKNNG_EXECUTION_POOL_SIZE);
+        for (pi = 0; pi < DUCKNNG_EXECUTION_POOL_SIZE; pi++) {
+            duckdb_connection pool_con = NULL;
+            if (duckdb_connect(db, &pool_con) == DuckDBError || !pool_con) break;
+            rt->execution_pool[rt->execution_pool_count++] = pool_con;
+        }
+    }
     if (ducknng_cond_init(&rt->aio_cv) == 0) rt->aio_cv_initialized = 1;
     ducknng_method_registry_init(&rt->registry);
     if (!ducknng_register_builtin_methods(rt, &errmsg)) {
         ducknng_method_registry_destroy(&rt->registry);
+        if (rt->execution_pool) {
+            size_t pi;
+            for (pi = 0; pi < rt->execution_pool_count; pi++) {
+                if (rt->execution_pool[pi]) duckdb_disconnect(&rt->execution_pool[pi]);
+            }
+            duckdb_free(rt->execution_pool);
+        }
+        if (rt->execution_pool_busy) duckdb_free(rt->execution_pool_busy);
         if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
+        if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
         if (rt->init_con_mu_initialized) ducknng_mutex_destroy(&rt->init_con_mu);
         ducknng_mutex_destroy(&rt->mu);
         duckdb_free(rt);
@@ -196,7 +230,7 @@ void ducknng_client_aio_destroy(ducknng_client_aio *aio) {
 
 void ducknng_runtime_destroy(ducknng_runtime *rt) {
     size_t i;
-    duckdb_database *db;
+    duckdb_database db;
     if (!rt) return;
     db = rt->db;
     reg_lock();
@@ -258,8 +292,20 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->user_codec_cap = 0;
     }
     ducknng_method_registry_destroy(&rt->registry);
+    if (rt->execution_pool) {
+        for (i = 0; i < rt->execution_pool_count; i++) {
+            if (rt->execution_pool[i]) duckdb_disconnect(&rt->execution_pool[i]);
+        }
+        duckdb_free(rt->execution_pool);
+        rt->execution_pool = NULL;
+    }
+    if (rt->execution_pool_busy) {
+        duckdb_free(rt->execution_pool_busy);
+        rt->execution_pool_busy = NULL;
+    }
     if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
     if (rt->init_con) duckdb_disconnect(&rt->init_con);
+    if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
     if (rt->init_con_mu_initialized) ducknng_mutex_destroy(&rt->init_con_mu);
     ducknng_mutex_destroy(&rt->mu);
     duckdb_free(rt);

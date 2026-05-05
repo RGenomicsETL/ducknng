@@ -8,6 +8,7 @@ This file is generated from `function_catalog/functions.yaml`.
 |---|---|---|---|---|
 | `ducknng_start_server` | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng service and choose the carrier from the listen URL scheme. |
 | `ducknng_stop_server` | scalar | `name` | `BOOLEAN` | Stop a named ducknng service. |
+| `ducknng_set_service_execution_model` | scalar | `name, model` | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL. |
 
 ## Introspection
 

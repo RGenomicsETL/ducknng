@@ -184,6 +184,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     ducknng_method_reply *reply) {
     ducknng_query_open_request open_req;
     duckdb_result result;
+    ducknng_service_sql_scope scope;
     uint64_t session_id = 0;
     char *owner_token = NULL;
     char json[384];
@@ -191,7 +192,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     (void)method;
     memset(&open_req, 0, sizeof(open_req));
     memset(&result, 0, sizeof(result));
-    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !req || !req->frame || !reply) {
+    if (!svc || !svc->rt || !req || !req->frame || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing query_open execution context");
         return -1;
     }
@@ -200,28 +201,30 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         if (errmsg) duckdb_free(errmsg);
         return -1;
     }
-    ducknng_mutex_lock(&svc->mu);
-    ducknng_service_enter_request_sql(svc);
-    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt), open_req.sql, &result) == DuckDBError) {
+    if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            errmsg ? errmsg : "ducknng: missing query_open execution context");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    if (duckdb_query(scope.con, open_req.sql, &result) == DuckDBError) {
         char *detail = ducknng_strdup(duckdb_result_error(&result));
-        ducknng_service_leave_request_sql(svc);
+        ducknng_service_leave_request_sql(&scope);
         duckdb_destroy_result(&result);
-        ducknng_mutex_unlock(&svc->mu);
         ducknng_query_open_request_destroy(&open_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
             detail && detail[0] ? detail : "ducknng: query_open failed");
         if (detail) duckdb_free(detail);
         return -1;
     }
-    ducknng_service_leave_request_sql(svc);
+    ducknng_service_leave_request_sql(&scope);
     if (duckdb_result_return_type(result) != DUCKDB_RESULT_TYPE_QUERY_RESULT) {
         duckdb_destroy_result(&result);
-        ducknng_mutex_unlock(&svc->mu);
         ducknng_query_open_request_destroy(&open_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, "ducknng: query_open requires a row-returning query");
         return -1;
     }
-    ducknng_mutex_unlock(&svc->mu);
     {
         int add_session_rc = ducknng_service_add_session(svc, &result, req->caller_identity,
             &session_id, &owner_token, &errmsg);
@@ -395,6 +398,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     ducknng_method_reply *reply) {
     ducknng_exec_request exec_req;
     duckdb_result result;
+    ducknng_service_sql_scope scope;
     duckdb_statement_type stmt_type;
     duckdb_result_type result_type;
     idx_t rows_changed;
@@ -405,7 +409,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
 
     memset(&exec_req, 0, sizeof(exec_req));
     memset(&result, 0, sizeof(result));
-    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !req || !req->frame || !reply) {
+    if (!svc || !svc->rt || !req || !req->frame || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
             "ducknng: missing execution context");
         return -1;
@@ -419,45 +423,51 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     }
 
     if (exec_req.want_result) {
-        ducknng_mutex_lock(&svc->mu);
-        ducknng_service_enter_request_sql(svc);
-        if (ducknng_query_to_ipc_stream(ducknng_runtime_execution_connection(svc->rt),
+        if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+            ducknng_exec_request_destroy(&exec_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                errmsg ? errmsg : "ducknng: missing execution context");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        if (ducknng_query_to_ipc_stream(scope.con,
                 exec_req.sql, &payload, &payload_len, &errmsg) != 0) {
-            ducknng_service_leave_request_sql(svc);
-            ducknng_mutex_unlock(&svc->mu);
+            ducknng_service_leave_request_sql(&scope);
             ducknng_exec_request_destroy(&exec_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
                 errmsg ? errmsg : "ducknng: failed to encode query result as Arrow IPC");
             if (errmsg) duckdb_free(errmsg);
             return -1;
         }
-        ducknng_service_leave_request_sql(svc);
-        ducknng_mutex_unlock(&svc->mu);
+        ducknng_service_leave_request_sql(&scope);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
             payload, payload_len);
         payload = NULL;
     } else {
-        ducknng_mutex_lock(&svc->mu);
-        ducknng_service_enter_request_sql(svc);
-        if (duckdb_query(ducknng_runtime_execution_connection(svc->rt), exec_req.sql, &result) == DuckDBError) {
+        if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+            ducknng_exec_request_destroy(&exec_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                errmsg ? errmsg : "ducknng: missing execution context");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        if (duckdb_query(scope.con, exec_req.sql, &result) == DuckDBError) {
             char *exec_err = ducknng_strdup(duckdb_result_error(&result));
-            ducknng_service_leave_request_sql(svc);
+            ducknng_service_leave_request_sql(&scope);
             duckdb_destroy_result(&result);
-            ducknng_mutex_unlock(&svc->mu);
             ducknng_exec_request_destroy(&exec_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
                 exec_err && exec_err[0] ? exec_err : "ducknng: exec failed");
             if (exec_err) duckdb_free(exec_err);
             return -1;
         }
-        ducknng_service_leave_request_sql(svc);
+        ducknng_service_leave_request_sql(&scope);
 
         stmt_type = duckdb_result_statement_type(result);
         result_type = duckdb_result_return_type(result);
         if (result_type == DUCKDB_RESULT_TYPE_QUERY_RESULT) {
             duckdb_destroy_result(&result);
-            ducknng_mutex_unlock(&svc->mu);
             ducknng_exec_request_destroy(&exec_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
                 "ducknng: EXEC result requires want_result = true");
@@ -476,7 +486,6 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
                 payload, payload_len);
             payload = NULL;
         }
-        ducknng_mutex_unlock(&svc->mu);
     }
     if (payload) duckdb_free(payload);
     if (errmsg) duckdb_free(errmsg);

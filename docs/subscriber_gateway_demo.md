@@ -86,7 +86,7 @@ That is already enough to demonstrate:
 
 ## Why this is multi-process
 
-`ducknng` currently exposes `server.execution.model = "shared_serialized_connection"`. Route handlers therefore run on the same shared DuckDB execution lane as other service-owned SQL in that process.
+`ducknng` defaults to `server.execution.model = "shared_serialized_connection"`, where route handlers run on the same shared DuckDB execution lane as other service-owned SQL in that process. For same-runtime gateway demos, switch the gateway service to `service_serialized_connection` or `request_connection` before traffic if route handlers need to synchronously call sibling services.
 
 Because of that, a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs that same execution lane. The public gateway demo is intentionally multi-process so the HTTP route can make synchronous backend session calls without deadlocking or timing out on the same shared connection.
 

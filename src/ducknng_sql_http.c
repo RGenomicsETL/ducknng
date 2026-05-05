@@ -215,8 +215,9 @@ static void destroy_sql_http_single_row_init_data(void *ptr) {
 
 static int ducknng_http_sql_reject_inside_request_handler(duckdb_function_info info, ducknng_sql_context *ctx,
     const char *what) {
-    if (ctx && ctx->rt && ctx->is_init_connection &&
-        ducknng_runtime_current_request_service_get(ctx->rt) != NULL) {
+    if (ctx && ctx->rt &&
+        (ducknng_runtime_current_thread_request_service_get(ctx->rt) != NULL ||
+         ducknng_runtime_current_request_service_get(ctx->rt) != NULL)) {
         duckdb_scalar_function_set_error(info, what);
         return 1;
     }
@@ -225,8 +226,9 @@ static int ducknng_http_sql_reject_inside_request_handler(duckdb_function_info i
 
 static int ducknng_http_sql_reject_table_inside_request_handler(duckdb_bind_info info,
     ducknng_sql_context *ctx, const char *what) {
-    if (ctx && ctx->rt && ctx->is_init_connection &&
-        ducknng_runtime_current_request_service_get(ctx->rt) != NULL) {
+    if (ctx && ctx->rt &&
+        (ducknng_runtime_current_thread_request_service_get(ctx->rt) != NULL ||
+         ducknng_runtime_current_request_service_get(ctx->rt) != NULL)) {
         duckdb_bind_set_error(info, what);
         return 1;
     }

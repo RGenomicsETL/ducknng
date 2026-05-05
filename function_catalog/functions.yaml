@@ -47,7 +47,7 @@
         "Arrow IPC is the normal row payload format. JSON is used for manifest documents and lightweight control metadata.",
         "Query sessions are explicit (`query_open`, `fetch`, `close`, `cancel`) and raw/session aio helpers follow the same future-like async contract through `nng_aio` handles.",
         "Expected aio launch failures return immediate terminal error handles so callers inspect errors through aio status or collect helpers instead of catching DuckDB exceptions.",
-        "The current server-side DuckDB execution model is `shared_serialized_connection`: query sessions are explicit RPC state, while service-owned DuckDB SQL is serialized through one shared backend connection.",
+        "The default server-side DuckDB execution model is `shared_serialized_connection`; services may switch to `service_serialized_connection` or `request_connection` with ducknng_set_service_execution_model().",
         "TLS configuration can come from filesystem paths, in-memory PEM content, or self-signed development helpers.",
         "The HTTP route layer is intentionally primitive and extensible; downstream users can build tenant routing, worker orchestration, and other control-plane logic without `ducknng` sealing those policies into the core extension.",
         "Current excluded platforms are wasm and Windows."
@@ -107,7 +107,7 @@
         "ip_allowlist_active reports whether service-level remote-address admission uses an IP/CIDR allowlist.",
         "ip_allowlist_count reports the number of configured IP/CIDR rules; an active allowlist with count 0 denies every remote address.",
         "sql_authorizer_active reports whether a service-level SQL authorization callback is installed.",
-        "execution_model reports the current server-side DuckDB execution contract. The stable value today is shared_serialized_connection, meaning service-owned SQL is serialized through one shared DuckDB connection.",
+        "execution_model reports the current server-side DuckDB execution contract: shared_serialized_connection, service_serialized_connection, or request_connection.",
         "max_open_sessions is 0 for unlimited; non-zero values are enforced before query_open registers a new session.",
         "active_pipes counts currently active NNG protocol-socket pipes for the service; HTTP/HTTPS carrier connections are not NNG pipes.",
         "max_active_pipes is 0 for unlimited; non-zero values are enforced at NNG ADD_PRE pipe admission.",
@@ -540,6 +540,29 @@
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT);"
       ],
       "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity]]]"
+    },
+    {
+      "name": "ducknng_set_service_execution_model",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_set_service_execution_model(name, model)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Set the DuckDB connection execution model used by service-side SQL.",
+      "notes": [
+        "Accepted models are shared_serialized_connection, service_serialized_connection, and request_connection; short aliases shared, service, and request are also accepted.",
+        "shared_serialized_connection is the backward-compatible default and uses the runtime init connection behind one shared mutex.",
+        "service_serialized_connection opens one DuckDB connection for the service and serializes that service's SQL on a service-local execution mutex.",
+        "request_connection borrows one pre-opened DuckDB execution-pool connection for each service-side SQL execution and returns it after the handler finishes.",
+        "Execution-pool connections are opened from the same DuckDB database handle at extension initialization; they share the catalog but do not inherit temp tables, temp macros, or other connection-local state from the init connection.",
+        "The execution model cannot be changed while the service has active requests or open query sessions. Set it immediately after starting the service and before exposing it to traffic."
+      ],
+      "examples": [
+        "SELECT ducknng_set_service_execution_model('svc', 'service_serialized_connection');",
+        "SELECT ducknng_set_service_execution_model('svc', 'request_connection');"
+      ],
+      "parameters": "name, model"
     },
     {
       "name": "ducknng_auth_context",

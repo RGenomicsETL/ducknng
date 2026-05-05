@@ -81,7 +81,7 @@ This checklist tracks the implementation status of the main architecture, transp
 - [x] Land the low-level HTTP route framework beside the framed RPC mount.
   - `ducknng_register_http_route(...)`, `ducknng_unregister_http_route(...)`, and `ducknng_list_http_routes()` expose service-local route registration and introspection for `http://` and `https://` services.
   - `ducknng_http_request()` and `ducknng_http_request_body()` expose route-local request context and body bytes while handler SQL runs.
-  - Route handlers return one bounded response row and share the same admission stack and `shared_serialized_connection` execution model as framed RPC.
+  - Route handlers return one bounded response row and share the same admission stack and configured service execution model as framed RPC.
 - [x] Surface NNG pipe events and live pipe snapshots.
   - `ducknng_read_monitor(...)` exposes bounded pipe monitor events with sequence cursors and denial reasons.
   - `ducknng_monitor_status(...)` exposes monitor ring counters and drop counts.

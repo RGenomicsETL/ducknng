@@ -133,20 +133,15 @@ Routes do not bypass the guidance in `docs/security.md`. They are a good fit for
 
 ## Execution model
 
-Route handler SQL runs inside the same service-owned DuckDB execution lane exposed elsewhere as:
+Route handler SQL runs under the service execution model exposed by `ducknng_list_servers().execution_model` and configurable with `ducknng_set_service_execution_model(service_name, model)` before a service has active requests or open sessions. The supported models are:
 
-```text
-server.execution.model = "shared_serialized_connection"
-```
+- `shared_serialized_connection`: the backward-compatible default. All service-side SQL uses the runtime init connection behind one shared mutex.
+- `service_serialized_connection`: the service opens one DuckDB connection from the same database handle and serializes that service's SQL on a service-local mutex.
+- `request_connection`: each service-side SQL execution borrows one pre-opened DuckDB execution-pool connection and returns it after the handler finishes.
 
-That is the stable current contract. It means:
+Execution-pool connections are opened from the same DuckDB database handle at extension initialization. They share the same database, catalog, and persistent tables, but they do not inherit temp tables, temp macros, or other connection-local state from the init connection. Route handlers that use `service_serialized_connection` or `request_connection` should therefore depend on catalog-visible objects. The current route API still buffers one final response row; HTTP-carrier streaming remains future work.
 
-- handler SQL is serialized with the service's other DuckDB work
-- DuckDB session state on that lane is shared
-- handlers should stay short and explicit
-- handlers must not assume they can re-enter the same runtime arbitrarily
-
-The most important practical consequence is that a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs the shared execution lane. That pattern can block on itself. A public subscriber gateway should therefore target a separate backend DuckDB process or at least a separate `ducknng` runtime boundary, not a sibling service in the same runtime.
+`shared_serialized_connection` can self-block if a handler synchronously calls a sibling `ducknng` service in the same runtime and that backend also needs the shared lane. Use `service_serialized_connection`, `request_connection`, a separate backend DuckDB process, or a separate runtime boundary for those gateway patterns.
 
 ## Example
 

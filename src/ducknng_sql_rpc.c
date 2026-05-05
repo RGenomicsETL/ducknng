@@ -355,7 +355,8 @@ static void ducknng_server_stop_scalar(duckdb_function_info info, duckdb_data_ch
             duckdb_scalar_function_set_error(info, "ducknng: service not found");
             return;
         }
-        if (ctx->is_init_connection && ducknng_runtime_current_request_service_get(ctx->rt) == svc) {
+        if (ducknng_runtime_current_thread_request_service_get(ctx->rt) == svc ||
+            ducknng_runtime_current_request_service_get(ctx->rt) == svc) {
             duckdb_free(name);
             duckdb_scalar_function_set_error(info, "ducknng: cannot stop a service from its own request handler");
             return;

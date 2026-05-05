@@ -101,13 +101,18 @@ typedef struct ducknng_user_codec {
 } ducknng_user_codec;
 
 typedef struct ducknng_runtime {
-    duckdb_database *db;
+    duckdb_database db;
     duckdb_connection init_con;
     ducknng_mutex mu;
     ducknng_mutex init_con_mu;
+    ducknng_mutex execution_pool_mu;
     ducknng_cond aio_cv;
     int aio_cv_initialized;
     int init_con_mu_initialized;
+    int execution_pool_mu_initialized;
+    duckdb_connection *execution_pool;
+    int *execution_pool_busy;
+    size_t execution_pool_count;
     ducknng_service **services;
     size_t service_count;
     size_t service_cap;

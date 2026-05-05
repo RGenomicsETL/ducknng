@@ -639,10 +639,12 @@ peer-identity allowlists, IP/CIDR allowlists, and service limits.
 Optional SQL authorizers run at the request boundary and read context
 through <code>ducknng_auth_context()</code>. Sessions are bearer-token
 owned, additionally bound to verified mTLS identity when present. The
-current stable execution model is
-<code>shared_serialized_connection</code>: service-owned DuckDB SQL is
-serialized through one shared connection, and that contract is exposed
-in <code>manifest</code> and <code>ducknng_list_servers()</code>.</li>
+default execution model is <code>shared_serialized_connection</code>,
+with <code>service_serialized_connection</code> and
+<code>request_connection</code> available through
+<code>ducknng_set_service_execution_model(...)</code>; the current model
+is exposed in <code>manifest</code> and
+<code>ducknng_list_servers()</code>.</li>
 <li><strong>Codecs.</strong> <code>ducknng_parse_body(...)</code> and
 <code>ducknng_ncurl_table(...)</code> parse content-type-tagged BLOBs.
 Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw
@@ -777,6 +779,14 @@ URL scheme.</td>
 <td><code>name</code></td>
 <td><code>BOOLEAN</code></td>
 <td>Stop a named ducknng service.</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_set_service_execution_model</code></td>
+<td>scalar</td>
+<td><code>name, model</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Set the DuckDB connection execution model used by service-side
+SQL.</td>
 </tr>
 </tbody>
 </table>
@@ -2364,11 +2374,17 @@ inspect the in-flight request through
 +----------------------------------------+
 | true                                   |
 +----------------------------------------+</code></pre>
-<p>These route handlers still run inside the service-owned DuckDB
-execution lane, so keep them short and explicit. They are a good fit for
-health checks, thin JSON APIs, and gateway-style fixed operations.
-Prefix and template routes stay low-level on purpose: the request
-context remains explicit, while <code>ducknng_http_header(...)</code>,
+<p>By default these route handlers run on the backward-compatible
+<code>shared_serialized_connection</code> lane, but services can switch
+before traffic to <code>service_serialized_connection</code> or
+<code>request_connection</code> with
+<code>ducknng_set_service_execution_model(...)</code>. Those models use
+pre-opened DuckDB execution-pool connections from the same database
+handle, which improves same-runtime gateway composition but means
+handlers should depend on catalog-visible objects rather than temp
+tables or temp macros from the init connection. Prefix and template
+routes stay low-level on purpose: the request context remains explicit,
+while <code>ducknng_http_header(...)</code>,
 <code>ducknng_http_query_param(...)</code>,
 <code>ducknng_http_cookie(...)</code>, and
 <code>ducknng_http_path_param(...)</code> remove the repetitive
@@ -2377,10 +2393,7 @@ JSON/string parsing from common handlers. The response helpers such as
 <code>ducknng_http_json(...)</code> only build the existing one-row
 route response shape. That keeps the route framework additive instead of
 turning it into a second RPC namespace. They are not a safe excuse to
-expose arbitrary SQL to the public internet, and they should not
-synchronously call back into another <code>ducknng</code> service in the
-same runtime when that backend also needs the shared serialized
-execution lane.</p>
+expose arbitrary SQL to the public internet.</p>
 <p>A public subscriber gateway is a good fit for this layer, but it
 should use separate backend DuckDB processes or runtime boundaries. The
 main README still stays single-session, so the multi-process walkthrough
@@ -3414,14 +3427,13 @@ column; optional columns are <code>status</code>, <code>reason</code>,
 <code>cache_ttl_ms</code>. <code>NULL</code> or an empty string clears
 the SQL authorizer. This callback is intentionally evaluated at the
 request/dispatch boundary, not inside NNG’s low-level pipe callback. It
-runs through the service-owned DuckDB execution lane exposed as
-<code>shared_serialized_connection</code>, so keep it short and
-side-effect-light: prefer table/view lookups, avoid recursive
-<code>ducknng_*</code> client calls to the same service, avoid stopping
-the service from its own callback, and do not use it for long-running
-work. That limitation avoids deadlocks while keeping one uniform policy
-interface for NNG, HTTP/HTTPS framed RPC, and the planned broader HTTP
-server framework.</p>
+runs through the configured service-owned DuckDB execution model, so
+keep it short and side-effect-light: prefer table/view lookups, avoid
+recursive <code>ducknng_*</code> client calls to the same service, avoid
+stopping the service from its own callback, and do not use it for
+long-running work. That limitation avoids deadlocks while keeping one
+uniform policy interface for NNG, HTTP/HTTPS framed RPC, and HTTP
+routes.</p>
 <h3 id="tlstcp-from-file-backed-certificate-material"><code>tls+tcp://</code>
 from file-backed certificate material</h3>
 <div class="sourceCode" id="cb39"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb39-1"><a href="#cb39-1" tabindex="-1"></a>LOAD <span class="st">&#39;build/release/ducknng.duckdb_extension&#39;</span>;</span>

@@ -81,6 +81,12 @@ enum {
     DUCKNNG_HTTP_ROUTE_MATCH_TEMPLATE = 3
 };
 
+enum {
+    DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION = 1,
+    DUCKNNG_EXECUTION_SERVICE_SERIALIZED_CONNECTION = 2,
+    DUCKNNG_EXECUTION_REQUEST_CONNECTION = 3
+};
+
 typedef struct ducknng_http_route {
     uint64_t route_id;
     uint8_t match_kind;
@@ -114,6 +120,15 @@ typedef struct ducknng_http_route_reply {
     size_t body_len;
     char *body_text;
 } ducknng_http_route_reply;
+
+typedef struct ducknng_service_sql_scope {
+    ducknng_service *svc;
+    duckdb_connection con;
+    int owns_connection;
+    int locked_runtime;
+    int locked_service;
+    size_t pool_index;
+} ducknng_service_sql_scope;
 
 struct ducknng_rep_ctx {
     ducknng_service *svc;
@@ -169,7 +184,12 @@ struct ducknng_service {
     uint64_t next_http_route_id;
     int ncontexts;
     ducknng_mutex mu;
+    ducknng_mutex execution_mu;
     int mu_initialized;
+    int execution_mu_initialized;
+    int execution_model;
+    duckdb_connection execution_con;
+    size_t execution_pool_index;
     ducknng_session **sessions;
     size_t session_count;
     atomic_size_t session_count_visible;
@@ -222,6 +242,8 @@ int ducknng_service_authorizer_active(const ducknng_service *svc);
 int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     uint64_t max_active_pipes, uint64_t max_inflight_requests,
     uint64_t max_sessions_per_peer_identity, char **errmsg);
+int ducknng_service_set_execution_model(ducknng_service *svc, const char *model, char **errmsg);
+const char *ducknng_execution_model_name(int model);
 uint64_t ducknng_service_max_open_sessions(const ducknng_service *svc);
 uint64_t ducknng_service_max_active_pipes(const ducknng_service *svc);
 uint64_t ducknng_service_max_inflight_requests(const ducknng_service *svc);
@@ -231,14 +253,14 @@ const char *ducknng_service_peer_identity_format(const ducknng_service *svc);
 void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security);
 size_t ducknng_service_active_pipe_count(const ducknng_service *svc);
 size_t ducknng_service_inflight_request_count(const ducknng_service *svc);
-void ducknng_service_enter_request_sql(ducknng_service *svc);
-void ducknng_service_leave_request_sql(ducknng_service *svc);
-void ducknng_service_enter_http_route_sql(ducknng_service *svc,
-    const ducknng_http_request_context *request_ctx);
-void ducknng_service_leave_http_route_sql(ducknng_service *svc);
-void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
-    const ducknng_authorizer_context *auth_ctx);
-void ducknng_service_leave_authorizer_sql(ducknng_service *svc);
+int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_scope *scope, char **errmsg);
+void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope);
+int ducknng_service_enter_http_route_sql(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx, ducknng_service_sql_scope *scope, char **errmsg);
+void ducknng_service_leave_http_route_sql(ducknng_service_sql_scope *scope);
+int ducknng_service_enter_authorizer_sql(ducknng_service *svc,
+    const ducknng_authorizer_context *auth_ctx, ducknng_service_sql_scope *scope, char **errmsg);
+void ducknng_service_leave_authorizer_sql(ducknng_service_sql_scope *scope);
 void ducknng_http_route_reset(ducknng_http_route *route);
 int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *src);
 const char *ducknng_http_route_match_kind_name(uint8_t match_kind);

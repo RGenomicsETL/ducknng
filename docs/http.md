@@ -127,7 +127,7 @@ The important boundary stays the same:
 - the framed RPC mount still lives exactly at the path encoded in the service listen URL
 - registered routes must not conflict with that mount path
 - routes are application routes beside the frame carrier, not a second RPC namespace
-- routes inherit the same admission stack and the same `shared_serialized_connection` execution model as the rest of the service
+- routes inherit the same admission stack and the configured service execution model as the rest of the service
 
 For the precise route contract, request/response shape, and execution-model caveats, see `docs/http_server_framework.md`.
 

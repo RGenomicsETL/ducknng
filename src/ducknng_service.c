@@ -94,41 +94,150 @@ static void ducknng_service_clear_http_routes(ducknng_service *svc) {
     svc->http_route_cap = 0;
 }
 
-void ducknng_service_enter_request_sql(ducknng_service *svc) {
-    if (!svc || !svc->rt) return;
-    ducknng_runtime_execution_lane_lock(svc->rt);
+const char *ducknng_execution_model_name(int model) {
+    switch (model) {
+    case DUCKNNG_EXECUTION_SERVICE_SERIALIZED_CONNECTION:
+        return "service_serialized_connection";
+    case DUCKNNG_EXECUTION_REQUEST_CONNECTION:
+        return "request_connection";
+    case DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION:
+    default:
+        return "shared_serialized_connection";
+    }
+}
+
+static int ducknng_execution_model_parse(const char *model, int *out_model) {
+    if (!model || !model[0] || !out_model) return 0;
+    if (strcmp(model, "shared_serialized_connection") == 0 || strcmp(model, "shared") == 0) {
+        *out_model = DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION;
+        return 1;
+    }
+    if (strcmp(model, "service_serialized_connection") == 0 || strcmp(model, "service") == 0) {
+        *out_model = DUCKNNG_EXECUTION_SERVICE_SERIALIZED_CONNECTION;
+        return 1;
+    }
+    if (strcmp(model, "request_connection") == 0 || strcmp(model, "request") == 0) {
+        *out_model = DUCKNNG_EXECUTION_REQUEST_CONNECTION;
+        return 1;
+    }
+    return 0;
+}
+
+static int ducknng_service_acquire_execution_connection(ducknng_service *svc,
+    duckdb_connection *out_con, size_t *out_index, char **errmsg) {
+    size_t i;
+    if (out_con) *out_con = NULL;
+    if (out_index) *out_index = (size_t)-1;
+    if (!svc || !svc->rt || !out_con || !out_index || !svc->rt->execution_pool_mu_initialized) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB execution connection pool");
+        return -1;
+    }
+    ducknng_mutex_lock(&svc->rt->execution_pool_mu);
+    for (i = 0; i < svc->rt->execution_pool_count; i++) {
+        if (!svc->rt->execution_pool_busy[i] && svc->rt->execution_pool[i]) {
+            svc->rt->execution_pool_busy[i] = 1;
+            *out_con = svc->rt->execution_pool[i];
+            *out_index = i;
+            ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
+            return 0;
+        }
+    }
+    ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
+    if (errmsg) *errmsg = ducknng_strdup("ducknng: DuckDB execution connection pool exhausted");
+    return -1;
+}
+
+static void ducknng_service_release_execution_connection(ducknng_service *svc, size_t index) {
+    if (!svc || !svc->rt || index == (size_t)-1 || !svc->rt->execution_pool_mu_initialized) return;
+    ducknng_mutex_lock(&svc->rt->execution_pool_mu);
+    if (index < svc->rt->execution_pool_count) svc->rt->execution_pool_busy[index] = 0;
+    ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
+}
+
+int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_scope *scope, char **errmsg) {
+    int model;
+    if (errmsg) *errmsg = NULL;
+    if (!scope) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing SQL execution scope");
+        return -1;
+    }
+    memset(scope, 0, sizeof(*scope));
+    scope->pool_index = (size_t)-1;
+    if (!svc || !svc->rt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing SQL execution service");
+        return -1;
+    }
+    scope->svc = svc;
+    model = svc->execution_model ? svc->execution_model : DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION;
+    if (model == DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION) {
+        ducknng_runtime_execution_lane_lock(svc->rt);
+        scope->locked_runtime = 1;
+        scope->con = ducknng_runtime_execution_connection(svc->rt);
+    } else if (model == DUCKNNG_EXECUTION_SERVICE_SERIALIZED_CONNECTION) {
+        if (!svc->execution_mu_initialized) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: missing service execution mutex");
+            return -1;
+        }
+        ducknng_mutex_lock(&svc->execution_mu);
+        scope->locked_service = 1;
+        if (!svc->execution_con && ducknng_service_acquire_execution_connection(svc,
+                &svc->execution_con, &svc->execution_pool_index, errmsg) != 0) {
+            ducknng_mutex_unlock(&svc->execution_mu);
+            scope->locked_service = 0;
+            return -1;
+        }
+        scope->con = svc->execution_con;
+    } else if (model == DUCKNNG_EXECUTION_REQUEST_CONNECTION) {
+        if (ducknng_service_acquire_execution_connection(svc, &scope->con, &scope->pool_index, errmsg) != 0) return -1;
+        scope->owns_connection = 1;
+    } else {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid service execution model");
+        return -1;
+    }
+    if (!scope->con) {
+        ducknng_service_leave_request_sql(scope);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB execution connection");
+        return -1;
+    }
     ducknng_runtime_current_request_service_set(svc->rt, svc);
+    return 0;
 }
 
-void ducknng_service_leave_request_sql(ducknng_service *svc) {
-    if (!svc || !svc->rt) return;
-    ducknng_runtime_execution_lane_unlock(svc->rt);
+void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
+    ducknng_service *svc;
+    if (!scope || !scope->svc) return;
+    svc = scope->svc;
+    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+    if (scope->owns_connection) ducknng_service_release_execution_connection(svc, scope->pool_index);
+    if (scope->locked_service && svc->execution_mu_initialized) ducknng_mutex_unlock(&svc->execution_mu);
+    if (scope->locked_runtime && svc->rt) ducknng_runtime_execution_lane_unlock(svc->rt);
+    memset(scope, 0, sizeof(*scope));
 }
 
-void ducknng_service_enter_http_route_sql(ducknng_service *svc,
-    const ducknng_http_request_context *request_ctx) {
-    if (!svc || !svc->rt) return;
-    ducknng_service_enter_request_sql(svc);
+int ducknng_service_enter_http_route_sql(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx, ducknng_service_sql_scope *scope, char **errmsg) {
+    if (ducknng_service_enter_request_sql(svc, scope, errmsg) != 0) return -1;
     ducknng_runtime_current_http_request_context_set(svc->rt, request_ctx);
+    return 0;
 }
 
-void ducknng_service_leave_http_route_sql(ducknng_service *svc) {
-    if (!svc || !svc->rt) return;
-    ducknng_runtime_current_http_request_context_set(svc->rt, NULL);
-    ducknng_service_leave_request_sql(svc);
+void ducknng_service_leave_http_route_sql(ducknng_service_sql_scope *scope) {
+    ducknng_service *svc = scope ? scope->svc : NULL;
+    if (svc && svc->rt) ducknng_runtime_current_http_request_context_set(svc->rt, NULL);
+    ducknng_service_leave_request_sql(scope);
 }
 
-void ducknng_service_enter_authorizer_sql(ducknng_service *svc,
-    const ducknng_authorizer_context *auth_ctx) {
-    if (!svc || !svc->rt) return;
-    ducknng_service_enter_request_sql(svc);
+int ducknng_service_enter_authorizer_sql(ducknng_service *svc,
+    const ducknng_authorizer_context *auth_ctx, ducknng_service_sql_scope *scope, char **errmsg) {
+    if (ducknng_service_enter_request_sql(svc, scope, errmsg) != 0) return -1;
     ducknng_runtime_current_authorizer_context_set(svc->rt, auth_ctx);
+    return 0;
 }
 
-void ducknng_service_leave_authorizer_sql(ducknng_service *svc) {
-    if (!svc || !svc->rt) return;
-    ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
-    ducknng_service_leave_request_sql(svc);
+void ducknng_service_leave_authorizer_sql(ducknng_service_sql_scope *scope) {
+    ducknng_service *svc = scope ? scope->svc : NULL;
+    if (svc && svc->rt) ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
+    ducknng_service_leave_request_sql(scope);
 }
 
 static void ducknng_pipe_event_reset(ducknng_pipe_event *event) {
@@ -811,18 +920,23 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
     const ducknng_authorizer_context *auth_ctx, const char *authorizer_sql,
     ducknng_authorizer_decision *decision, char **errmsg) {
     duckdb_result result;
+    ducknng_service_sql_scope scope;
     int rc = -1;
     char *parse_err = NULL;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) ||
-        !authorizer_sql || !decision) {
+    if (!svc || !svc->rt || !authorizer_sql || !decision) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing SQL authorizer state");
         return -1;
     }
     memset(&result, 0, sizeof(result));
-    ducknng_service_enter_authorizer_sql(svc, auth_ctx);
-    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt),
-            authorizer_sql, &result) == DuckDBError) {
+    if (ducknng_service_enter_authorizer_sql(svc, auth_ctx, &scope, errmsg) != 0) {
+        decision->allow = 0;
+        decision->http_status = 500;
+        if (decision->reason) duckdb_free(decision->reason);
+        decision->reason = ducknng_strdup(errmsg && *errmsg ? *errmsg : "ducknng: missing SQL authorizer state");
+        return -1;
+    }
+    if (duckdb_query(scope.con, authorizer_sql, &result) == DuckDBError) {
         const char *detail = duckdb_result_error(&result);
         char *msg = NULL;
         if (detail && detail[0]) {
@@ -837,11 +951,11 @@ static int ducknng_service_run_sql_authorizer(ducknng_service *svc,
         decision->reason = ducknng_strdup(msg);
         if (errmsg) *errmsg = msg;
         else if (msg) duckdb_free(msg);
-        ducknng_service_leave_authorizer_sql(svc);
+        ducknng_service_leave_authorizer_sql(&scope);
         duckdb_destroy_result(&result);
         return -1;
     }
-    ducknng_service_leave_authorizer_sql(svc);
+    ducknng_service_leave_authorizer_sql(&scope);
     rc = ducknng_parse_authorizer_result(&result, decision, &parse_err);
     duckdb_destroy_result(&result);
     if (rc != 0 && errmsg) *errmsg = parse_err ? parse_err : ducknng_strdup(decision->reason ? decision->reason : "ducknng: SQL authorizer denied request");
@@ -961,32 +1075,32 @@ done:
 int ducknng_service_handle_http_route(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_http_route_reply *reply, char **errmsg) {
     duckdb_result result;
+    ducknng_service_sql_scope scope;
     int rc = -1;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !svc->rt || !ducknng_runtime_execution_connection(svc->rt) || !request_ctx || !reply ||
+    if (!svc || !svc->rt || !request_ctx || !reply ||
         !request_ctx->route.handler_sql || !request_ctx->route.handler_sql[0]) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
         return -1;
     }
     memset(&result, 0, sizeof(result));
-    ducknng_mutex_lock(&svc->mu);
-    ducknng_service_enter_http_route_sql(svc, request_ctx);
-    if (duckdb_query(ducknng_runtime_execution_connection(svc->rt),
-            request_ctx->route.handler_sql, &result) == DuckDBError) {
+    if (ducknng_service_enter_http_route_sql(svc, request_ctx, &scope, errmsg) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
+        return -1;
+    }
+    if (duckdb_query(scope.con, request_ctx->route.handler_sql, &result) == DuckDBError) {
         const char *detail = duckdb_result_error(&result);
         size_t need = detail && detail[0] ? strlen(detail) + 40 : 0;
         if (detail && detail[0] && errmsg) {
             *errmsg = (char *)duckdb_malloc(need);
             if (*errmsg) snprintf(*errmsg, need, "ducknng: HTTP route handler error: %s", detail);
         }
-        ducknng_service_leave_http_route_sql(svc);
-        ducknng_mutex_unlock(&svc->mu);
+        ducknng_service_leave_http_route_sql(&scope);
         duckdb_destroy_result(&result);
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route handler error");
         return -1;
     }
-    ducknng_service_leave_http_route_sql(svc);
-    ducknng_mutex_unlock(&svc->mu);
+    ducknng_service_leave_http_route_sql(&scope);
     rc = ducknng_parse_http_route_result(&result, reply, errmsg);
     duckdb_destroy_result(&result);
     return rc;
@@ -1404,6 +1518,8 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
     svc->tls_config_id = tls_config_id;
     svc->next_session_id = 1;
     svc->next_http_route_id = 1;
+    svc->execution_model = DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION;
+    svc->execution_pool_index = (size_t)-1;
     svc->tls_config_source = ducknng_strdup(tls_config_source);
     if ((tls_config_source && !svc->tls_config_source) || ducknng_tls_opts_copy(&svc->tls_opts, tls_opts) != 0) {
         ducknng_service_destroy(svc);
@@ -1414,6 +1530,11 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
         return NULL;
     }
     svc->mu_initialized = 1;
+    if (ducknng_mutex_init(&svc->execution_mu) != 0) {
+        ducknng_service_destroy(svc);
+        return NULL;
+    }
+    svc->execution_mu_initialized = 1;
     return svc;
 }
 
@@ -1441,6 +1562,15 @@ void ducknng_service_destroy(ducknng_service *svc) {
     }
     if (sessions) duckdb_free(sessions);
     if (svc->ctxs) duckdb_free(svc->ctxs);
+    if (svc->execution_con) {
+        ducknng_service_release_execution_connection(svc, svc->execution_pool_index);
+        svc->execution_con = NULL;
+        svc->execution_pool_index = (size_t)-1;
+    }
+    if (svc->execution_mu_initialized) {
+        ducknng_mutex_destroy(&svc->execution_mu);
+        svc->execution_mu_initialized = 0;
+    }
     if (svc->mu_initialized) {
         ducknng_mutex_destroy(&svc->mu);
         svc->mu_initialized = 0;
@@ -2341,6 +2471,41 @@ int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     return 0;
 }
 
+int ducknng_service_set_execution_model(ducknng_service *svc, const char *model, char **errmsg) {
+    int parsed;
+    duckdb_connection old_con = NULL;
+    size_t old_index = (size_t)-1;
+    if (errmsg) *errmsg = NULL;
+    if (!svc) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service not found");
+        return -1;
+    }
+    if (!ducknng_execution_model_parse(model, &parsed)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: execution model must be shared_serialized_connection, service_serialized_connection, or request_connection");
+        return -1;
+    }
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    if (svc->inflight_request_count > 0 || svc->session_count > 0) {
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: execution model cannot change while requests or sessions are active");
+        return -1;
+    }
+    if (svc->execution_model == parsed) {
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        return 0;
+    }
+    if (svc->execution_mu_initialized) ducknng_mutex_lock(&svc->execution_mu);
+    old_con = svc->execution_con;
+    old_index = svc->execution_pool_index;
+    svc->execution_con = NULL;
+    svc->execution_pool_index = (size_t)-1;
+    svc->execution_model = parsed;
+    if (svc->execution_mu_initialized) ducknng_mutex_unlock(&svc->execution_mu);
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    if (old_con) ducknng_service_release_execution_connection(svc, old_index);
+    return 0;
+}
+
 uint64_t ducknng_service_max_open_sessions(const ducknng_service *svc) {
     if (!svc) return 0;
     return svc->max_open_sessions;
@@ -2362,8 +2527,7 @@ uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *s
 }
 
 const char *ducknng_service_execution_model(const ducknng_service *svc) {
-    return svc && svc->rt ? ducknng_runtime_execution_model(svc->rt) :
-        DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
+    return ducknng_execution_model_name(svc ? svc->execution_model : DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION);
 }
 
 const char *ducknng_service_peer_identity_format(const ducknng_service *svc) {
