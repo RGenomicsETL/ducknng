@@ -1,8 +1,51 @@
 # News
 
-## ducknng 0.1.0
+## ducknng 0.1.0 — first sealed release
 
-### Latest additions
+The 0.1.0 public API is sealed. Names, contracts, and method schemas in the current implementation and documentation are stable and should not change casually. All must-resolve items in `docs/api_sealing_checklist.md` are resolved.
+
+### What is included and stable
+
+**Transport.** `ducknng_start_server(...)` accepts `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, and `https://`. The URL scheme selects the transport family; NNG and HTTP/HTTPS share one server entrypoint with `contexts = 1` for the HTTP carrier. Synchronous and AIO request, RPC, and session helpers route by scheme automatically.
+
+**Socket patterns.** All six NNG socket families are supported and tested with dedicated coverage: pair, push/pull, pub/sub, surveyor/respondent, bus (hub-and-spoke broadcast and fully-connected all-pairs in `test/sql/ducknng_bus_mesh.test`), and poly.
+
+**AIO.** Raw request, unary RPC, session (open/fetch/close/cancel), and HTTP AIO helpers share one handle lifecycle: launch returns a handle, `ducknng_aio_collect(...)` collects or polls, `ducknng_aio_drop(...)` releases. `ducknng_aio_collect_decoded(...)` layers structured convenience. `ducknng_aio_status(...)` exposes terminal state. `ducknng_aio_wait(...)` waits without collecting.
+
+**Query sessions.** `query_open` returns a bearer `session_token`; `fetch`, `close`, and `cancel` must present it with the session id. mTLS-verified peer identity is an additional owner constraint when present. `ducknng_fetch_query_table(...)` is the one-fetch decoded-table convenience path. Raw session variants (`ducknng_open_query_raw`, `ducknng_fetch_query_raw`, `ducknng_close_query_raw`, `ducknng_cancel_query_raw`) return one reply frame for use inside HTTP route handlers.
+
+**Execution models.** `ducknng_set_service_execution_model(...)` switches between `shared_serialized_connection` (default), `service_serialized_connection`, and `request_connection`.
+
+**TLS.** `ducknng_self_signed_tls_config(...)` and `ducknng_tls_config_from_files(...)` accept PEM material from paths or in-memory strings. Handles are reusable across servers and client calls.
+
+**HTTP route framework.** `ducknng_register_http_route(...)` and `ducknng_register_http_route_pattern(...)` mount exact, prefix, and template routes beside the framed RPC endpoint. Strict header/query/cookie/path parsers, named request accessors, and one-row response-builder helpers are part of the public surface. Routes are not manifest methods.
+
+**Body codecs.** `ducknng_parse_body(blob, content_type)` dispatches to built-in decoders for JSON, Arrow IPC, ducknng frames, text, and raw. CSV/TSV/Parquet are recognised but use the `body BLOB` fallback. `ducknng_register_codec(...)` and `ducknng_unregister_codec(...)` extend the set at runtime.
+
+**Method registry and manifest.** Methods are registered through descriptors and appear in the manifest exported by `ducknng_get_rpc_manifest(...)` and the built-in `manifest` RPC method.
+
+**Admission and security.** Fast C admission: required mTLS, exact peer-identity allowlists, IP/CIDR allowlists, and service limits (`max_open_sessions`, `max_active_pipes`, `max_inflight_requests`, `max_sessions_per_peer_identity`). SQL authorizer callbacks via `ducknng_set_service_sql_authorizer(...)`. Per-principal in-flight caps, cumulative byte limits, and session-open rate limits are explicitly deferred — service-level limits are the stable admission contract.
+
+**Arrow IPC type contract.** Normative two-way types: `BOOLEAN`, `TINYINT`–`BIGINT`, `UTINYINT`–`UBIGINT`, `FLOAT`, `DOUBLE`, `VARCHAR`, `BLOB`, `DATE`, `TIME`, `TIME_NS`, `TIMESTAMP_S`/`MS`/`US`/`NS`, `DECIMAL`, `LIST`, `STRUCT`. Emit-only projections: `HUGEINT` as `decimal128(38,0)`, `UUID` as `utf8`, `TIMESTAMP_TZ` as timezone-free `timestamp[us]`, `ENUM` as resolved `utf8`, `MAP` as Arrow `map`, `UNION` as Arrow `dense_union`. Explicitly deferred: dictionary-preserving roundtrips, extension types, run-end encoding, `UNION` input decoding, per-principal rate limits, large UTF-8/binary, fixed-size binary, duration, timezone-aware timestamp semantics. See `docs/types.md`.
+
+**Pipe monitor.** `ducknng_read_monitor(...)` and `ducknng_list_pipes(...)` expose per-service NNG pipe event telemetry.
+
+**Tests.** 19 SQL test files: server start/stop, socket protocols, bus mesh, mTLS auth, pipe monitor, HTTP client contract, HTTP framework, HTTP server routing, service limits, body codecs, SQL authorizer, RPC client smoke (full Arrow type roundtrip), public surface, negative paths, lifecycle races, execution models, IP allowlist, peer allowlist, and WebSocket transports.
+
+**README.** Rendered using [duckknit](https://github.com/rundel/duckknit) for persistent inter-chunk DuckDB sessions. All `{duckdb}` chunks use a `document` hook that rewrites fences to ` ```sql ` for GitHub syntax highlighting.
+
+### What is explicitly deferred (not blocking 0.1.0)
+
+- Dictionary-preserving Arrow roundtrips, extension types, run-end encoding, `UNION` input decoding
+- Per-principal in-flight caps, cumulative byte limits, session-open rate limits
+- Large UTF-8/binary, fixed-size binary, duration, timezone-aware timestamps
+- Static assets, HTTP-carrier streaming, route-local authentication policy, worker lifecycle management
+- CSV/TSV/Parquet body parsing via a memory-backed reader (generic `body BLOB` fallback is stable)
+- Future DuckDB-native Arrow re-plumb using `unstable_new_arrow_functions` if that API stabilises
+
+---
+
+### Detailed change history
 
 - Made synchronous low-level socket helpers return one in-band result struct with `ok`, `error`, nullable `nng_error`, nullable `nng_error_message`, `socket_id`, `payload`, and `url`, so validation failures and NNG failures no longer have to surface as DuckDB statement errors in normal socket workflows.
 - Made framed raw RPC/session helpers return local `ducknng` error frames for request setup and transport failures instead of collapsing them to `NULL`, and taught `ducknng_decode_frame(...)` to surface frame error text in its `error` column with `ok = false` for error frames.
