@@ -65,7 +65,7 @@ make release
 Load it, start an IPC service, ask the server its name through the
 built-in `manifest` method, and stop it again:
 
-``` duckdb
+``` sql
 -- args: name, listen URL, REP-context count, recv_max_bytes,
 --       session_idle_ms, tls_config_id (0 = plaintext).
 SELECT ducknng_start_server(
@@ -318,7 +318,7 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ### Start an IPC listener and inspect the registry
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql0',                         -- service name
   'ipc:///tmp/ducknng_sql0.ipc', -- listen URL
@@ -349,7 +349,7 @@ SELECT ducknng_stop_server('sql0');
 
 ### Request multiple REP contexts on one REP socket
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_multi',                    -- service name
   'ipc:///tmp/ducknng_sql_multi.ipc', -- listen URL
@@ -385,7 +385,7 @@ SELECT ducknng_stop_server('sql_multi');
 
 The default RPC surface only exposes `manifest`. `exec` is opt-in.
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_client_demo',
   'ipc:///tmp/ducknng_sql_client_demo.ipc',
@@ -426,7 +426,7 @@ ORDER BY name;
 
 #### Register `exec` and re-inspect the manifest
 
-``` duckdb
+``` sql
 SELECT ducknng_register_exec_method(false) AS registered_exec;
 SELECT name, family, response_mode, requires_auth, disabled
 FROM ducknng_list_methods()
@@ -464,7 +464,7 @@ FROM manifest_row;
 
 #### Run RPC statements and fetch rows
 
-``` duckdb
+``` sql
 SELECT * FROM ducknng_run_rpc(
   'ipc:///tmp/ducknng_sql_client_demo.ipc',
   'CREATE TABLE IF NOT EXISTS client_side_demo(i INTEGER)',
@@ -503,7 +503,7 @@ FROM ducknng_query_rpc(
 
 The row path carries temporal, decimal, list, and struct values.
 
-``` duckdb
+``` sql
 SELECT d = DATE '2024-01-02' AS date_ok,
        ts = TIMESTAMP '2024-01-02 03:04:05.123456' AS ts_ok,
        dec = 123.45::DECIMAL(10,2) AS decimal_ok,
@@ -527,7 +527,7 @@ FROM ducknng_query_rpc(
 
 #### Body codec helpers
 
-``` duckdb
+``` sql
 SELECT provider, output
 FROM ducknng_list_codecs()
 ORDER BY provider;
@@ -565,7 +565,7 @@ Low-level socket operations return a struct-shaped result: `ok`,
 `error`, `nng_error`, `nng_error_message`, `socket_id`, `payload`,
 `url`.
 
-``` duckdb
+``` sql
 SELECT (ducknng_open_socket('req')).socket_id;
 SELECT (ducknng_dial_socket(
   1, 'ipc:///tmp/ducknng_sql_client_demo.ipc', 1000, 0::UBIGINT
@@ -619,7 +619,7 @@ The raw scalar forms return reply bytes as BLOBs;
 `ducknng_decode_frame(...)` projects the envelope fields and text
 payload.
 
-``` duckdb
+``` sql
 -- Raw bytes from a socket-scoped request (first 14 octets as hex).
 SELECT substr(
   hex(ducknng_request_socket_raw(
@@ -678,7 +678,7 @@ FROM ducknng_decode_frame(
 
 #### Cleanup
 
-``` duckdb
+``` sql
 SELECT (ducknng_close_socket(1)).ok;
 SELECT ducknng_stop_server('sql_client_demo');
 +------------------------------+
@@ -742,7 +742,7 @@ server <- http_server(
 )
 ```
 
-``` duckdb
+``` sql
 -- Register a client TLS handle that trusts the self-signed HTTPS demo server.
 SET VARIABLE tls_http_id = ducknng_tls_config_from_files(
   NULL,                                     -- cert_key_file
@@ -812,7 +812,7 @@ synchronous request, RPC, and session helpers keep the same names they
 already use for NNG URLs while switching carriers automatically from the
 scheme. For `http://` and `https://`, use `contexts = 1`.
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'http_demo',
   'http://127.0.0.1:18444/_ducknng',
@@ -878,7 +878,7 @@ in-flight request through `ducknng_http_request()` and
 
 #### Start the server and register routes
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'http_route_demo',
   'http://127.0.0.1:18445/_ducknng',
@@ -943,7 +943,7 @@ SELECT ducknng_register_http_route_pattern(
 
 #### Send test requests
 
-``` duckdb
+``` sql
 SELECT ok, status = 200, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18445/healthz', 'GET', NULL, NULL, 2000, 0::UBIGINT);
 SELECT ok, status = 201, body_text
@@ -975,7 +975,7 @@ FROM ducknng_ncurl(
 
 #### List routes and stop the server
 
-``` duckdb
+``` sql
 SELECT service_name, method, match_kind, path
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_route_demo'
@@ -1027,7 +1027,7 @@ live HTTP requests.
 
 #### Open and connect the socket pair
 
-``` duckdb
+``` sql
 SET VARIABLE pair_a = (ducknng_open_socket('pair')).socket_id;
 SET VARIABLE pair_listen_ok = (ducknng_listen_socket(
   getvariable('pair_a')::UBIGINT,
@@ -1044,7 +1044,7 @@ SET VARIABLE pair_dial_ok = (ducknng_dial_socket(
 
 #### Launch async send and receive, then collect results
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE pair_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('pair_a')::UBIGINT, 1000) AS recv_aio;
 CREATE TEMP TABLE pair_send AS
@@ -1081,7 +1081,7 @@ FROM ducknng_aio_status((SELECT send_aio FROM pair_send));
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop((SELECT send_aio FROM pair_send)) AS dropped_send,
        ducknng_aio_drop((SELECT recv_aio FROM pair_recv)) AS dropped_recv;
 DROP TABLE pair_send;
@@ -1106,7 +1106,7 @@ SELECT (ducknng_close_socket(getvariable('pair_b')::UBIGINT)).ok AS closed_b,
 
 #### Open and connect
 
-``` duckdb
+``` sql
 SET VARIABLE pull_socket = (ducknng_open_socket('pull')).socket_id;
 SET VARIABLE pull_listen_ok = (ducknng_listen_socket(
   getvariable('pull_socket')::UBIGINT,
@@ -1123,7 +1123,7 @@ SET VARIABLE push_dial_ok = (ducknng_dial_socket(
 
 #### Send and receive
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE pushpull_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('pull_socket')::UBIGINT, 1000) AS recv_aio;
 SET VARIABLE pushpull_sent = (ducknng_send_socket_raw(
@@ -1143,7 +1143,7 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pushpull_recv), 1000)
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop((SELECT recv_aio FROM pushpull_recv)) AS dropped;
 DROP TABLE pushpull_recv;
 SELECT (ducknng_close_socket(getvariable('push_socket')::UBIGINT)).ok AS closed_push,
@@ -1165,7 +1165,7 @@ SELECT (ducknng_close_socket(getvariable('push_socket')::UBIGINT)).ok AS closed_
 
 #### Open, subscribe, and connect
 
-``` duckdb
+``` sql
 SET VARIABLE pub_socket = (ducknng_open_socket('pub')).socket_id;
 SET VARIABLE pub_listen_ok = (ducknng_listen_socket(
   getvariable('pub_socket')::UBIGINT,
@@ -1185,7 +1185,7 @@ SET VARIABLE sub_dial_ok = (ducknng_dial_socket(
 
 #### Publish and receive
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE pubsub_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('sub_socket')::UBIGINT, 1000) AS recv_aio;
 SET VARIABLE pubsub_sent = (ducknng_send_socket_raw(
@@ -1205,7 +1205,7 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pubsub_recv), 1000);
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop((SELECT recv_aio FROM pubsub_recv)) AS dropped;
 DROP TABLE pubsub_recv;
 SELECT (ducknng_close_socket(getvariable('sub_socket')::UBIGINT)).ok AS closed_sub,
@@ -1227,7 +1227,7 @@ SELECT (ducknng_close_socket(getvariable('sub_socket')::UBIGINT)).ok AS closed_s
 
 #### Open respondent listener and surveyor peer
 
-``` duckdb
+``` sql
 SET VARIABLE respondent_socket = (ducknng_open_socket('respondent')).socket_id;
 SET VARIABLE respondent_listen_ok = (ducknng_listen_socket(
   getvariable('respondent_socket')::UBIGINT,
@@ -1244,7 +1244,7 @@ SET VARIABLE surveyor_dial_ok = (ducknng_dial_socket(
 
 #### Exchange the survey and the response
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE respondent_recv AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('respondent_socket')::UBIGINT, 1000) AS recv_aio;
 SET VARIABLE survey_sent = (ducknng_send_socket_raw(
@@ -1279,7 +1279,7 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM surveyor_recv), 1000)
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop((SELECT recv_aio FROM respondent_recv)) AS dropped_respondent,
        ducknng_aio_drop((SELECT recv_aio FROM surveyor_recv)) AS dropped_surveyor;
 DROP TABLE respondent_recv;
@@ -1307,7 +1307,7 @@ single send from peer A is delivered to both B and C.
 
 #### Open three bus peers and connect
 
-``` duckdb
+``` sql
 SET VARIABLE bus_a = (ducknng_open_socket('bus')).socket_id;
 SET VARIABLE bus_b = (ducknng_open_socket('bus')).socket_id;
 SET VARIABLE bus_c = (ducknng_open_socket('bus')).socket_id;
@@ -1331,7 +1331,7 @@ SET VARIABLE bus_c_dial_ok = (ducknng_dial_socket(
 
 #### Arm receivers, broadcast from A, and collect at B and C
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE bus_recv_b AS
 SELECT ducknng_recv_socket_raw_aio(getvariable('bus_b')::UBIGINT, 1000) AS recv_aio;
 CREATE TEMP TABLE bus_recv_c AS
@@ -1361,7 +1361,7 @@ FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM bus_recv_c), 1000);
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop((SELECT recv_aio FROM bus_recv_b)) AS dropped_b,
        ducknng_aio_drop((SELECT recv_aio FROM bus_recv_c)) AS dropped_c;
 DROP TABLE bus_recv_b;
@@ -1403,7 +1403,7 @@ protocol.
 
 #### Start the listener and launch two parallel requests
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_aio_demo', 'ipc:///tmp/ducknng_sql_aio_demo.ipc',
   1, 134217728, 300000, 0
@@ -1438,7 +1438,7 @@ FROM aio_demo;
 
 #### Wait, collect, and inspect terminal handles
 
-``` duckdb
+``` sql
 -- Wait without consuming — status/drop logic can still run after this.
 SELECT ducknng_aio_wait((SELECT list_value(aio1, aio2) FROM aio_demo), 1000) AS any_ready;
 SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
@@ -1467,7 +1467,7 @@ FROM aio_demo;
 
 #### Drop handles and stop the server
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop(aio1) AND ducknng_aio_drop(aio2) AS dropped
 FROM aio_demo;
 DROP TABLE aio_demo;
@@ -1496,7 +1496,7 @@ remains explicit.
 `exec` is already in the global registry from the earlier example. A
 fresh server inherits the current registry automatically.
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_rpc_aio_demo', 'ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc',
   1, 134217728, 300000, 0
@@ -1510,7 +1510,7 @@ SELECT ducknng_start_server(
 
 #### Launch manifest and exec aio calls
 
-``` duckdb
+``` sql
 SET VARIABLE manifest_aio = ducknng_get_rpc_manifest_raw_aio(
   'ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc', 1000, 0::UBIGINT
 );
@@ -1532,7 +1532,7 @@ SELECT getvariable('manifest_aio') > 0 AS manifest_aio_started,
 
 #### Collect and decode the frames
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE rpc_aio_collect AS
 SELECT *
 FROM ducknng_aio_collect(
@@ -1566,7 +1566,7 @@ FROM ducknng_decode_frame(getvariable('exec_frame'));
 
 #### Convenience decoded collection wrapper
 
-``` duckdb
+``` sql
 SET VARIABLE manifest_aio_decoded = ducknng_get_rpc_manifest_raw_aio(
   'ipc:///tmp/ducknng_sql_rpc_aio_demo.ipc', 1000, 0::UBIGINT
 );
@@ -1582,7 +1582,7 @@ FROM ducknng_aio_collect_decoded(list_value(getvariable('manifest_aio_decoded'))
 
 #### Clean up
 
-``` duckdb
+``` sql
 SELECT ducknng_aio_drop(getvariable('manifest_aio')) AND
        ducknng_aio_drop(getvariable('exec_aio')) AND
        ducknng_aio_drop(getvariable('manifest_aio_decoded')) AS dropped;
@@ -1605,7 +1605,7 @@ SELECT ducknng_stop_server('sql_rpc_aio_demo');
 
 #### Start the server and open a session
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_session_demo', 'ipc:///tmp/ducknng_sql_session_demo.ipc',
   1, 134217728, 300000, 0
@@ -1643,7 +1643,7 @@ FROM session_open;
 
 #### Fetch rows and check the exhausted state
 
-``` duckdb
+``` sql
 -- Table helper decodes the first batch directly as rows.
 SELECT *
 FROM ducknng_fetch_query_table(
@@ -1676,7 +1676,7 @@ FROM ducknng_fetch_query(
 
 #### Close the session and stop the server
 
-``` duckdb
+``` sql
 SELECT ok, session_id, state
 FROM ducknng_close_query(
   'ipc:///tmp/ducknng_sql_session_demo.ipc',
@@ -1703,7 +1703,7 @@ SELECT ducknng_stop_server('sql_session_demo');
 
 #### Start the server and open a raw session
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_session_raw_demo', 'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
   1, 134217728, 300000, 0
@@ -1742,7 +1742,7 @@ SET VARIABLE raw_session_token = (
 
 #### Fetch a batch and decode the Arrow payload
 
-``` duckdb
+``` sql
 SET VARIABLE raw_session_fetch_frame = ducknng_fetch_query_raw(
   'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
   getvariable('raw_session_id')::UBIGINT,
@@ -1775,7 +1775,7 @@ FROM ducknng_parse_body(
 
 #### Close the raw session and stop the server
 
-``` duckdb
+``` sql
 SET VARIABLE raw_session_close_frame = ducknng_close_query_raw(
   'ipc:///tmp/ducknng_sql_session_raw_demo.ipc',
   getvariable('raw_session_id')::UBIGINT,
@@ -1803,7 +1803,7 @@ SELECT ducknng_stop_server('sql_session_raw_demo');
 
 #### Start the server
 
-``` duckdb
+``` sql
 SELECT ducknng_start_server(
   'sql_session_aio_demo', 'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
   1, 134217728, 300000, 0
@@ -1817,7 +1817,7 @@ SELECT ducknng_start_server(
 
 #### Open session asynchronously
 
-``` duckdb
+``` sql
 SET VARIABLE session_open_aio = ducknng_open_query_raw_aio(
   'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
   'SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id',
@@ -1858,7 +1858,7 @@ DROP TABLE session_open_aio_collect;
 
 #### Fetch asynchronously
 
-``` duckdb
+``` sql
 SET VARIABLE session_fetch_aio = ducknng_fetch_query_raw_aio(
   'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
   getvariable('session_aio_id')::UBIGINT,
@@ -1889,7 +1889,7 @@ DROP TABLE session_fetch_aio_collect;
 
 #### Close asynchronously
 
-``` duckdb
+``` sql
 SET VARIABLE session_close_aio = ducknng_close_query_raw_aio(
   'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
   getvariable('session_aio_id')::UBIGINT,
@@ -1921,7 +1921,7 @@ DROP TABLE session_close_aio_collect;
 
 #### Cancel asynchronously
 
-``` duckdb
+``` sql
 CREATE TEMP TABLE session_cancel_open AS
 SELECT * FROM ducknng_open_query(
   'ipc:///tmp/ducknng_sql_session_aio_demo.ipc',
@@ -1964,7 +1964,7 @@ DROP TABLE session_cancel_aio_collect;
 
 #### Stop the server
 
-``` duckdb
+``` sql
 SELECT ducknng_stop_server('sql_session_aio_demo');
 +---------------------------------------------+
 | ducknng_stop_server('sql_session_aio_demo') |
@@ -1975,7 +1975,7 @@ SELECT ducknng_stop_server('sql_session_aio_demo');
 
 ### `tls+tcp://` with a self-signed development TLS config
 
-``` duckdb
+``` sql
 -- Generate a self-signed loopback certificate and keep it as a runtime TLS handle.
 SET VARIABLE tls_self_id = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
 -- Start a TLS listener using the generated config handle.
@@ -2082,7 +2082,7 @@ for NNG, HTTP/HTTPS framed RPC, and HTTP routes.
 
 ### `tls+tcp://` from file-backed certificate material
 
-``` duckdb
+``` sql
 -- Register a file-backed TLS config using committed loopback test certificates.
 SET VARIABLE tls_files_id = ducknng_tls_config_from_files(
   'test/certs/loopback-cert-key.pem', -- cert_key_file
@@ -2142,7 +2142,7 @@ described in `docs/http.md`. They use `ducknng_start_server(...)`, the
 same framed manifest/RPC/session helpers, and the same TLS handle model
 as the other NNG transports.
 
-``` duckdb
+``` sql
 -- Plain WebSocket transport through the NNG service layer.
 SELECT ducknng_start_server(
   'ws_demo',

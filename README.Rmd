@@ -9,6 +9,12 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 library(duckknit)
 knitr::opts_chunk$set(mode = "table", comment = "")
 
+# Rewrite duckknit's ``` duckdb fences to ``` sql so GitHub applies
+# SQL syntax highlighting in the rendered README.
+knitr::knit_hooks$set(document = function(x) {
+  gsub("(?m)^``` duckdb", "``` sql", x, perl = TRUE)
+})
+
 # Pre-start the default duckknit session with -unsigned so unsigned extensions
 # can be loaded. duckknit_start_session() only accepts a db path, not extra
 # CLI flags, so we launch the process directly and register it in duckknit's
