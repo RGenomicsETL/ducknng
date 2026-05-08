@@ -183,15 +183,16 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
     ducknng_query_open_request open_req;
-    duckdb_result result;
-    ducknng_service_sql_scope scope;
+    duckdb_connection session_con = NULL;
+    size_t session_pool_index = (size_t)-1;
+    duckdb_prepared_statement stmt = NULL;
+    duckdb_pending_result pending = NULL;
     uint64_t session_id = 0;
     char *owner_token = NULL;
     char json[384];
     char *errmsg = NULL;
     (void)method;
     memset(&open_req, 0, sizeof(open_req));
-    memset(&result, 0, sizeof(result));
     if (!svc || !svc->rt || !req || !req->frame || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing query_open execution context");
         return -1;
@@ -201,37 +202,110 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         if (errmsg) duckdb_free(errmsg);
         return -1;
     }
-    if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+    if (ducknng_service_acquire_session_connection(svc, &session_con, &session_pool_index, &errmsg) != 0) {
         ducknng_query_open_request_destroy(&open_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
-            errmsg ? errmsg : "ducknng: missing query_open execution context");
+            errmsg ? errmsg : "ducknng: no connection available for query session");
         if (errmsg) duckdb_free(errmsg);
         return -1;
     }
-    if (duckdb_query(scope.con, open_req.sql, &result) == DuckDBError) {
-        char *detail = ducknng_strdup(duckdb_result_error(&result));
-        ducknng_service_leave_request_sql(&scope);
-        duckdb_destroy_result(&result);
+    /* set service context so table-function bind callbacks (e.g. ducknng_parse_body) detect
+     * service-owned SQL during the duckdb_prepare bind phase */
+    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, svc);
+    {
+        /* Extract statements so multi-statement SQL (e.g. SET x=y; SELECT ...) is handled
+         * correctly: duckdb_prepare rejects strings with more than one statement.
+         * We execute all but the last statement eagerly on session_con, then prepare+pending
+         * the final statement. */
+        duckdb_extracted_statements extracted = NULL;
+        idx_t n_stmts = duckdb_extract_statements(session_con, open_req.sql, &extracted);
+        if (n_stmts == 0) {
+            /* extraction error or empty SQL */
+            const char *ext_err = extracted ? duckdb_extract_statements_error(extracted) : NULL;
+            char *detail = ducknng_strdup(ext_err ? ext_err : "ducknng: query_open failed to extract statements");
+            if (extracted) duckdb_destroy_extracted(&extracted);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_service_release_session_connection(svc, session_pool_index);
+            ducknng_query_open_request_destroy(&open_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                detail && detail[0] ? detail : "ducknng: query_open: empty or invalid SQL");
+            if (detail) duckdb_free(detail);
+            return -1;
+        }
+        /* Execute leading statements (all but last) eagerly */
+        {
+            idx_t i;
+            for (i = 0; i + 1 < n_stmts; i++) {
+                duckdb_prepared_statement lead_stmt = NULL;
+                duckdb_result lead_result;
+                memset(&lead_result, 0, sizeof(lead_result));
+                if (duckdb_prepare_extracted_statement(session_con, extracted, i, &lead_stmt) == DuckDBError) {
+                    char *detail = ducknng_strdup(lead_stmt ? duckdb_prepare_error(lead_stmt) : NULL);
+                    if (lead_stmt) duckdb_destroy_prepare(&lead_stmt);
+                    duckdb_destroy_extracted(&extracted);
+                    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+                    ducknng_service_release_session_connection(svc, session_pool_index);
+                    ducknng_query_open_request_destroy(&open_req);
+                    ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                        detail && detail[0] ? detail : "ducknng: query_open: failed to prepare leading statement");
+                    if (detail) duckdb_free(detail);
+                    return -1;
+                }
+                if (duckdb_execute_prepared(lead_stmt, &lead_result) == DuckDBError) {
+                    char *detail = ducknng_strdup(duckdb_result_error(&lead_result));
+                    duckdb_destroy_result(&lead_result);
+                    duckdb_destroy_prepare(&lead_stmt);
+                    duckdb_destroy_extracted(&extracted);
+                    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+                    ducknng_service_release_session_connection(svc, session_pool_index);
+                    ducknng_query_open_request_destroy(&open_req);
+                    ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                        detail && detail[0] ? detail : "ducknng: query_open: failed to execute leading statement");
+                    if (detail) duckdb_free(detail);
+                    return -1;
+                }
+                duckdb_destroy_result(&lead_result);
+                duckdb_destroy_prepare(&lead_stmt);
+            }
+        }
+        /* Prepare the final statement */
+        if (duckdb_prepare_extracted_statement(session_con, extracted, n_stmts - 1, &stmt) == DuckDBError) {
+            char *detail = ducknng_strdup(stmt ? duckdb_prepare_error(stmt) : NULL);
+            if (stmt) duckdb_destroy_prepare(&stmt);
+            stmt = NULL;
+            duckdb_destroy_extracted(&extracted);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_service_release_session_connection(svc, session_pool_index);
+            ducknng_query_open_request_destroy(&open_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                detail && detail[0] ? detail : "ducknng: query_open prepare failed");
+            if (detail) duckdb_free(detail);
+            return -1;
+        }
+        duckdb_destroy_extracted(&extracted);
+    }
+    if (duckdb_pending_prepared(stmt, &pending) == DuckDBError) {
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        if (pending) duckdb_destroy_pending(&pending);
+        duckdb_destroy_prepare(&stmt);
+        ducknng_service_release_session_connection(svc, session_pool_index);
         ducknng_query_open_request_destroy(&open_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
-            detail && detail[0] ? detail : "ducknng: query_open failed");
-        if (detail) duckdb_free(detail);
+            "ducknng: query_open failed to start streaming execution");
         return -1;
     }
-    ducknng_service_leave_request_sql(&scope);
-    if (duckdb_result_return_type(result) != DUCKDB_RESULT_TYPE_QUERY_RESULT) {
-        duckdb_destroy_result(&result);
-        ducknng_query_open_request_destroy(&open_req);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, "ducknng: query_open requires a row-returning query");
-        return -1;
-    }
+    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     {
-        int add_session_rc = ducknng_service_add_session(svc, &result, req->caller_identity,
-            &session_id, &owner_token, &errmsg);
-        if (add_session_rc != 0) {
+        int add_rc = ducknng_service_add_session_streaming(svc, session_con, session_pool_index,
+            stmt, pending, req->caller_identity, &session_id, &owner_token, &errmsg);
+        if (add_rc != 0) {
+            /* session was not created; release resources here */
+            duckdb_destroy_pending(&pending);
+            duckdb_destroy_prepare(&stmt);
+            ducknng_service_release_session_connection(svc, session_pool_index);
             ducknng_query_open_request_destroy(&open_req);
             ducknng_method_reply_set_error(reply,
-                add_session_rc > 0 ? DUCKNNG_STATUS_BUSY : DUCKNNG_STATUS_INTERNAL,
+                add_rc > 0 ? DUCKNNG_STATUS_BUSY : DUCKNNG_STATUS_INTERNAL,
                 errmsg ? errmsg : "ducknng: failed to register query session");
             if (errmsg) duckdb_free(errmsg);
             return -1;
@@ -290,6 +364,37 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_session_release(session);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_CANCELLED, "ducknng: session was cancelled");
         return -1;
+    }
+    /* drive pending execution to READY on first fetch call */
+    if (!session->pending_ready && session->pending_open) {
+        duckdb_pending_state pstate;
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, svc);
+        do {
+            pstate = duckdb_pending_execute_task(session->session_pending);
+        } while (pstate == DUCKDB_PENDING_RESULT_NOT_READY || pstate == DUCKDB_PENDING_NO_TASKS_AVAILABLE);
+        if (pstate == DUCKDB_PENDING_ERROR) {
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_release(session);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, "ducknng: fetch execution failed");
+            return -1;
+        }
+        if (duckdb_execute_pending(session->session_pending, &session->result) == DuckDBError) {
+            char *detail = ducknng_strdup(duckdb_result_error(&session->result));
+            duckdb_destroy_result(&session->result);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_release(session);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                detail && detail[0] ? detail : "ducknng: fetch failed to obtain streaming result");
+            if (detail) duckdb_free(detail);
+            return -1;
+        }
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        session->result_open = 1;
+        session->pending_ready = 1;
+        /* pending result consumed; mark closed so destroy doesn't double-free */
+        session->pending_open = 0;
     }
     if (!session->result_open || ducknng_result_next_chunk_to_ipc(session->result, &payload, &payload_len, &has_batch, &errmsg) != 0) {
         ducknng_mutex_unlock(&session->mu);
@@ -385,6 +490,9 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
         ducknng_mutex_lock(&session->mu);
         session->cancelled = 1;
         ducknng_mutex_unlock(&session->mu);
+    }
+    if (session->session_con) {
+        duckdb_interrupt(session->session_con);
     }
     ducknng_session_destroy(session);
     return ducknng_session_state_reply(reply, "cancel",

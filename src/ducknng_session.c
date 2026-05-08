@@ -149,6 +149,66 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
     return session;
 }
 
+ducknng_session *ducknng_session_create_streaming(
+    ducknng_service *svc, duckdb_connection session_con, size_t pool_index,
+    duckdb_prepared_statement stmt, duckdb_pending_result pending,
+    uint64_t session_id, const char *owner_token, const char *owner_identity, char **errmsg) {
+    ducknng_session *session = (ducknng_session *)duckdb_malloc(sizeof(*session));
+    if (!session) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating session");
+        return NULL;
+    }
+    memset(session, 0, sizeof(*session));
+    if (!owner_token || !owner_token[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing session owner token");
+        duckdb_free(session);
+        return NULL;
+    }
+    session->session_id = session_id;
+    session->owner_token = ducknng_strdup(owner_token);
+    if (!session->owner_token) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying session owner token");
+        duckdb_free(session);
+        return NULL;
+    }
+    if (owner_identity && owner_identity[0]) {
+        session->owner_identity = ducknng_strdup(owner_identity);
+        if (!session->owner_identity) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying session owner identity");
+            duckdb_free(session->owner_token);
+            duckdb_free(session);
+            return NULL;
+        }
+    }
+    session->session_svc = svc;
+    session->session_con = session_con;
+    session->session_pool_index = pool_index;
+    session->session_stmt = stmt;
+    session->session_pending = pending;
+    session->stmt_open = (stmt != NULL) ? 1 : 0;
+    session->pending_open = (pending != NULL) ? 1 : 0;
+    session->pending_ready = 0;
+    session->last_touch_ms = ducknng_now_ms();
+    if (ducknng_mutex_init(&session->mu) != 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session mutex");
+        if (session->owner_token) duckdb_free(session->owner_token);
+        if (session->owner_identity) duckdb_free(session->owner_identity);
+        duckdb_free(session);
+        return NULL;
+    }
+    session->mu_initialized = 1;
+    if (ducknng_cond_init(&session->cv) != 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session condition variable");
+        if (session->owner_token) duckdb_free(session->owner_token);
+        if (session->owner_identity) duckdb_free(session->owner_identity);
+        ducknng_mutex_destroy(&session->mu);
+        duckdb_free(session);
+        return NULL;
+    }
+    session->cv_initialized = 1;
+    return session;
+}
+
 void ducknng_session_destroy(ducknng_session *session) {
     if (!session) return;
     if (session->mu_initialized) {
@@ -162,6 +222,19 @@ void ducknng_session_destroy(ducknng_session *session) {
     if (session->result_open) {
         duckdb_destroy_result(&session->result);
         session->result_open = 0;
+    }
+    if (session->pending_open) {
+        duckdb_destroy_pending(&session->session_pending);
+        session->pending_open = 0;
+    }
+    if (session->stmt_open) {
+        duckdb_destroy_prepare(&session->session_stmt);
+        session->stmt_open = 0;
+    }
+    if (session->session_svc && session->session_pool_index != (size_t)-1) {
+        ducknng_service_release_session_connection(session->session_svc, session->session_pool_index);
+        session->session_pool_index = (size_t)-1;
+        session->session_con = NULL;
     }
     if (session->owner_token) {
         duckdb_free(session->owner_token);
@@ -379,4 +452,93 @@ size_t ducknng_service_prune_idle_sessions(ducknng_service *svc, uint64_t now_ms
     }
     ducknng_mutex_unlock(&svc->mu);
     return removed;
+}
+
+int ducknng_service_add_session_streaming(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index,
+    duckdb_prepared_statement stmt, duckdb_pending_result pending,
+    const char *owner_identity, uint64_t *out_session_id, char **out_owner_token, char **errmsg) {
+    ducknng_session **new_sessions;
+    size_t new_cap;
+    ducknng_session *session;
+    uint64_t session_id;
+    char owner_token[33];
+    char *owner_token_copy = NULL;
+    size_t i;
+    size_t owner_session_count = 0;
+    if (out_session_id) *out_session_id = 0;
+    if (out_owner_token) *out_owner_token = NULL;
+    if (!svc) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing service for session add");
+        return -1;
+    }
+    ducknng_mutex_lock(&svc->mu);
+    if (svc->shutting_down) {
+        ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service is stopping");
+        return 1;
+    }
+    if (svc->max_open_sessions > 0 && svc->session_count >= (size_t)svc->max_open_sessions) {
+        ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: max open sessions exceeded");
+        return 1;
+    }
+    if (svc->max_sessions_per_peer_identity > 0 && owner_identity && owner_identity[0]) {
+        for (i = 0; i < svc->session_count; i++) {
+            if (svc->sessions[i] && svc->sessions[i]->owner_identity &&
+                strcmp(svc->sessions[i]->owner_identity, owner_identity) == 0) {
+                owner_session_count++;
+            }
+        }
+        if (owner_session_count >= (size_t)svc->max_sessions_per_peer_identity) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: max sessions per peer identity exceeded");
+            return 1;
+        }
+    }
+    if (svc->session_count == svc->session_cap) {
+        new_cap = svc->session_cap ? svc->session_cap * 2 : 4;
+        new_sessions = (ducknng_session **)duckdb_malloc(sizeof(*new_sessions) * new_cap);
+        if (!new_sessions) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory growing session table");
+            return -1;
+        }
+        memset(new_sessions, 0, sizeof(*new_sessions) * new_cap);
+        if (svc->sessions && svc->session_count) {
+            memcpy(new_sessions, svc->sessions, sizeof(*new_sessions) * svc->session_count);
+        }
+        if (svc->sessions) duckdb_free(svc->sessions);
+        svc->sessions = new_sessions;
+        svc->session_cap = new_cap;
+    }
+    session_id = svc->next_session_id;
+    ducknng_session_generate_owner_token(owner_token);
+    session = ducknng_session_create_streaming(svc, session_con, pool_index, stmt, pending,
+        session_id, owner_token, owner_identity, errmsg);
+    if (!session) {
+        ducknng_mutex_unlock(&svc->mu);
+        return -1;
+    }
+    if (out_owner_token) {
+        owner_token_copy = ducknng_strdup(owner_token);
+        if (!owner_token_copy) {
+            ducknng_mutex_unlock(&svc->mu);
+            /* detach streaming resources before destroy to avoid double-release */
+            session->session_svc = NULL;
+            session->session_pool_index = (size_t)-1;
+            session->stmt_open = 0;
+            session->pending_open = 0;
+            ducknng_session_destroy(session);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying session owner token");
+            return -1;
+        }
+    }
+    svc->next_session_id++;
+    svc->sessions[svc->session_count++] = session;
+    ducknng_service_publish_session_count(svc);
+    ducknng_mutex_unlock(&svc->mu);
+    if (out_session_id) *out_session_id = session_id;
+    if (out_owner_token) *out_owner_token = owner_token_copy;
+    return 0;
 }

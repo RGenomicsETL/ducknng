@@ -6,7 +6,7 @@ require ducknng
 query I
 SELECT count(*) FROM ducknng_list_codecs()
 ----
-8
+10
 
 query IT
 SELECT a, b
@@ -16,14 +16,47 @@ ORDER BY a
 1	x
 2	y
 
-query T
-SELECT hex(body)
+query IT
+SELECT a, b
 FROM ducknng_parse_body(
   (concat('a,b', chr(10), '1,x', chr(10), '2,y', chr(10)))::BLOB,
   'text/csv'
 )
+ORDER BY a
 ----
-612C620A312C780A322C790A
+1	x
+2	y
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body(
+  (concat('a', chr(9), 'b', chr(10), '1', chr(9), 'x', chr(10), '2', chr(9), 'y', chr(10)))::BLOB,
+  'text/tab-separated-values'
+)
+ORDER BY a
+----
+1	x
+2	y
+
+query IT
+SELECT a, b
+FROM ducknng_parse_body(
+  (concat('{"a":1,"b":"x"}', chr(10), '{"a":2,"b":"y"}', chr(10)))::BLOB,
+  'application/x-ndjson'
+)
+ORDER BY a
+----
+1	x
+2	y
+
+query TT
+SELECT name, value
+FROM ducknng_parse_body('foo=bar&baz=hello%20world&plus=a+b'::BLOB, 'application/x-www-form-urlencoded')
+ORDER BY name
+----
+baz	hello world
+foo	bar
+plus	a b
 
 query T
 SELECT body_text
@@ -49,15 +82,15 @@ SELECT CASE WHEN ducknng_register_exec_method() THEN 1 ELSE 0 END
 ----
 1
 
-statement error
-SELECT *
+query IT
+SELECT a, b
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_body_codecs.ipc',
   'SELECT * FROM ducknng_parse_body(''[{"a":3,"b":"z"}]''::BLOB, ''application/json'')',
   0::UBIGINT
 )
 ----
-ducknng: DuckDB-reader body codecs cannot run inside service-owned SQL yet
+3	z
 
 query I
 SELECT CASE WHEN ducknng_stop_server('codec_rpc') THEN 1 ELSE 0 END

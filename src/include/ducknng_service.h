@@ -255,6 +255,9 @@ size_t ducknng_service_active_pipe_count(const ducknng_service *svc);
 size_t ducknng_service_inflight_request_count(const ducknng_service *svc);
 int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_scope *scope, char **errmsg);
 void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope);
+int ducknng_service_acquire_session_connection(ducknng_service *svc,
+    duckdb_connection *out_con, size_t *out_index, char **errmsg);
+void ducknng_service_release_session_connection(ducknng_service *svc, size_t index);
 int ducknng_service_enter_http_route_sql(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_service_sql_scope *scope, char **errmsg);
 void ducknng_service_leave_http_route_sql(ducknng_service_sql_scope *scope);

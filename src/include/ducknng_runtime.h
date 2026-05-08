@@ -103,12 +103,15 @@ typedef struct ducknng_user_codec {
 typedef struct ducknng_runtime {
     duckdb_database db;
     duckdb_connection init_con;
+    duckdb_connection codec_con;   /* dedicated connection for body codec SQL */
     ducknng_mutex mu;
     ducknng_mutex init_con_mu;
+    ducknng_mutex codec_con_mu;    /* serializes codec_con queries */
     ducknng_mutex execution_pool_mu;
     ducknng_cond aio_cv;
     int aio_cv_initialized;
     int init_con_mu_initialized;
+    int codec_con_mu_initialized;  /* 1 after codec_con_mu is ready */
     int execution_pool_mu_initialized;
     duckdb_connection *execution_pool;
     int *execution_pool_busy;
@@ -170,6 +173,9 @@ void ducknng_runtime_execution_lane_lock(ducknng_runtime *rt);
 void ducknng_runtime_execution_lane_unlock(ducknng_runtime *rt);
 void ducknng_runtime_init_con_lock(ducknng_runtime *rt);
 void ducknng_runtime_init_con_unlock(ducknng_runtime *rt);
+duckdb_connection ducknng_runtime_codec_connection(ducknng_runtime *rt);
+void ducknng_runtime_codec_connection_lock(ducknng_runtime *rt);
+void ducknng_runtime_codec_connection_unlock(ducknng_runtime *rt);
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc);
 ducknng_service *ducknng_runtime_current_request_service_get(ducknng_runtime *rt);
 ducknng_service *ducknng_runtime_current_thread_request_service_get(ducknng_runtime *rt);

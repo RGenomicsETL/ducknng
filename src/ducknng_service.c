@@ -214,6 +214,15 @@ void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
     memset(scope, 0, sizeof(*scope));
 }
 
+int ducknng_service_acquire_session_connection(ducknng_service *svc,
+    duckdb_connection *out_con, size_t *out_index, char **errmsg) {
+    return ducknng_service_acquire_execution_connection(svc, out_con, out_index, errmsg);
+}
+
+void ducknng_service_release_session_connection(ducknng_service *svc, size_t index) {
+    ducknng_service_release_execution_connection(svc, index);
+}
+
 int ducknng_service_enter_http_route_sql(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_service_sql_scope *scope, char **errmsg) {
     if (ducknng_service_enter_request_sql(svc, scope, errmsg) != 0) return -1;

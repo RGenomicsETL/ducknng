@@ -6,9 +6,17 @@
 #include "ducknng_runtime.h"
 #include "ducknng_util.h"
 #include "ducknng_wire.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#  include <io.h>
+#  include <windows.h>
+#  include <fcntl.h>
+#else
+#  include <unistd.h>
+#endif
 
 DUCKDB_EXTENSION_EXTERN
 
@@ -34,13 +42,16 @@ typedef enum ducknng_body_codec_kind {
     DUCKNNG_BODY_CODEC_PARQUET = 5,
     DUCKNNG_BODY_CODEC_ARROW_IPC = 6,
     DUCKNNG_BODY_CODEC_DUCKNNG_FRAME = 7,
-    DUCKNNG_BODY_CODEC_USER = 8
+    DUCKNNG_BODY_CODEC_NDJSON = 8,
+    DUCKNNG_BODY_CODEC_FORM = 9,
+    DUCKNNG_BODY_CODEC_USER = 10
 } ducknng_body_codec_kind;
 
 typedef enum ducknng_body_result_kind {
     DUCKNNG_BODY_RESULT_SINGLE = 1,
     DUCKNNG_BODY_RESULT_ARROW = 2,
-    DUCKNNG_BODY_RESULT_FRAME = 3
+    DUCKNNG_BODY_RESULT_FRAME = 3,
+    DUCKNNG_BODY_RESULT_FORM = 4
 } ducknng_body_result_kind;
 
 typedef struct {
@@ -57,6 +68,9 @@ typedef struct {
     idx_t row_count;
     ducknng_frame_decode_bind_data frame;
     char *user_function_name; /* set when codec_kind == USER */
+    char **form_keys;
+    char **form_values;
+    idx_t form_count;
 } ducknng_body_parse_bind_data;
 
 typedef struct {
@@ -146,6 +160,8 @@ static const char *ducknng_body_codec_provider_name(int codec_kind) {
         case DUCKNNG_BODY_CODEC_PARQUET: return "parquet";
         case DUCKNNG_BODY_CODEC_ARROW_IPC: return "arrow_ipc";
         case DUCKNNG_BODY_CODEC_DUCKNNG_FRAME: return "ducknng_frame";
+        case DUCKNNG_BODY_CODEC_NDJSON: return "ndjson";
+        case DUCKNNG_BODY_CODEC_FORM: return "form";
         case DUCKNNG_BODY_CODEC_USER: return "user";
         case DUCKNNG_BODY_CODEC_RAW:
         default: return "raw";
@@ -159,11 +175,20 @@ static int ducknng_body_codec_for_media_type(const char *media_type) {
         ducknng_ascii_ieq(media_type, "application/vnd.apache.arrow.ipc") ||
         ducknng_ascii_ieq(media_type, "application/arrow")) return DUCKNNG_BODY_CODEC_ARROW_IPC;
     if (ducknng_ascii_ieq(media_type, "application/vnd.apache.parquet") ||
-        ducknng_ascii_ieq(media_type, "application/parquet")) return DUCKNNG_BODY_CODEC_PARQUET;
-    if (ducknng_ascii_ieq(media_type, "text/csv") || ducknng_ascii_ieq(media_type, "application/csv")) return DUCKNNG_BODY_CODEC_CSV;
-    if (ducknng_ascii_ieq(media_type, "text/tab-separated-values")) return DUCKNNG_BODY_CODEC_TSV;
+        ducknng_ascii_ieq(media_type, "application/parquet") ||
+        ducknng_ascii_ieq(media_type, "application/x-parquet")) return DUCKNNG_BODY_CODEC_PARQUET;
+    if (ducknng_ascii_ieq(media_type, "text/csv") ||
+        ducknng_ascii_ieq(media_type, "application/csv") ||
+        ducknng_ascii_ieq(media_type, "text/x-csv")) return DUCKNNG_BODY_CODEC_CSV;
+    if (ducknng_ascii_ieq(media_type, "text/tab-separated-values") ||
+        ducknng_ascii_ieq(media_type, "application/x-tsv") ||
+        ducknng_ascii_ieq(media_type, "text/tsv")) return DUCKNNG_BODY_CODEC_TSV;
+    if (ducknng_ascii_ieq(media_type, "application/x-ndjson") ||
+        ducknng_ascii_ieq(media_type, "application/ndjson") ||
+        ducknng_ascii_ieq(media_type, "application/x-jsonlines") ||
+        ducknng_ascii_ieq(media_type, "application/jsonlines")) return DUCKNNG_BODY_CODEC_NDJSON;
+    if (ducknng_ascii_ieq(media_type, "application/x-www-form-urlencoded")) return DUCKNNG_BODY_CODEC_FORM;
     if (ducknng_ascii_ieq(media_type, "application/json") ||
-        ducknng_ascii_ieq(media_type, "application/x-ndjson") ||
         ducknng_ascii_iends_with(media_type, "+json")) return DUCKNNG_BODY_CODEC_JSON;
     if (ducknng_ascii_istarts_with(media_type, "text/")) return DUCKNNG_BODY_CODEC_TEXT;
     return DUCKNNG_BODY_CODEC_RAW;
@@ -208,6 +233,7 @@ static void destroy_frame_decode_bind_data(void *ptr) {
 
 static void destroy_body_parse_bind_data(void *ptr) {
     ducknng_body_parse_bind_data *data = (ducknng_body_parse_bind_data *)ptr;
+    idx_t i;
     if (!data) return;
     if (data->provider) duckdb_free(data->provider);
     if (data->media_type) duckdb_free(data->media_type);
@@ -217,6 +243,14 @@ static void destroy_body_parse_bind_data(void *ptr) {
     if (data->array.release) ArrowArrayRelease(&data->array);
     if (data->schema.release) ArrowSchemaRelease(&data->schema);
     ducknng_frame_decode_bind_data_reset(&data->frame);
+    if (data->form_keys) {
+        for (i = 0; i < data->form_count; i++) {
+            if (data->form_keys[i]) duckdb_free(data->form_keys[i]);
+            if (data->form_values[i]) duckdb_free(data->form_values[i]);
+        }
+        duckdb_free(data->form_keys);
+        duckdb_free(data->form_values);
+    }
     duckdb_free(data);
 }
 
@@ -790,7 +824,7 @@ static int ducknng_body_parse_run_duckdb_reader(ducknng_sql_context *ctx,
     int tried_array_struct = 0;
     int rc = -1;
     if (errmsg) *errmsg = NULL;
-    if (!ctx || !ctx->rt || !ducknng_runtime_execution_connection(ctx->rt) || !bind) {
+    if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt) || !bind) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for body parser");
         return -1;
     }
@@ -831,14 +865,10 @@ retry_build:
         goto cleanup;
     }
     snprintf(sql, sql_len, chosen_template, quoted, quoted);
-    if (ducknng_runtime_current_thread_request_service_get(ctx->rt)) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: DuckDB-reader body codecs cannot run inside service-owned SQL yet");
-        goto cleanup;
-    }
-    ducknng_runtime_execution_lane_lock(ctx->rt);
-    if (ducknng_query_to_ipc_stream(ducknng_runtime_execution_connection(ctx->rt),
+    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (ducknng_query_to_ipc_stream(ducknng_runtime_codec_connection(ctx->rt),
             sql, &payload, &payload_len, errmsg) != 0) {
-        ducknng_runtime_execution_lane_unlock(ctx->rt);
+        ducknng_runtime_codec_connection_unlock(ctx->rt);
         if (tried_array_struct) {
             if (errmsg && *errmsg) { duckdb_free(*errmsg); *errmsg = NULL; }
             tried_array_struct = 0;
@@ -850,7 +880,7 @@ retry_build:
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: JSON body parser query failed");
         goto cleanup;
     }
-    ducknng_runtime_execution_lane_unlock(ctx->rt);
+    ducknng_runtime_codec_connection_unlock(ctx->rt);
     if (ducknng_decode_ipc_table_payload(payload, payload_len, &bind->schema, &bind->array, errmsg) != 0) goto cleanup;
     bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
     bind->row_count = (idx_t)bind->array.length;
@@ -888,7 +918,7 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
     int rc = -1;
     memset(&result, 0, sizeof(result));
     if (errmsg) *errmsg = NULL;
-    if (!ctx || !ctx->rt || !ducknng_runtime_execution_connection(ctx->rt)) {
+    if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for user codec");
         return -1;
     }
@@ -896,11 +926,7 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
         if (errmsg) *errmsg = ducknng_strdup("ducknng: codec function name must be a plain SQL identifier");
         return -1;
     }
-    if (ducknng_runtime_current_thread_request_service_get(ctx->rt)) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: user body codecs cannot run inside service-owned SQL yet");
-        return -1;
-    }
-    /* Build "SELECT <fn>(?::BLOB) AS value" and prepare it against the runtime
+    /* Build "SELECT <fn>(?::BLOB) AS value" and prepare it against the codec
      * connection. The body BLOB binds as parameter 1; identifier name was
      * validated above so direct splicing is safe. */
     sql_len = strlen(function_name) + 32;
@@ -910,8 +936,8 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
         return -1;
     }
     snprintf(sql, sql_len, "SELECT %s(?::BLOB) AS value", function_name);
-    ducknng_runtime_execution_lane_lock(ctx->rt);
-    if (duckdb_prepare(ducknng_runtime_execution_connection(ctx->rt), sql, &stmt) == DuckDBError) {
+    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (duckdb_prepare(ducknng_runtime_codec_connection(ctx->rt), sql, &stmt) == DuckDBError) {
         prep_err = stmt ? duckdb_prepare_error(stmt) : NULL;
         if (errmsg) *errmsg = ducknng_strdup(prep_err && prep_err[0] ? prep_err : "ducknng: failed to prepare user codec query");
         goto cleanup;
@@ -972,8 +998,655 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
 cleanup:
     if (result.internal_data) duckdb_destroy_result(&result);
     if (stmt) duckdb_destroy_prepare(&stmt);
-    ducknng_runtime_execution_lane_unlock(ctx->rt);
+    ducknng_runtime_codec_connection_unlock(ctx->rt);
     if (sql) duckdb_free(sql);
+    return rc;
+}
+
+/* ---------------------------------------------------------------------------
+ * NDJSON: wrap newline-delimited JSON lines into a JSON array in memory so
+ * the existing JSON reader path can parse it.  Returns a duckdb_malloc'd
+ * NUL-terminated string that the caller must duckdb_free, or NULL on error.
+ * Empty / whitespace-only lines are skipped.
+ * --------------------------------------------------------------------------- */
+static char *ducknng_ndjson_to_json_array(const uint8_t *body, size_t body_len, char **errmsg) {
+    const char *src = (const char *)body;
+    const char *end = src + body_len;
+    const char *p;
+    /* Two passes: first count total chars needed, then fill. */
+    size_t total = 3; /* '[' + ']' + '\0' */
+    int first = 1;
+    char *out;
+    char *q;
+    p = src;
+    while (p < end) {
+        const char *line_start = p;
+        const char *line_end;
+        while (p < end && *p != '\n') p++;
+        line_end = p;
+        if (p < end) p++; /* skip '\n' */
+        /* Trim trailing CR */
+        while (line_end > line_start && line_end[-1] == '\r') line_end--;
+        /* Skip leading whitespace */
+        while (line_start < line_end && ((unsigned char)*line_start == ' ' || (unsigned char)*line_start == '\t')) line_start++;
+        if (line_start >= line_end) continue; /* blank line */
+        if (!first) total += 1; /* ',' */
+        total += (size_t)(line_end - line_start);
+        first = 0;
+    }
+    if (first) {
+        /* No non-blank lines — return empty array */
+        out = (char *)duckdb_malloc(3);
+        if (!out) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building NDJSON array"); return NULL; }
+        out[0] = '['; out[1] = ']'; out[2] = '\0';
+        return out;
+    }
+    out = (char *)duckdb_malloc(total);
+    if (!out) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building NDJSON array"); return NULL; }
+    q = out;
+    *q++ = '[';
+    first = 1;
+    p = src;
+    while (p < end) {
+        const char *line_start = p;
+        const char *line_end;
+        while (p < end && *p != '\n') p++;
+        line_end = p;
+        if (p < end) p++;
+        while (line_end > line_start && line_end[-1] == '\r') line_end--;
+        while (line_start < line_end && ((unsigned char)*line_start == ' ' || (unsigned char)*line_start == '\t')) line_start++;
+        if (line_start >= line_end) continue;
+        if (!first) *q++ = ',';
+        memcpy(q, line_start, (size_t)(line_end - line_start));
+        q += (size_t)(line_end - line_start);
+        first = 0;
+    }
+    *q++ = ']';
+    *q = '\0';
+    return out;
+}
+
+/* ---------------------------------------------------------------------------
+ * URL decode helpers for application/x-www-form-urlencoded
+ * --------------------------------------------------------------------------- */
+static int ducknng_hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+/* Decode a percent-encoded string of 'len' bytes into a NUL-terminated
+ * duckdb_malloc'd string.  '+' is decoded as space. */
+static char *ducknng_url_decode(const char *src, size_t len) {
+    char *out = (char *)duckdb_malloc(len + 1);
+    char *q;
+    const char *end;
+    if (!out) return NULL;
+    q = out;
+    end = src + len;
+    while (src < end) {
+        if (*src == '%' && src + 2 < end) {
+            int hi = ducknng_hex_val(src[1]);
+            int lo = ducknng_hex_val(src[2]);
+            if (hi >= 0 && lo >= 0) {
+                *q++ = (char)((hi << 4) | lo);
+                src += 3;
+                continue;
+            }
+        }
+        if (*src == '+') { *q++ = ' '; src++; continue; }
+        *q++ = *src++;
+    }
+    *q = '\0';
+    return out;
+}
+
+/* Parse application/x-www-form-urlencoded body into parallel key/value arrays.
+ * Returns 0 on success, -1 on allocation failure. */
+static int ducknng_parse_form_urlencoded(const uint8_t *body, size_t body_len,
+    char ***out_keys, char ***out_values, idx_t *out_count, char **errmsg) {
+    const char *src = (const char *)body;
+    const char *end = src + body_len;
+    const char *p;
+    idx_t capacity = 8;
+    idx_t count = 0;
+    char **keys;
+    char **values;
+    *out_keys = NULL; *out_values = NULL; *out_count = 0;
+    keys = (char **)duckdb_malloc(sizeof(char *) * capacity);
+    values = (char **)duckdb_malloc(sizeof(char *) * capacity);
+    if (!keys || !values) {
+        if (keys) duckdb_free(keys);
+        if (values) duckdb_free(values);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing form body");
+        return -1;
+    }
+    p = src;
+    for (;;) {
+        const char *pair_start = p;
+        const char *pair_end;
+        const char *eq;
+        const char *key_start;
+        size_t key_len;
+        size_t val_len;
+        char *k;
+        char *v;
+        int at_end;
+        /* Find end of pair */
+        while (p < end && *p != '&') p++;
+        pair_end = p;
+        at_end = (p >= end);
+        if (p < end) p++; /* skip '&' */
+        if (pair_start < pair_end) {
+            /* Split on first '=' */
+            eq = pair_start;
+            while (eq < pair_end && *eq != '=') eq++;
+            key_start = pair_start;
+            key_len = (size_t)(eq - key_start);
+            val_len = eq < pair_end ? (size_t)(pair_end - (eq + 1)) : 0;
+            k = ducknng_url_decode(key_start, key_len);
+            v = ducknng_url_decode(eq < pair_end ? eq + 1 : pair_end, val_len);
+            if (!k || !v) {
+                if (k) duckdb_free(k);
+                if (v) duckdb_free(v);
+                /* free already allocated pairs */
+                { idx_t i; for (i = 0; i < count; i++) { duckdb_free(keys[i]); duckdb_free(values[i]); } }
+                duckdb_free(keys); duckdb_free(values);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory decoding form pair");
+                return -1;
+            }
+            if (count >= capacity) {
+                idx_t new_cap = capacity * 2;
+                char **nk = (char **)duckdb_malloc(sizeof(char *) * new_cap);
+                char **nv = (char **)duckdb_malloc(sizeof(char *) * new_cap);
+                if (!nk || !nv) {
+                    if (nk) duckdb_free(nk);
+                    if (nv) duckdb_free(nv);
+                    duckdb_free(k); duckdb_free(v);
+                    { idx_t i; for (i = 0; i < count; i++) { duckdb_free(keys[i]); duckdb_free(values[i]); } }
+                    duckdb_free(keys); duckdb_free(values);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory growing form pairs buffer");
+                    return -1;
+                }
+                memcpy(nk, keys, sizeof(char *) * count);
+                memcpy(nv, values, sizeof(char *) * count);
+                duckdb_free(keys); duckdb_free(values);
+                keys = nk; values = nv; capacity = new_cap;
+            }
+            keys[count] = k;
+            values[count] = v;
+            count++;
+        }
+        if (at_end) break;
+    }
+    *out_keys = keys;
+    *out_values = values;
+    *out_count = count;
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Direct C CSV / TSV parser producing ArrowSchema + ArrowArray via nanoarrow,
+ * without temp files or DuckDB execution.
+ * --------------------------------------------------------------------------- */
+
+#define DUCKNNG_CSV_TYPE_INT64  0
+#define DUCKNNG_CSV_TYPE_DOUBLE 1
+#define DUCKNNG_CSV_TYPE_STRING 2
+#define DUCKNNG_CSV_MAX_COLS    1024
+
+/* Parse one delimited field from `*pp` up to `end`.
+ * Advances *pp past the trailing delimiter (or newline / end of input).
+ * Returns a duckdb_malloc'd NUL-terminated string for non-empty unquoted /
+ * quoted fields, or NULL if the field is empty (caller treats as NULL). */
+static char *ducknng_csv_next_field(const char **pp, const char *end, char delim) {
+    const char *p = *pp;
+    char *buf;
+    char *q;
+    char *result = NULL;
+
+    if (p >= end) {
+        *pp = end;
+        return NULL;
+    }
+    if (*p == '"') {
+        /* RFC 4180 quoted field */
+        p++; /* skip opening quote */
+        buf = (char *)duckdb_malloc((size_t)(end - p) + 1);
+        if (!buf) { *pp = end; return NULL; }
+        q = buf;
+        while (p < end) {
+            if (*p == '"') {
+                p++;
+                if (p < end && *p == '"') { *q++ = '"'; p++; continue; }
+                break; /* closing quote */
+            }
+            *q++ = *p++;
+        }
+        *q = '\0';
+        result = (q > buf) ? buf : (duckdb_free(buf), NULL);
+        /* skip to delimiter / newline */
+        while (p < end && *p != delim && *p != '\n' && *p != '\r') p++;
+    } else {
+        const char *start = p;
+        while (p < end && *p != delim && *p != '\n' && *p != '\r') p++;
+        if (p > start) {
+            buf = (char *)duckdb_malloc((size_t)(p - start) + 1);
+            if (buf) { memcpy(buf, start, (size_t)(p - start)); buf[p - start] = '\0'; result = buf; }
+        }
+    }
+    /* consume delimiter */
+    if (p < end && *p == delim) p++;
+    *pp = p;
+    return result;
+}
+
+/* Skip to the start of the next logical line (past \r\n or \n). */
+static const char *ducknng_csv_skip_line(const char *p, const char *end) {
+    while (p < end && *p != '\n' && *p != '\r') p++;
+    if (p < end && *p == '\r') p++;
+    if (p < end && *p == '\n') p++;
+    return p;
+}
+
+/* Count the number of delimiter-separated fields in one line (for column count). */
+static idx_t ducknng_csv_count_fields(const char *p, const char *end, char delim) {
+    idx_t n = 0;
+    const char *line_end = p;
+    /* find line end first */
+    while (line_end < end && *line_end != '\n' && *line_end != '\r') line_end++;
+    if (p == line_end) return 0;
+    while (p <= line_end) {
+        n++;
+        /* scan past this field */
+        if (p < line_end && *p == '"') {
+            p++;
+            while (p < line_end) {
+                if (*p == '"') { p++; if (p < line_end && *p == '"') { p++; continue; } break; }
+                p++;
+            }
+            while (p < line_end && *p != delim) p++;
+        } else {
+            while (p < line_end && *p != delim) p++;
+        }
+        if (p >= line_end) break;
+        p++; /* skip delimiter */
+    }
+    return n;
+}
+
+/* Try to parse `s` as int64.  Returns 1 and sets *v on success, 0 on failure. */
+static int ducknng_csv_try_int64(const char *s, int64_t *v) {
+    char *endp;
+    int64_t val;
+    if (!s || !s[0]) return 0;
+    errno = 0;
+    val = (int64_t)strtoll(s, &endp, 10);
+    if (errno != 0 || endp == s || *endp != '\0') return 0;
+    *v = val;
+    return 1;
+}
+
+/* Try to parse `s` as double.  Returns 1 and sets *v on success, 0 on failure. */
+static int ducknng_csv_try_double(const char *s, double *v) {
+    char *endp;
+    double val;
+    if (!s || !s[0]) return 0;
+    errno = 0;
+    val = strtod(s, &endp);
+    if (errno != 0 || endp == s || *endp != '\0') return 0;
+    *v = val;
+    return 1;
+}
+
+/* Build ArrowSchema + ArrowArray from in-memory CSV/TSV bytes.
+ * `delimiter` is ',' for CSV or '\t' for TSV.
+ * Populates *out_schema and *out_array on success; caller owns them and must
+ * call ArrowSchemaRelease / ArrowArrayRelease.
+ * Returns 0 on success, -1 on error (sets *errmsg). */
+static int ducknng_csv_parse_body(const uint8_t *body, size_t body_len, char delimiter,
+    struct ArrowSchema *out_schema, struct ArrowArray *out_array, char **errmsg) {
+    const char *src = (const char *)body;
+    const char *end = src + body_len;
+    const char *p = src;
+    struct ArrowError aerr;
+    idx_t col_count = 0;
+    idx_t row_count = 0;
+    idx_t row_capacity = 64;
+    char **headers = NULL;
+    /* cells: flat [row_capacity * col_count] char* (NULL means SQL NULL) */
+    char **cells = NULL;
+    int *col_types = NULL; /* DUCKNNG_CSV_TYPE_* per column */
+    idx_t col, row;
+    int rc = -1;
+
+    memset(&aerr, 0, sizeof(aerr));
+    if (errmsg) *errmsg = NULL;
+
+    /* --- Parse header row --- */
+    col_count = ducknng_csv_count_fields(p, end, delimiter);
+    if (col_count == 0 || col_count > DUCKNNG_CSV_MAX_COLS) {
+        if (errmsg) *errmsg = ducknng_strdup(col_count == 0
+            ? "ducknng: CSV body has no header row"
+            : "ducknng: CSV body has too many columns (max 1024)");
+        return -1;
+    }
+    headers = (char **)duckdb_malloc(sizeof(char *) * col_count);
+    if (!headers) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for CSV headers"); return -1; }
+    memset(headers, 0, sizeof(char *) * col_count);
+
+    for (col = 0; col < col_count; col++) {
+        char *h = ducknng_csv_next_field(&p, end, delimiter);
+        headers[col] = h ? h : ducknng_strdup(""); /* empty header becomes "" */
+        if (!headers[col]) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for CSV header name"); goto cleanup; }
+    }
+    /* skip rest of header line (trailing delimiter already consumed; skip \r\n) */
+    if (p < end && *p == '\r') p++;
+    if (p < end && *p == '\n') p++;
+
+    /* --- Allocate initial cell table --- */
+    cells = (char **)duckdb_malloc(sizeof(char *) * row_capacity * col_count);
+    if (!cells) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for CSV cells"); goto cleanup; }
+    memset(cells, 0, sizeof(char *) * row_capacity * col_count);
+
+    /* --- Parse data rows --- */
+    while (p < end) {
+        /* skip completely blank lines */
+        if (*p == '\r' || *p == '\n') {
+            if (*p == '\r') p++;
+            if (p < end && *p == '\n') p++;
+            continue;
+        }
+        /* grow cell table if needed */
+        if (row_count >= row_capacity) {
+            idx_t new_cap = row_capacity * 2;
+            char **new_cells = (char **)duckdb_malloc(sizeof(char *) * new_cap * col_count);
+            if (!new_cells) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory growing CSV table"); goto cleanup; }
+            memcpy(new_cells, cells, sizeof(char *) * row_count * col_count);
+            memset(new_cells + row_count * col_count, 0, sizeof(char *) * (new_cap - row_capacity) * col_count);
+            duckdb_free(cells);
+            cells = new_cells;
+            row_capacity = new_cap;
+        }
+        {
+            char **row_cells = cells + row_count * col_count;
+            const char *line_end = p;
+            while (line_end < end && *line_end != '\n' && *line_end != '\r') line_end++;
+            for (col = 0; col < col_count; col++) {
+                if (p > line_end) {
+                    row_cells[col] = NULL; /* missing trailing columns = NULL */
+                } else {
+                    row_cells[col] = ducknng_csv_next_field(&p, line_end, delimiter);
+                }
+            }
+            /* skip to next line */
+            p = ducknng_csv_skip_line(line_end, end);
+            row_count++;
+        }
+    }
+
+    /* --- Type inference per column --- */
+    col_types = (int *)duckdb_malloc(sizeof(int) * col_count);
+    if (!col_types) { if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for CSV type inference"); goto cleanup; }
+    for (col = 0; col < col_count; col++) {
+        int inferred = DUCKNNG_CSV_TYPE_INT64;
+        for (row = 0; row < row_count; row++) {
+            const char *v = cells[row * col_count + col];
+            if (!v) continue; /* NULL stays compatible with any type */
+            if (inferred == DUCKNNG_CSV_TYPE_INT64) {
+                int64_t dummy;
+                if (!ducknng_csv_try_int64(v, &dummy)) inferred = DUCKNNG_CSV_TYPE_DOUBLE;
+            }
+            if (inferred == DUCKNNG_CSV_TYPE_DOUBLE) {
+                double dummy;
+                if (!ducknng_csv_try_double(v, &dummy)) { inferred = DUCKNNG_CSV_TYPE_STRING; break; }
+            }
+        }
+        col_types[col] = inferred;
+    }
+
+    /* --- Build ArrowSchema --- */
+    ArrowSchemaInit(out_schema);
+    if (ArrowSchemaSetTypeStruct(out_schema, (int64_t)col_count) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to init CSV Arrow schema struct");
+        goto cleanup;
+    }
+    for (col = 0; col < col_count; col++) {
+        struct ArrowSchema *child = out_schema->children[col];
+        enum ArrowType atype = (col_types[col] == DUCKNNG_CSV_TYPE_INT64)  ? NANOARROW_TYPE_INT64
+                             : (col_types[col] == DUCKNNG_CSV_TYPE_DOUBLE) ? NANOARROW_TYPE_DOUBLE
+                             :                                                NANOARROW_TYPE_STRING;
+        if (ArrowSchemaSetName(child, headers[col]) != NANOARROW_OK ||
+            ArrowSchemaSetType(child, atype) != NANOARROW_OK) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to set CSV Arrow column schema");
+            goto cleanup;
+        }
+    }
+
+    /* --- Build ArrowArray --- */
+    if (ArrowArrayInitFromSchema(out_array, out_schema, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message[0] ? aerr.message : "ducknng: failed to init CSV Arrow array");
+        goto cleanup;
+    }
+    if (ArrowArrayStartAppending(out_array) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to start CSV Arrow array appending");
+        goto cleanup;
+    }
+    for (row = 0; row < row_count; row++) {
+        for (col = 0; col < col_count; col++) {
+            const char *v = cells[row * col_count + col];
+            struct ArrowArray *child = out_array->children[col];
+            if (!v) {
+                if (ArrowArrayAppendNull(child, 1) != NANOARROW_OK) {
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to append NULL to CSV Arrow array");
+                    ArrowArrayRelease(out_array);
+                    goto cleanup;
+                }
+            } else if (col_types[col] == DUCKNNG_CSV_TYPE_INT64) {
+                int64_t iv = 0;
+                ducknng_csv_try_int64(v, &iv);
+                if (ArrowArrayAppendInt(child, iv) != NANOARROW_OK) {
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to append int to CSV Arrow array");
+                    ArrowArrayRelease(out_array);
+                    goto cleanup;
+                }
+            } else if (col_types[col] == DUCKNNG_CSV_TYPE_DOUBLE) {
+                double dv = 0.0;
+                ducknng_csv_try_double(v, &dv);
+                if (ArrowArrayAppendDouble(child, dv) != NANOARROW_OK) {
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to append double to CSV Arrow array");
+                    ArrowArrayRelease(out_array);
+                    goto cleanup;
+                }
+            } else {
+                struct ArrowStringView sv;
+                sv.data = v;
+                sv.size_bytes = (int64_t)strlen(v);
+                if (ArrowArrayAppendString(child, sv) != NANOARROW_OK) {
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to append string to CSV Arrow array");
+                    ArrowArrayRelease(out_array);
+                    goto cleanup;
+                }
+            }
+        }
+    }
+    out_array->length = (int64_t)row_count;
+    if (ArrowArrayFinishBuildingDefault(out_array, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message[0] ? aerr.message : "ducknng: failed to finish CSV Arrow array");
+        ArrowArrayRelease(out_array);
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    if (col_types) duckdb_free(col_types);
+    if (headers) {
+        for (col = 0; col < col_count; col++) if (headers[col]) duckdb_free(headers[col]);
+        duckdb_free(headers);
+    }
+    if (cells) {
+        idx_t total = row_count * col_count;
+        idx_t i;
+        for (i = 0; i < total; i++) if (cells[i]) duckdb_free(cells[i]);
+        duckdb_free(cells);
+    }
+    if (rc != 0) {
+        if (out_schema->release) ArrowSchemaRelease(out_schema);
+    }
+    return rc;
+}
+
+/* ---------------------------------------------------------------------------
+ * Cross-platform tempfile helpers for Parquet body reader
+ * --------------------------------------------------------------------------- */
+static int ducknng_body_open_tempfile(char **out_path, char **errmsg) {
+#ifdef _WIN32
+    char *tmp = _tempnam(NULL, "ducknng_body_");
+    int fd;
+    if (!tmp) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: _tempnam failed");
+        return -1;
+    }
+    fd = _open(tmp, _O_WRONLY | _O_BINARY | _O_CREAT | _O_EXCL, 0600);
+    if (fd < 0) {
+        free(tmp);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to open temp file for body reader");
+        return -1;
+    }
+    *out_path = ducknng_strdup(tmp);
+    free(tmp);
+    if (!*out_path) {
+        _close(fd);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
+        return -1;
+    }
+    return fd;
+#else
+    char tmpl[] = "/tmp/ducknng_body_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: mkstemp failed for body reader");
+        return -1;
+    }
+    *out_path = ducknng_strdup(tmpl);
+    if (!*out_path) {
+        close(fd);
+        unlink(tmpl);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
+        return -1;
+    }
+    return fd;
+#endif
+}
+
+static void ducknng_body_delete_tempfile(const char *path) {
+    if (!path) return;
+#ifdef _WIN32
+    DeleteFileA(path);
+#else
+    unlink(path);
+#endif
+}
+
+static int ducknng_body_write_tempfile(int fd, const uint8_t *data, size_t len, char **errmsg) {
+    size_t written = 0;
+    while (written < len) {
+        int n;
+        size_t chunk = len - written;
+        if (chunk > 65536) chunk = 65536;
+#ifdef _WIN32
+        n = _write(fd, data + written, (unsigned int)chunk);
+#else
+        n = (int)write(fd, data + written, chunk);
+#endif
+        if (n <= 0) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: write to temp file failed");
+            return -1;
+        }
+        written += (size_t)n;
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Temp-file based DuckDB reader for Parquet body codec
+ * --------------------------------------------------------------------------- */
+static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
+    ducknng_body_parse_bind_data *bind, const uint8_t *body, size_t body_len,
+    int codec_kind, char **errmsg) {
+    char *path = NULL;
+    char *quoted_path = NULL;
+    char *sql = NULL;
+    uint8_t *payload = NULL;
+    size_t payload_len = 0;
+    size_t sql_len;
+    int fd = -1;
+    int rc = -1;
+    const char *query_template = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt) || !bind) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for body reader");
+        return -1;
+    }
+    switch (codec_kind) {
+        case DUCKNNG_BODY_CODEC_PARQUET: query_template = "SELECT * FROM read_parquet(%s)"; break;
+        default:
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: unsupported codec for tempfile reader");
+            return -1;
+    }
+    if (!body || body_len == 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: body must not be empty for this codec");
+        return -1;
+    }
+    fd = ducknng_body_open_tempfile(&path, errmsg);
+    if (fd < 0) goto cleanup;
+    if (ducknng_body_write_tempfile(fd, body, body_len, errmsg) != 0) {
+#ifdef _WIN32
+        _close(fd);
+#else
+        close(fd);
+#endif
+        fd = -1;
+        goto cleanup;
+    }
+#ifdef _WIN32
+    _close(fd);
+#else
+    close(fd);
+#endif
+    fd = -1;
+    /* Build SQL — path was made by mkstemp/tempnam so no user-controlled content.
+     * Still use sql_quote_literal for correctness with any OS path chars. */
+    quoted_path = ducknng_sql_quote_literal(path);
+    if (!quoted_path) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory quoting temp path");
+        goto cleanup;
+    }
+    sql_len = snprintf(NULL, 0, query_template, quoted_path) + 1;
+    sql = (char *)duckdb_malloc(sql_len);
+    if (!sql) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building reader query");
+        goto cleanup;
+    }
+    snprintf(sql, sql_len, query_template, quoted_path);
+    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (ducknng_query_to_ipc_stream(ducknng_runtime_codec_connection(ctx->rt),
+            sql, &payload, &payload_len, errmsg) != 0) {
+        ducknng_runtime_codec_connection_unlock(ctx->rt);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: body reader query failed");
+        goto cleanup;
+    }
+    ducknng_runtime_codec_connection_unlock(ctx->rt);
+    if (ducknng_decode_ipc_table_payload(payload, payload_len, &bind->schema, &bind->array, errmsg) != 0) goto cleanup;
+    bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
+    bind->row_count = (idx_t)bind->array.length;
+    rc = 0;
+cleanup:
+    if (payload) duckdb_free(payload);
+    if (sql) duckdb_free(sql);
+    if (quoted_path) duckdb_free(quoted_path);
+    if (path) { ducknng_body_delete_tempfile(path); duckdb_free(path); }
     return rc;
 }
 
@@ -1083,9 +1756,90 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         case DUCKNNG_BODY_CODEC_JSON:
-            if (ducknng_body_parse_run_duckdb_reader(ctx, bind, body, body_len, bind->codec_kind, &errmsg) != 0) {
+        case DUCKNNG_BODY_CODEC_NDJSON: {
+            const uint8_t *json_body = body;
+            size_t json_len = body_len;
+            char *ndjson_arr = NULL;
+            if (bind->codec_kind == DUCKNNG_BODY_CODEC_NDJSON) {
+                ndjson_arr = ducknng_ndjson_to_json_array(body, body_len, &errmsg);
+                if (!ndjson_arr) {
+                    destroy_body_parse_bind_data(bind);
+                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to convert NDJSON to JSON array");
+                    if (errmsg) duckdb_free(errmsg);
+                    return -1;
+                }
+                json_body = (const uint8_t *)ndjson_arr;
+                json_len = strlen(ndjson_arr);
+            }
+            if (ducknng_body_parse_run_duckdb_reader(ctx, bind, json_body, json_len, DUCKNNG_BODY_CODEC_JSON, &errmsg) != 0) {
+                if (ndjson_arr) duckdb_free(ndjson_arr);
                 destroy_body_parse_bind_data(bind);
                 duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body with DuckDB reader");
+                if (errmsg) duckdb_free(errmsg);
+                return -1;
+            }
+            if (ndjson_arr) duckdb_free(ndjson_arr);
+            if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, "ducknng: invalid parsed body schema");
+                return -1;
+            }
+            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
+                duckdb_logical_type col_type;
+                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
+                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
+                    destroy_body_parse_bind_data(bind);
+                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported parsed body type");
+                    if (errmsg) duckdb_free(errmsg);
+                    return -1;
+                }
+                duckdb_bind_add_result_column(info, name, col_type);
+                duckdb_destroy_logical_type(&col_type);
+            }
+            duckdb_bind_set_cardinality(info, bind->row_count, true);
+            break;
+        }
+        case DUCKNNG_BODY_CODEC_CSV:
+        case DUCKNNG_BODY_CODEC_TSV: {
+            char csv_delim = (bind->codec_kind == DUCKNNG_BODY_CODEC_TSV) ? '\t' : ',';
+            if (!body || body_len == 0) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, "ducknng: CSV/TSV body must not be empty");
+                return -1;
+            }
+            if (ducknng_csv_parse_body(body, body_len, csv_delim,
+                    &bind->schema, &bind->array, &errmsg) != 0) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse CSV/TSV body");
+                if (errmsg) duckdb_free(errmsg);
+                return -1;
+            }
+            bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
+            bind->row_count = (idx_t)bind->array.length;
+            if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, "ducknng: invalid CSV/TSV body schema");
+                return -1;
+            }
+            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
+                duckdb_logical_type col_type;
+                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
+                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
+                    destroy_body_parse_bind_data(bind);
+                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported CSV/TSV body column type");
+                    if (errmsg) duckdb_free(errmsg);
+                    return -1;
+                }
+                duckdb_bind_add_result_column(info, name, col_type);
+                duckdb_destroy_logical_type(&col_type);
+            }
+            duckdb_bind_set_cardinality(info, bind->row_count, true);
+            break;
+        }
+        case DUCKNNG_BODY_CODEC_PARQUET:
+            if (ducknng_body_parse_run_tempfile_reader(ctx, bind, body, body_len, bind->codec_kind, &errmsg) != 0) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body with DuckDB file reader");
                 if (errmsg) duckdb_free(errmsg);
                 return -1;
             }
@@ -1108,10 +1862,24 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             }
             duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
-        case DUCKNNG_BODY_CODEC_CSV:
-        case DUCKNNG_BODY_CODEC_TSV:
-        case DUCKNNG_BODY_CODEC_PARQUET:
-        case DUCKNNG_BODY_CODEC_RAW:
+        case DUCKNNG_BODY_CODEC_FORM: {
+            if (ducknng_parse_form_urlencoded(body, body_len,
+                    &bind->form_keys, &bind->form_values, &bind->form_count, &errmsg) != 0) {
+                destroy_body_parse_bind_data(bind);
+                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse form body");
+                if (errmsg) duckdb_free(errmsg);
+                return -1;
+            }
+            bind->result_kind = DUCKNNG_BODY_RESULT_FORM;
+            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+            duckdb_bind_add_result_column(info, "name", type);
+            duckdb_destroy_logical_type(&type);
+            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+            duckdb_bind_add_result_column(info, "value", type);
+            duckdb_destroy_logical_type(&type);
+            duckdb_bind_set_cardinality(info, bind->form_count, true);
+            break;
+        }
         default:
             bind->raw_len = (idx_t)body_len;
             if (body_len > 0) {
@@ -1289,18 +2057,42 @@ static void ducknng_body_parse_scan(duckdb_function_info info, duckdb_data_chunk
         }
         return;
     }
+    if (bind->result_kind == DUCKNNG_BODY_RESULT_FORM) {
+        idx_t chunk_cap = duckdb_vector_size();
+        idx_t remaining = bind->form_count - init->offset;
+        idx_t batch = remaining < chunk_cap ? remaining : chunk_cap;
+        idx_t i;
+        duckdb_vector name_vec = duckdb_data_chunk_get_vector(output, 0);
+        duckdb_vector value_vec = duckdb_data_chunk_get_vector(output, 1);
+        if (batch == 0) {
+            duckdb_data_chunk_set_size(output, 0);
+            return;
+        }
+        for (i = 0; i < batch; i++) {
+            idx_t row = init->offset + i;
+            const char *k = bind->form_keys[row] ? bind->form_keys[row] : "";
+            const char *v = bind->form_values[row] ? bind->form_values[row] : "";
+            duckdb_vector_assign_string_element(name_vec, i, k);
+            duckdb_vector_assign_string_element(value_vec, i, v);
+        }
+        duckdb_data_chunk_set_size(output, batch);
+        init->offset += batch;
+        return;
+    }
     duckdb_data_chunk_set_size(output, 0);
 }
 
 static const ducknng_codec_static_row DUCKNNG_BUILTIN_CODECS[] = {
     {"raw", "application/octet-stream, */* fallback", "body BLOB", "No decoding; bytes are returned unchanged."},
     {"text", "text/*", "body_text VARCHAR", "Valid UTF-8 text bodies are exposed as VARCHAR."},
-    {"json", "application/json, application/*+json, application/x-ndjson", "dynamic table", "Parsed in memory through DuckDB JSON functions."},
-    {"csv", "text/csv, application/csv", "body BLOB fallback", "Recognized, but returned as raw bytes until a memory-backed DuckDB CSV reader path exists."},
-    {"tsv", "text/tab-separated-values", "body BLOB fallback", "Recognized, but returned as raw bytes until a memory-backed DuckDB CSV reader path exists."},
-    {"parquet", "application/vnd.apache.parquet, application/parquet", "body BLOB fallback", "Recognized, but returned as raw bytes until a memory-backed DuckDB Parquet reader path exists."},
+    {"json", "application/json, application/*+json", "dynamic table", "Parsed in memory through DuckDB JSON functions."},
+    {"csv", "text/csv, application/csv, text/x-csv", "dynamic table", "Parsed via direct C parser; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding."},
+    {"tsv", "text/tab-separated-values, application/x-tsv, text/tsv", "dynamic table", "Parsed via direct C parser with tab delimiter; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding."},
+    {"parquet", "application/vnd.apache.parquet, application/parquet, application/x-parquet", "dynamic table", "Parsed via DuckDB read_parquet() through a temporary file."},
     {"arrow_ipc", "application/vnd.apache.arrow.stream, application/vnd.apache.arrow.ipc, application/arrow", "dynamic table", "Decoded as Arrow IPC stream bytes with nanoarrow and mapped to DuckDB vectors."},
-    {"ducknng_frame", "application/vnd.ducknng.frame", "decoded frame columns", "Decoded as one ducknng protocol frame, matching ducknng_decode_frame()."}
+    {"ducknng_frame", "application/vnd.ducknng.frame", "decoded frame columns", "Decoded as one ducknng protocol frame, matching ducknng_decode_frame()."},
+    {"ndjson", "application/x-ndjson, application/ndjson, application/x-jsonlines, application/jsonlines", "dynamic table", "Newline-delimited JSON lines wrapped into a JSON array and parsed in memory through DuckDB JSON functions."},
+    {"form", "application/x-www-form-urlencoded", "name VARCHAR, value VARCHAR", "URL-decoded key/value pairs from a form body; one row per field."}
 };
 
 static int ducknng_codec_dyn_row_set(ducknng_codec_dyn_row *row, const char *provider,

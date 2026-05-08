@@ -18,6 +18,8 @@ typedef struct {
     char *error;
     uint8_t *frame;
     idx_t frame_len;
+    int has_nng_error;
+    int32_t nng_error;
 } ducknng_aio_collect_row;
 
 typedef struct {
@@ -1385,7 +1387,7 @@ static const char *ducknng_aio_phase_name(int phase) {
 static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
     duckdb_vector aio_id_vec = duckdb_data_chunk_get_vector(input, 0);
-    duckdb_vector child_vecs[12];
+    duckdb_vector child_vecs[14];
     uint64_t *out_aio_id;
     bool *out_exists;
     bool *out_terminal;
@@ -1393,7 +1395,7 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
     bool *out_recv_done;
     bool *out_has_reply_frame;
     idx_t row_count = duckdb_data_chunk_get_size(input);
-    for (int i = 0; i < 12; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
+    for (int i = 0; i < 14; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
     out_aio_id = (uint64_t *)duckdb_vector_get_data(child_vecs[0]);
     out_exists = (bool *)duckdb_vector_get_data(child_vecs[1]);
     out_terminal = (bool *)duckdb_vector_get_data(child_vecs[5]);
@@ -1422,6 +1424,8 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
             set_null(child_vecs[7], row);
             set_null(child_vecs[9], row);
             set_null(child_vecs[11], row);
+            set_null(child_vecs[12], row);
+            set_null(child_vecs[13], row);
             continue;
         }
         ducknng_mutex_lock(&ctx->rt->mu);
@@ -1441,6 +1445,8 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
             set_null(child_vecs[7], row);
             set_null(child_vecs[9], row);
             set_null(child_vecs[11], row);
+            set_null(child_vecs[12], row);
+            set_null(child_vecs[13], row);
             continue;
         }
         out_exists[row] = true;
@@ -1469,6 +1475,22 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
         if (error_copy) duckdb_vector_assign_string_element(child_vecs[11], row, error_copy);
         else set_null(child_vecs[11], row);
         if (error_copy) duckdb_free(error_copy);
+        {
+            int32_t nng_err = 0;
+            if (snapshot.send_result != 0 && snapshot.send_result != -1)
+                nng_err = (int32_t)snapshot.send_result;
+            else if (snapshot.recv_result != 0 && snapshot.recv_result != -1)
+                nng_err = (int32_t)snapshot.recv_result;
+            if (nng_err != 0) {
+                int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(child_vecs[12]);
+                nng_errors[row] = nng_err;
+                duckdb_vector_assign_string_element(child_vecs[13], row,
+                    ducknng_nng_strerror(nng_err));
+            } else {
+                set_null(child_vecs[12], row);
+                set_null(child_vecs[13], row);
+            }
+        }
     }
 }
 
@@ -1507,11 +1529,11 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
     duckdb_vector aio_id_vec = duckdb_data_chunk_get_vector(input, 0);
     duckdb_vector wait_vec = duckdb_data_chunk_get_vector(input, 1);
-    duckdb_vector child_vecs[4];
+    duckdb_vector child_vecs[6];
     uint64_t *out_aio_id;
     bool *out_ok;
     idx_t row_count = duckdb_data_chunk_get_size(input);
-    for (int i = 0; i < 4; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
+    for (int i = 0; i < 6; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
     out_aio_id = (uint64_t *)duckdb_vector_get_data(child_vecs[0]);
     out_ok = (bool *)duckdb_vector_get_data(child_vecs[1]);
     for (idx_t row = 0; row < row_count; row++) {
@@ -1520,19 +1542,19 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
         ducknng_client_aio *slot;
         if (!ctx || !ctx->rt || arg_is_null(aio_id_vec, row) || arg_is_null(wait_vec, row)) {
             set_null(output, row);
-            for (int i = 0; i < 4; i++) set_null(child_vecs[i], row);
+            for (int i = 0; i < 6; i++) set_null(child_vecs[i], row);
             continue;
         }
         aio_id = arg_u64(aio_id_vec, row, 0);
         wait_ms = arg_int32(wait_vec, row, 0);
         if (aio_id == 0 || wait_ms < 0) {
             set_null(output, row);
-            for (int i = 0; i < 4; i++) set_null(child_vecs[i], row);
+            for (int i = 0; i < 6; i++) set_null(child_vecs[i], row);
             continue;
         }
         if (!ducknng_wait_any_for_ids(ctx->rt, &aio_id, 1, wait_ms) && wait_ms > 0) {
             set_null(output, row);
-            for (int i = 0; i < 4; i++) set_null(child_vecs[i], row);
+            for (int i = 0; i < 6; i++) set_null(child_vecs[i], row);
             continue;
         }
         ducknng_mutex_lock(&ctx->rt->mu);
@@ -1541,7 +1563,7 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
                 slot->state == DUCKNNG_CLIENT_AIO_CANCELLED || slot->state == DUCKNNG_CLIENT_AIO_COLLECTED)) {
             ducknng_mutex_unlock(&ctx->rt->mu);
             set_null(output, row);
-            for (int i = 0; i < 4; i++) set_null(child_vecs[i], row);
+            for (int i = 0; i < 6; i++) set_null(child_vecs[i], row);
             continue;
         }
         out_aio_id[row] = slot->aio_id;
@@ -1555,6 +1577,22 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
             slot->reply_msg = NULL;
         } else {
             set_null(child_vecs[3], row);
+        }
+        {
+            int32_t nng_err = 0;
+            if (slot->send_result != 0 && slot->send_result != -1)
+                nng_err = (int32_t)slot->send_result;
+            else if (slot->recv_result != 0 && slot->recv_result != -1)
+                nng_err = (int32_t)slot->recv_result;
+            if (nng_err != 0) {
+                int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(child_vecs[4]);
+                nng_errors[row] = nng_err;
+                duckdb_vector_assign_string_element(child_vecs[5], row,
+                    ducknng_nng_strerror(nng_err));
+            } else {
+                set_null(child_vecs[4], row);
+                set_null(child_vecs[5], row);
+            }
         }
         if (slot->state == DUCKNNG_CLIENT_AIO_READY || slot->state == DUCKNNG_CLIENT_AIO_ERROR ||
                 slot->state == DUCKNNG_CLIENT_AIO_CANCELLED) {
@@ -1743,6 +1781,17 @@ static void ducknng_aio_collect_materialize(ducknng_aio_collect_bind_data *bind)
         out_row->aio_id = slot->aio_id;
         out_row->ok = slot->state == DUCKNNG_CLIENT_AIO_READY;
         if (slot->error) out_row->error = ducknng_strdup(slot->error);
+        {
+            int32_t nng_err = 0;
+            if (slot->send_result != 0 && slot->send_result != -1)
+                nng_err = (int32_t)slot->send_result;
+            else if (slot->recv_result != 0 && slot->recv_result != -1)
+                nng_err = (int32_t)slot->recv_result;
+            if (nng_err != 0) {
+                out_row->has_nng_error = 1;
+                out_row->nng_error = nng_err;
+            }
+        }
         if (slot->state == DUCKNNG_CLIENT_AIO_READY && (reply_msg = slot->reply_msg) != NULL) {
             frame_len = nng_msg_len(reply_msg);
             out_row->frame = (uint8_t *)duckdb_malloc(frame_len);
@@ -1813,6 +1862,12 @@ static void ducknng_aio_collect_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
     duckdb_bind_add_result_column(info, "frame", type);
     duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+    duckdb_bind_add_result_column(info, "nng_error", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "nng_error_message", type);
+    duckdb_destroy_logical_type(&type);
     duckdb_bind_set_bind_data(info, bind, destroy_aio_collect_bind_data);
 }
 
@@ -1859,6 +1914,15 @@ static void ducknng_aio_collect_scan(duckdb_function_info info, duckdb_data_chun
         else set_null(duckdb_data_chunk_get_vector(output, 2), i);
         if (row->frame) assign_blob(duckdb_data_chunk_get_vector(output, 3), i, row->frame, row->frame_len);
         else set_null(duckdb_data_chunk_get_vector(output, 3), i);
+        if (row->has_nng_error) {
+            int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
+            nng_errors[i] = row->nng_error;
+            duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i,
+                ducknng_nng_strerror(row->nng_error));
+        } else {
+            set_null(duckdb_data_chunk_get_vector(output, 4), i);
+            set_null(duckdb_data_chunk_get_vector(output, 5), i);
+        }
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -1886,12 +1950,13 @@ static int register_aio_wait_any_scalar_named(duckdb_connection con, ducknng_sql
 
 static int register_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     static const duckdb_type param_type_ids[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_INTEGER};
-    static const duckdb_type field_type_ids[4] = {
-        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB
+    static const duckdb_type field_type_ids[6] = {
+        DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB,
+        DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR
     };
-    const char *field_names[4] = {"aio_id", "ok", "error", "frame"};
+    const char *field_names[6] = {"aio_id", "ok", "error", "frame", "nng_error", "nng_error_message"};
     return ducknng_register_struct_row_scalar_named(con, ctx, name, 2, param_type_ids,
-        ducknng_aio_collect_row_scalar, 4, field_type_ids, field_names);
+        ducknng_aio_collect_row_scalar, 6, field_type_ids, field_names);
 }
 
 static int register_ncurl_aio_collect_row_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
@@ -1907,17 +1972,19 @@ static int register_ncurl_aio_collect_row_scalar_named(duckdb_connection con, du
 
 static int register_aio_status_scalar_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     static const duckdb_type param_type_ids[1] = {DUCKDB_TYPE_UBIGINT};
-    static const duckdb_type field_type_ids[12] = {
+    static const duckdb_type field_type_ids[14] = {
         DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN,
-        DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR
+        DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR
     };
-    const char *field_names[12] = {
+    const char *field_names[14] = {
         "aio_id", "exists", "kind", "state", "phase", "terminal",
-        "send_done", "send_ok", "recv_done", "recv_ok", "has_reply_frame", "error"
+        "send_done", "send_ok", "recv_done", "recv_ok", "has_reply_frame", "error",
+        "nng_error", "nng_error_message"
     };
     return ducknng_register_struct_row_scalar_named(con, ctx, name, 1, param_type_ids,
-        ducknng_aio_status_scalar, 12, field_type_ids, field_names);
+        ducknng_aio_status_scalar, 14, field_type_ids, field_names);
 }
 
 static int register_aio_status_macro(duckdb_connection con) {
@@ -1934,7 +2001,9 @@ static int register_aio_status_macro(duckdb_connection con) {
         "       struct_extract(s, 'recv_done') AS recv_done, "
         "       struct_extract(s, 'recv_ok') AS recv_ok, "
         "       struct_extract(s, 'has_reply_frame') AS has_reply_frame, "
-        "       struct_extract(s, 'error') AS error "
+        "       struct_extract(s, 'error') AS error, "
+        "       struct_extract(s, 'nng_error') AS nng_error, "
+        "       struct_extract(s, 'nng_error_message') AS nng_error_message "
         "FROM (SELECT ducknng__aio_status_row(aio_id) AS s)";
     return execute_sql(con, sql);
 }
@@ -1946,7 +2015,9 @@ static int register_aio_collect_macro(duckdb_connection con) {
         "SELECT struct_extract(r, 'aio_id') AS aio_id, "
         "       struct_extract(r, 'ok') AS ok, "
         "       struct_extract(r, 'error') AS error, "
-        "       struct_extract(r, 'frame') AS frame "
+        "       struct_extract(r, 'frame') AS frame, "
+        "       struct_extract(r, 'nng_error') AS nng_error, "
+        "       struct_extract(r, 'nng_error_message') AS nng_error_message "
         "FROM _input, "
         "UNNEST(list_transform("
         "  list_filter(aio_ids, lambda x: ducknng__aio_collectable(x)), "
@@ -1963,6 +2034,8 @@ static int register_aio_collect_decoded_macro(duckdb_connection con) {
         "SELECT c.aio_id AS aio_id, "
         "       c.ok AS ok, "
         "       c.error AS error, "
+        "       c.nng_error AS nng_error, "
+        "       c.nng_error_message AS nng_error_message, "
         "       ducknng_frame_version(c.frame) IS NOT NULL AS frame_ok, "
         "       ducknng_frame_error_text(c.frame) AS frame_error, "
         "       ducknng_frame_version(c.frame) AS version, "

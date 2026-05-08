@@ -115,6 +115,24 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         return 0;
     }
     rt->init_con_mu_initialized = 1;
+    if (ducknng_mutex_init(&rt->codec_con_mu) != 0) {
+        ducknng_mutex_destroy(&rt->init_con_mu);
+        ducknng_mutex_destroy(&rt->mu);
+        duckdb_free(rt);
+        reg_unlock();
+        access->set_error(info, "ducknng: failed to initialize runtime codec connection mutex");
+        return 0;
+    }
+    rt->codec_con_mu_initialized = 1;
+    if (duckdb_connect(db, &rt->codec_con) == DuckDBError || !rt->codec_con) {
+        ducknng_mutex_destroy(&rt->codec_con_mu);
+        ducknng_mutex_destroy(&rt->init_con_mu);
+        ducknng_mutex_destroy(&rt->mu);
+        duckdb_free(rt);
+        reg_unlock();
+        access->set_error(info, "ducknng: failed to open codec connection");
+        return 0;
+    }
     if (ducknng_mutex_init(&rt->execution_pool_mu) != 0) {
         ducknng_mutex_destroy(&rt->init_con_mu);
         ducknng_mutex_destroy(&rt->mu);
@@ -150,6 +168,8 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         if (rt->execution_pool_busy) duckdb_free(rt->execution_pool_busy);
         if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
         if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
+        if (rt->codec_con) duckdb_disconnect(&rt->codec_con);
+        if (rt->codec_con_mu_initialized) ducknng_mutex_destroy(&rt->codec_con_mu);
         if (rt->init_con_mu_initialized) ducknng_mutex_destroy(&rt->init_con_mu);
         ducknng_mutex_destroy(&rt->mu);
         duckdb_free(rt);
@@ -305,7 +325,9 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
     }
     if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
     if (rt->init_con) duckdb_disconnect(&rt->init_con);
+    if (rt->codec_con) duckdb_disconnect(&rt->codec_con);
     if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
+    if (rt->codec_con_mu_initialized) ducknng_mutex_destroy(&rt->codec_con_mu);
     if (rt->init_con_mu_initialized) ducknng_mutex_destroy(&rt->init_con_mu);
     ducknng_mutex_destroy(&rt->mu);
     duckdb_free(rt);
@@ -337,6 +359,20 @@ void ducknng_runtime_init_con_lock(ducknng_runtime *rt) {
 
 void ducknng_runtime_init_con_unlock(ducknng_runtime *rt) {
     ducknng_runtime_execution_lane_unlock(rt);
+}
+
+duckdb_connection ducknng_runtime_codec_connection(ducknng_runtime *rt) {
+    return rt ? rt->codec_con : NULL;
+}
+
+void ducknng_runtime_codec_connection_lock(ducknng_runtime *rt) {
+    if (!rt || !rt->codec_con_mu_initialized) return;
+    ducknng_mutex_lock(&rt->codec_con_mu);
+}
+
+void ducknng_runtime_codec_connection_unlock(ducknng_runtime *rt) {
+    if (!rt || !rt->codec_con_mu_initialized) return;
+    ducknng_mutex_unlock(&rt->codec_con_mu);
 }
 
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc) {

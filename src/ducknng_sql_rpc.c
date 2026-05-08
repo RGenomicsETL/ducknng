@@ -545,7 +545,7 @@ static int ducknng_client_open_req_socket(const char *url, int timeout_ms, nng_s
     return ducknng_client_open_req_socket_tls(url, timeout_ms, NULL, out, errmsg);
 }
 
-static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int timeout_ms, const ducknng_tls_opts *tls_opts, char **errmsg) {
+static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int timeout_ms, const ducknng_tls_opts *tls_opts, char **errmsg, int *out_nng_error) {
     ducknng_transport_url parsed;
     nng_socket sock;
     nng_msg *resp = NULL;
@@ -553,6 +553,7 @@ static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int 
     size_t reply_frame_len = 0;
     int rv;
     memset(&sock, 0, sizeof(sock));
+    if (out_nng_error) *out_nng_error = 0;
     if (!req) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: request message is required");
         return NULL;
@@ -585,6 +586,7 @@ static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int 
     rv = ducknng_req_transact(sock, req, &resp);
     ducknng_socket_close(sock);
     if (rv != 0) {
+        if (out_nng_error) *out_nng_error = rv;
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         return NULL;
     }
@@ -592,11 +594,11 @@ static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int 
 }
 
 static nng_msg *ducknng_client_roundtrip(const char *url, nng_msg *req, int timeout_ms, char **errmsg) {
-    return ducknng_client_roundtrip_tls(url, req, timeout_ms, NULL, errmsg);
+    return ducknng_client_roundtrip_tls(url, req, timeout_ms, NULL, errmsg, NULL);
 }
 
 static nng_msg *ducknng_client_roundtrip_raw_tls(const char *url, const uint8_t *payload, size_t payload_len,
-    int timeout_ms, const ducknng_tls_opts *tls_opts, char **errmsg) {
+    int timeout_ms, const ducknng_tls_opts *tls_opts, char **errmsg, int *out_nng_error) {
     nng_msg *req = NULL;
     int rv = nng_msg_alloc(&req, payload_len);
     if (rv != 0) {
@@ -604,7 +606,7 @@ static nng_msg *ducknng_client_roundtrip_raw_tls(const char *url, const uint8_t 
         return NULL;
     }
     if (payload_len) memcpy(nng_msg_body(req), payload, payload_len);
-    return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg);
+    return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg, out_nng_error);
 }
 
 static nng_msg *ducknng_client_roundtrip_raw(const char *url, const uint8_t *payload, size_t payload_len,
@@ -698,7 +700,7 @@ static nng_msg *ducknng_client_method_roundtrip_tls(const char *url, const char 
     char **errmsg) {
     nng_msg *req = ducknng_client_method_request(method_name, payload, payload_len, errmsg);
     if (!req) return NULL;
-    return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg);
+    return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg, NULL);
 }
 
 static void ducknng_query_rpc_reset_result(ducknng_query_rpc_bind_data *bind) {
@@ -877,7 +879,7 @@ static void ducknng_get_rpc_manifest_raw_scalar(duckdb_function_info info, duckd
             if (errmsg) duckdb_free(errmsg);
             continue;
         }
-        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_manifest_request(), 5000, tls_opts, &errmsg);
+        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_manifest_request(), 5000, tls_opts, &errmsg, NULL);
         duckdb_free(url);
         if (!resp_msg) {
             if (ducknng_assign_local_error_frame(info, output, row, "manifest",
@@ -929,7 +931,7 @@ static void ducknng_run_rpc_raw_scalar(duckdb_function_info info, duckdb_data_ch
             if (errmsg) duckdb_free(errmsg);
             continue;
         }
-        resp_msg = ducknng_client_roundtrip_tls(url, req, 5000, tls_opts, &errmsg);
+        resp_msg = ducknng_client_roundtrip_tls(url, req, 5000, tls_opts, &errmsg, NULL);
         duckdb_free(url);
         if (!resp_msg) {
             if (ducknng_assign_local_error_frame(info, output, row, "exec",
@@ -1187,7 +1189,7 @@ static void ducknng_request_raw_scalar(duckdb_function_info info, duckdb_data_ch
             if (errmsg) duckdb_free(errmsg);
             continue;
         }
-        resp = ducknng_client_roundtrip_raw_tls(url, payload, (size_t)payload_len, timeout_ms, tls_opts, &errmsg);
+        resp = ducknng_client_roundtrip_raw_tls(url, payload, (size_t)payload_len, timeout_ms, tls_opts, &errmsg, NULL);
         duckdb_free(url);
         if (payload) duckdb_free(payload);
         if (!resp) {
@@ -1444,7 +1446,7 @@ static void ducknng_get_rpc_manifest_bind(duckdb_bind_info info) {
         bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: tls config not found");
         errmsg = NULL;
     } else {
-        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_manifest_request(), 5000, tls_opts, &errmsg);
+        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_manifest_request(), 5000, tls_opts, &errmsg, NULL);
         if (!resp_msg) {
             bind->ok = false;
             bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: manifest request failed");
@@ -1539,7 +1541,7 @@ static void ducknng_run_rpc_bind(duckdb_bind_info info) {
         bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: tls config not found");
         errmsg = NULL;
     } else {
-        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_exec_request(sql, 0, &errmsg), 5000, tls_opts, &errmsg);
+        resp_msg = ducknng_client_roundtrip_tls(url, ducknng_client_exec_request(sql, 0, &errmsg), 5000, tls_opts, &errmsg, NULL);
         if (!resp_msg) {
             bind->ok = false;
             bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: remote exec request failed");
@@ -1611,15 +1613,20 @@ static void ducknng_request_bind_common(ducknng_request_bind_data *bind, const c
     const uint8_t *payload, size_t payload_len, int32_t timeout_ms, const ducknng_tls_opts *tls_opts) {
     char *errmsg = NULL;
     nng_msg *resp_msg = NULL;
+    int nng_err = 0;
     if (!url || !url[0]) {
         bind->ok = false;
         bind->error = ducknng_strdup("ducknng: request URL must not be NULL or empty");
         return;
     }
-    resp_msg = ducknng_client_roundtrip_raw_tls(url, payload, payload_len, timeout_ms, tls_opts, &errmsg);
+    resp_msg = ducknng_client_roundtrip_raw_tls(url, payload, payload_len, timeout_ms, tls_opts, &errmsg, &nng_err);
     if (!resp_msg) {
         bind->ok = false;
         bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: request failed");
+        if (nng_err != 0) {
+            bind->has_nng_error = 1;
+            bind->nng_error = (int32_t)nng_err;
+        }
         return;
     }
     bind->payload_len = (idx_t)nng_msg_len(resp_msg);

@@ -53,3 +53,25 @@ All public methods must be registered through a method registry. The registry mu
 Compatibility and versioning are explicit requirements. The envelope version must always be available, the manifest must expose the protocol version, additions should be additive whenever possible, and removal should normally proceed through deprecation rather than surprise disappearance. Version-sensitive code must remain isolated in compatibility files so the protocol surface does not become entangled with low-level runtime quirks.
 
 This document is also the implementation checklist. Before a new protocol feature is merged, its transport pattern must be defined, its envelope usage must be clear, its method must be registered, its manifest entry must exist, its input and output schemas must be declared, its type mapping must be documented in `docs/types.md`, its concurrency or session behavior must be explained, and its error behavior must be testable and documented. If those conditions are not met, the feature is not yet protocol-ready.
+
+## Error surface contract
+
+The error surface is divided by abstraction level. The rule is simple: the lower the abstraction, the more structured the error.
+
+**Raw socket and request helpers** (`ducknng_open_socket`, `ducknng_dial_socket`, `ducknng_listen_socket`, `ducknng_close_socket`, `ducknng_send_socket_raw`, `ducknng_recv_socket_raw`, `ducknng_subscribe_socket`, `ducknng_unsubscribe_socket`, `ducknng_request`, `ducknng_request_socket`) return a struct or table row with `ok BOOLEAN`, `error VARCHAR`, `nng_error INTEGER`, and `nng_error_message VARCHAR`. When an NNG API call fails, `nng_error` carries the numeric return code and `nng_error_message` carries `nng_strerror()` text. When a ducknng validation check fails before any NNG call is made, `nng_error` and `nng_error_message` are NULL. This four-field pattern is the gold standard for transport-level primitives.
+
+**Async I/O helpers** (`ducknng_aio_status`, `ducknng_aio_collect`, `ducknng_aio_collect_decoded`) follow the same rule. When an NNG-level send or receive error ends the aio, `nng_error` and `nng_error_message` are populated with the raw NNG error code and its string. The `ducknng_aio_collect_decoded` macro passes both fields through from the underlying `ducknng_aio_collect` result without reinterpreting them.
+
+**High-level session and RPC helpers** (`ducknng_open_query`, `ducknng_fetch_query`, `ducknng_close_query`, `ducknng_cancel_query`, `ducknng_get_rpc_manifest`, `ducknng_run_rpc`) return only `ok` and `error`. These helpers involve multi-step transport sequences and envelope decoding before a result is available, so attributing a failure to a single NNG error code is not always accurate or useful. The `error` text field describes the failure. Callers who need raw NNG codes should use the lower-level primitives directly.
+
+**HTTP/HTTPS helpers** (`ducknng_ncurl`, `ducknng_ncurl_aio`, `ducknng_ncurl_aio_collect`) use `status INTEGER` as the carrier-level error code because the HTTP status code is the semantic equivalent of the NNG error code for that transport. Pre-connection failures remain text-only in the `error` field. There is no `nng_error` column on HTTP result rows because HTTP failures do not originate from NNG send/recv calls.
+
+**Raw BLOB scalar helpers** (`ducknng_request_raw`, `ducknng_request_socket_raw`) return a bare BLOB with no structured error fields. Local and transport errors are encoded as a `DUCKNNG_RPC_ERROR` frame in the BLOB so the result is always parseable with `ducknng_decode_frame`.
+
+**Configuration and lifecycle mutators** (service start/stop, TLS registration, registry and method-auth changes, allowlist and authorizer registration) throw a DuckDB exception for missing IDs, invalid arguments, or internal state violations. These are programmer or configuration errors for which in-band rows would add no diagnostic value. The correct recovery action is to fix the caller, not to branch on `ok`.
+
+**Dynamic-schema table helpers** throw at bind time when required configuration is absent, because DuckDB requires the result schema to be fixed at bind time and a NULL schema cannot be returned.
+
+**Scalar frame accessors** (`ducknng_frame_error_text`, `ducknng_frame_name`, `ducknng_frame_type`, and similar) return NULL for absent or invalid frames rather than throwing. This is the correct SQL behavior for projection and filtering use cases.
+
+**Frame envelope error text** (`error` field inside a `DUCKNNG_RPC_ERROR` frame body) is human-readable UTF-8, not a numeric code. Wire-level frames do not carry `nng_error` as an envelope field; the numeric transport code lives in the collect row that delivered the frame, not inside the frame payload itself.

@@ -1439,13 +1439,14 @@
       "kind": "table",
       "category": "Async I/O",
       "signature": "ducknng_aio_status(aio_id)",
-      "returns": "TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR)",
+      "returns": "TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion.",
       "notes": [
         "Use this to answer whether a send-only or request aio has completed its send phase successfully.",
         "Unknown handles return exists = FALSE and NULL metadata fields.",
+        "When an NNG-level send or receive error ends the aio, nng_error carries the numeric NNG error code and nng_error_message carries nng_strerror() text.",
         "This is exposed as a SQL macro over an internal volatile scalar so dynamic aio ids work under the stable DuckDB C API."
       ],
       "examples": [
@@ -1457,7 +1458,7 @@
       "kind": "table",
       "category": "Async I/O",
       "signature": "ducknng_aio_collect(aio_ids, wait_ms)",
-      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB, nng_error INTEGER, nng_error_message VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Wait for any requested aio handles to finish and return one row per newly collected terminal result.",
@@ -1467,6 +1468,7 @@
         "wait_ms controls only how long this collect call waits for already-launched aio handles; it is separate from the timeout_ms used when those handles were launched.",
         "wait_ms = 0 performs a pure poll.",
         "For send-only aios, frame is NULL on success. For recv/request aios, frame contains the collected raw frame when present.",
+        "When an NNG-level send or receive error ends the aio, nng_error carries the numeric NNG error code and nng_error_message carries nng_strerror() text.",
         "Use ducknng_ncurl_aio_collect() for handles returned by ducknng_ncurl_aio(), because HTTP results use status/header/body columns instead of a frame column."
       ],
       "examples": [
@@ -1478,7 +1480,7 @@
       "kind": "table",
       "category": "Async I/O",
       "signature": "ducknng_aio_collect_decoded(aio_ids, wait_ms)",
-      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly.",
