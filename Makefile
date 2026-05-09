@@ -37,11 +37,17 @@ EXTENSION_NAME=ducknng
 # Arrow encoding with correct, DuckDB-maintained conversions.
 USE_UNSTABLE_C_API=1
 
-# Stable C API metadata line
-TARGET_DUCKDB_VERSION=v1.2.0
+# Target DuckDB version — must match DUCKDB_HEADER_VERSION so the unstable
+# vtable layout seen at compile time matches the runtime vtable provided by the
+# host.  Both the Python sqllogictest runner and the R duckdb package in use
+# are v1.5.2, so all three version pins are kept in sync here.
+TARGET_DUCKDB_VERSION=v1.5.2
+
+# DuckDB version used by the Python sqllogictest runner — must match TARGET_DUCKDB_VERSION
+DUCKDB_TEST_VERSION=1.5.2
 
 # Actual DuckDB release to fetch headers from for compilation
-DUCKDB_HEADER_VERSION=v1.5.0
+DUCKDB_HEADER_VERSION=v1.5.2
 
 all: configure release
 

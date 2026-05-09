@@ -161,6 +161,116 @@ cleanup:
 }
 
 /* -------------------------------------------------------------------------
+ * Flatten dictionary-encoded columns in an ArrowArray / ArrowSchema pair.
+ *
+ * DuckDB encodes ENUM columns as dictionary-encoded Arrow arrays (integer
+ * indices + a string dictionary).  The nanoarrow IPC writer does not support
+ * dictionary batches, so we resolve any dictionary-encoded top-level column
+ * to a plain UTF-8 string column before serialisation.  The types.md contract
+ * says ENUM is transported as resolved UTF-8 strings anyway.
+ * ---------------------------------------------------------------------- */
+
+static int ducknng_flatten_one_dict_child(struct ArrowSchema *schema,
+    struct ArrowArray *array, int64_t col, char **errmsg) {
+    struct ArrowArrayView idx_view;
+    struct ArrowArrayView dict_view;
+    struct ArrowSchema *child_schema = schema->children[col];
+    struct ArrowArray *child_array  = array->children[col];
+    struct ArrowArray flat;
+    struct ArrowError aerr;
+    const char *col_name = NULL;
+    int64_t i, n;
+    int rc = -1;
+
+    memset(&idx_view,  0, sizeof(idx_view));
+    memset(&dict_view, 0, sizeof(dict_view));
+    memset(&flat, 0, sizeof(flat));
+    memset(&aerr, 0, sizeof(aerr));
+
+    /* Initialise views for index array and dictionary array. */
+    if (ArrowArrayViewInitFromSchema(&idx_view, child_schema, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message);
+        goto done;
+    }
+    if (ArrowArrayViewSetArray(&idx_view, child_array, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message);
+        goto done;
+    }
+    if (ArrowArrayViewInitFromSchema(&dict_view, child_schema->dictionary, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message);
+        goto done;
+    }
+    if (ArrowArrayViewSetArray(&dict_view, child_array->dictionary, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message);
+        goto done;
+    }
+
+    /* Build a plain UTF-8 string array. */
+    if (ArrowArrayInitFromType(&flat, NANOARROW_TYPE_STRING) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to init flat string array for ENUM column");
+        goto done;
+    }
+    n = child_array->length;
+    if (ArrowArrayStartAppending(&flat) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to start appending to flat array");
+        goto done;
+    }
+    for (i = 0; i < n; i++) {
+        if (ArrowArrayViewIsNull(&idx_view, i)) {
+            if (ArrowArrayAppendNull(&flat, 1) != NANOARROW_OK) goto oom;
+        } else {
+            int64_t idx = ArrowArrayViewGetIntUnsafe(&idx_view, i);
+            struct ArrowStringView sv = ArrowArrayViewGetStringUnsafe(&dict_view, idx);
+            if (ArrowArrayAppendString(&flat, sv) != NANOARROW_OK) goto oom;
+        }
+    }
+    if (ArrowArrayFinishBuildingDefault(&flat, &aerr) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(aerr.message);
+        if (flat.release) ArrowArrayRelease(&flat);
+        goto done;
+    }
+
+    /* Replace child schema: point to plain UTF-8, keep name. */
+    col_name = child_schema->name ? child_schema->name : "";
+    ArrowSchemaRelease(child_schema);
+    ArrowSchemaInit(child_schema);
+    if (ArrowSchemaSetType(child_schema, NANOARROW_TYPE_STRING) != NANOARROW_OK ||
+        ArrowSchemaSetName(child_schema, col_name) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to reset schema for flattened ENUM column");
+        if (flat.release) ArrowArrayRelease(&flat);
+        goto done;
+    }
+
+    /* Replace child array. */
+    if (child_array->release) ArrowArrayRelease(child_array);
+    *child_array = flat;
+    memset(&flat, 0, sizeof(flat)); /* transferred */
+    rc = 0;
+    goto done;
+
+oom:
+    if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory flattening ENUM column");
+    if (flat.release) ArrowArrayRelease(&flat);
+done:
+    ArrowArrayViewReset(&idx_view);
+    ArrowArrayViewReset(&dict_view);
+    return rc;
+}
+
+/* Flatten all dictionary-encoded top-level columns in schema/array in place. */
+static int ducknng_flatten_dict_columns(struct ArrowSchema *schema,
+    struct ArrowArray *array, char **errmsg) {
+    int64_t i;
+    for (i = 0; i < schema->n_children; i++) {
+        if (schema->children[i] && schema->children[i]->dictionary) {
+            if (ducknng_flatten_one_dict_child(schema, array, i, errmsg) != 0)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
  * Public API: result → IPC stream (all chunks)
  * ---------------------------------------------------------------------- */
 
@@ -212,6 +322,11 @@ int ducknng_result_to_ipc_stream(duckdb_prepared_statement stmt, duckdb_result r
         }
         duckdb_destroy_error_data(&err);
         err = NULL;
+
+        if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0) {
+            if (arr.release) ArrowArrayRelease(&arr);
+            goto cleanup;
+        }
 
         if (nchunks >= cap) {
             int64_t newcap = cap == 0 ? 4 : cap * 2;
@@ -296,6 +411,9 @@ int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     }
     duckdb_destroy_error_data(&err);
     err = NULL;
+
+    if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0)
+        goto cleanup;
 
     /* ducknng_ipc_arrays_to_bytes takes ownership on success. */
     if (ducknng_ipc_arrays_to_bytes(&schema, &arr, 1, out_bytes, out_len, errmsg) != 0) {

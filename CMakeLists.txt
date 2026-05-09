@@ -122,5 +122,7 @@ target_compile_definitions(${EXTENSION_NAME} PRIVATE
     NANOARROW_NAMESPACE=DucknngNanoarrow
 )
 
-target_link_libraries(${EXTENSION_NAME} PRIVATE nng Threads::Threads)
+target_link_libraries(${EXTENSION_NAME} PRIVATE
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,nng>
+    Threads::Threads)
 find_package(Threads REQUIRED)

@@ -228,8 +228,14 @@ int ducknng_decode_ipc_table_payload(const uint8_t *payload, size_t payload_len,
         goto cleanup;
     }
     if (!array->release) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: Arrow table payload did not contain a record batch");
-        goto cleanup;
+        /* EOS immediately after schema: zero-row result.  Build an empty
+         * array that matches the schema so callers can inspect columns. */
+        if (ArrowArrayInitFromSchema(array, schema, &error) != NANOARROW_OK ||
+            ArrowArrayFinishBuildingDefault(array, &error) != NANOARROW_OK) {
+            if (errmsg) *errmsg = ducknng_strdup(error.message[0] ? error.message
+                                      : "ducknng: failed to build empty Arrow array for zero-row result");
+            goto cleanup;
+        }
     }
     rc = 0;
 cleanup:
