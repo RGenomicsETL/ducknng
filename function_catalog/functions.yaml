@@ -264,6 +264,25 @@
       ]
     },
     {
+      "name": "ducknng_log_entries",
+      "kind": "table",
+      "category": "Introspection",
+      "signature": "ducknng_log_entries()",
+      "returns": "TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring.",
+      "notes": [
+        "Log entries are captured via the DuckDB unstable logger API (duckdb_register_log_storage) into a bounded in-memory ring of 512 entries.",
+        "Oldest entries are overwritten silently when the ring is full.",
+        "The snapshot is taken at bind time; entries written after the scan starts are not included.",
+        "ts is the DuckDB-supplied TIMESTAMP for each log entry; it may be zero if DuckDB did not populate the timestamp."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_log_entries() ORDER BY ts;"
+      ]
+    },
+    {
       "name": "ducknng_open_socket",
       "kind": "scalar",
       "category": "Primitive Transport",

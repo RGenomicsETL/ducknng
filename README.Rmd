@@ -19,7 +19,7 @@ knitr::knit_hooks$set(document = function(x) {
 # can be loaded. duckknit_start_session() only accepts a db path, not extra
 # CLI flags, so we launch the process directly and register it in duckknit's
 # internal session table.
-options(duckknit.duckdb = "/root/.local/bin/duckdb")
+options(duckknit.duckdb = "/usr/local/bin/duckdb152")
 local({
   ns  <- asNamespace("duckknit")
   cmd <- duckknit:::find_duckdb()
@@ -1121,9 +1121,47 @@ Supplying a non-zero TLS handle on a non-TLS URL is rejected rather than silentl
 
 For deeper write-ups see `docs/protocol.md`, `docs/manifest.md`, `docs/security.md`, `docs/registry.md`, `docs/transports.md`, and `docs/http.md`. `NEWS.md` summarizes landed changes.
 
+## Introspection examples
+
+### DuckDB log entries
+
+`ducknng_log_entries()` returns a snapshot of the most recent DuckDB log entries captured by the extension's in-memory ring buffer (capacity 512). The ring is populated via the DuckDB logger API; entries are captured without any per-call configuration.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ts, level, log_type, LEFT(message, 80) AS message
+FROM ducknng_log_entries()
+ORDER BY ts
+LIMIT 5;
+```
+
+### Pipe-event monitor
+
+Each running service maintains a bounded ring of NNG pipe events (ADD_PRE, ADD_POST, REM_POST). `ducknng_read_monitor(name, after_seq, max_events)` pages through the ring. `ducknng_monitor_status(name)` returns ring and active-pipe counters.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
+```
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT event_capacity, event_count, oldest_seq, newest_seq,
+       dropped_events, active_pipes, max_active_pipes
+FROM ducknng_monitor_status('monitor_demo');
+```
+
+`ducknng_list_pipes(name)` lists currently open NNG pipes for a service.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT pipe_id, opened_ms, remote_addr, peer_identity
+FROM ducknng_list_pipes('monitor_demo');
+```
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_stop_server('monitor_demo');
+```
+
 ## Status
 
-Sealed and runnable in 0.1.0: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level HTTP routes with exact, prefix, or template matching, SQL response rows, request-context/body helpers, named request accessors, one-row response builders, route-local auth policies, static asset serving, background workers, and streaming helpers (`ducknng_http_ndjson`, `ducknng_http_sse`); fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; body codec layer with built-in providers and user-registered codec hooks.
+Sealed and runnable in 0.1.0: NNG transports and socket patterns; first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions); low-level HTTP routes with exact, prefix, or template matching, SQL response rows, request-context/body helpers, named request accessors, one-row response builders, route-local auth policies, static asset serving, background workers, and streaming helpers (`ducknng_http_ndjson`, `ducknng_http_sse`); fast C admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits); SQL authorizer callbacks; bounded per-service pipe-event monitor and active-pipe snapshot; DuckDB log ring captured via the logger API (`ducknng_log_entries()`); body codec layer with built-in providers and user-registered codec hooks.
 
 Intentionally deferred:
 

@@ -2,6 +2,7 @@
 #include "ducknng_service.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
+#include "ducknng_runtime.h"
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
@@ -527,9 +528,115 @@ static int register_pipes_table(duckdb_connection con, ducknng_sql_context *ctx)
         ducknng_list_pipes_bind, ducknng_read_monitor_init, ducknng_list_pipes_scan);
 }
 
+static int register_monitor_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_monitor_status_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_pipes_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_log_entries_table(duckdb_connection con, ducknng_sql_context *ctx);
+
 int ducknng_register_sql_monitor(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!register_monitor_table(con, ctx)) return 0;
     if (!register_monitor_status_table(con, ctx)) return 0;
     if (!register_pipes_table(con, ctx)) return 0;
+    if (!register_log_entries_table(con, ctx)) return 0;
     return 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * ducknng_log_entries() — snapshot of the DuckDB log ring
+ * --------------------------------------------------------------------------- */
+
+typedef struct {
+    duckdb_timestamp *ts;
+    char **level;
+    char **log_type;
+    char **message;
+    idx_t row_count;
+} ducknng_log_entries_bind_data;
+
+static void destroy_log_entries_bind_data(void *ptr) {
+    ducknng_log_entries_bind_data *data = (ducknng_log_entries_bind_data *)ptr;
+    idx_t i;
+    if (!data) return;
+    for (i = 0; i < (idx_t)DUCKNNG_LOG_RING_CAP; i++) {
+        if (data->level && data->level[i]) { duckdb_free(data->level[i]); data->level[i] = NULL; }
+        if (data->log_type && data->log_type[i]) { duckdb_free(data->log_type[i]); data->log_type[i] = NULL; }
+        if (data->message && data->message[i]) { duckdb_free(data->message[i]); data->message[i] = NULL; }
+    }
+    if (data->ts) duckdb_free(data->ts);
+    if (data->level) duckdb_free(data->level);
+    if (data->log_type) duckdb_free(data->log_type);
+    if (data->message) duckdb_free(data->message);
+    duckdb_free(data);
+}
+
+static void ducknng_log_entries_bind(duckdb_bind_info info) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    ducknng_log_entries_bind_data *bind = NULL;
+    size_t n;
+    duckdb_logical_type type;
+
+    if (!ctx || !ctx->rt) {
+        duckdb_bind_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    bind = (ducknng_log_entries_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bind, 0, sizeof(*bind));
+    bind->ts      = (duckdb_timestamp *)duckdb_malloc(sizeof(duckdb_timestamp) * DUCKNNG_LOG_RING_CAP);
+    bind->level   = (char **)duckdb_malloc(sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    bind->log_type = (char **)duckdb_malloc(sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    bind->message = (char **)duckdb_malloc(sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    if (!bind->ts || !bind->level || !bind->log_type || !bind->message) {
+        destroy_log_entries_bind_data(bind);
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bind->ts, 0, sizeof(duckdb_timestamp) * DUCKNNG_LOG_RING_CAP);
+    memset(bind->level, 0, sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    memset(bind->log_type, 0, sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    memset(bind->message, 0, sizeof(char *) * DUCKNNG_LOG_RING_CAP);
+    n = ducknng_log_ring_snapshot(&ctx->rt->log_ring, bind->ts, bind->level, bind->log_type, bind->message);
+    bind->row_count = (idx_t)n;
+
+    type = duckdb_create_logical_type(DUCKDB_TYPE_TIMESTAMP);
+    duckdb_bind_add_result_column(info, "ts", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "level", type);
+    duckdb_bind_add_result_column(info, "log_type", type);
+    duckdb_bind_add_result_column(info, "message", type);
+    duckdb_destroy_logical_type(&type);
+
+    duckdb_bind_set_bind_data(info, bind, destroy_log_entries_bind_data);
+    duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+static void ducknng_log_entries_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_monitor_init_data *init = (ducknng_monitor_init_data *)duckdb_function_get_init_data(info);
+    ducknng_log_entries_bind_data *bind = (ducknng_log_entries_bind_data *)duckdb_function_get_bind_data(info);
+    idx_t remaining, chunk_size, i;
+    if (!init || !bind || init->offset >= bind->row_count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    remaining = bind->row_count - init->offset;
+    chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
+    for (i = 0; i < chunk_size; i++) {
+        idx_t row = init->offset + i;
+        ((duckdb_timestamp *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0)))[i] = bind->ts[row];
+        if (bind->level[row]) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, bind->level[row], (idx_t)strlen(bind->level[row])); else set_null(duckdb_data_chunk_get_vector(output, 1), i);
+        if (bind->log_type[row]) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, bind->log_type[row], (idx_t)strlen(bind->log_type[row])); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
+        if (bind->message[row]) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, bind->message[row], (idx_t)strlen(bind->message[row])); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
+    }
+    init->offset += chunk_size;
+    duckdb_data_chunk_set_size(output, chunk_size);
+}
+
+static int register_log_entries_table(duckdb_connection con, ducknng_sql_context *ctx) {
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_log_entries", ctx, 0, NULL,
+        ducknng_log_entries_bind, ducknng_read_monitor_init, ducknng_log_entries_scan);
 }

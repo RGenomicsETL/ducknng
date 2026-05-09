@@ -11,9 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#  include <io.h>
 #  include <windows.h>
-#  include <fcntl.h>
 #else
 #  include <unistd.h>
 #endif
@@ -1500,28 +1498,25 @@ cleanup:
 /* ---------------------------------------------------------------------------
  * Cross-platform tempfile helpers for Parquet body reader
  * --------------------------------------------------------------------------- */
-static int ducknng_body_open_tempfile(char **out_path, char **errmsg) {
+/* Generate a unique temporary file path and set *out_path.
+ * Returns 0 on success, -1 on failure.
+ * On non-Windows: uses mkstemp to atomically create the file and obtain a unique
+ * name, then closes the OS fd — the caller will open it again via DuckDB FS.
+ * On Windows: uses _tempnam for path generation. */
+static int ducknng_body_make_tempfile_path(char **out_path, char **errmsg) {
 #ifdef _WIN32
     char *tmp = _tempnam(NULL, "ducknng_body_");
-    int fd;
     if (!tmp) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: _tempnam failed");
-        return -1;
-    }
-    fd = _open(tmp, _O_WRONLY | _O_BINARY | _O_CREAT | _O_EXCL, 0600);
-    if (fd < 0) {
-        free(tmp);
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to open temp file for body reader");
         return -1;
     }
     *out_path = ducknng_strdup(tmp);
     free(tmp);
     if (!*out_path) {
-        _close(fd);
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
         return -1;
     }
-    return fd;
+    return 0;
 #else
     char tmpl[] = "/tmp/ducknng_body_XXXXXX";
     int fd = mkstemp(tmpl);
@@ -1529,14 +1524,14 @@ static int ducknng_body_open_tempfile(char **out_path, char **errmsg) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: mkstemp failed for body reader");
         return -1;
     }
+    close(fd); /* DuckDB FS will reopen via the path */
     *out_path = ducknng_strdup(tmpl);
     if (!*out_path) {
-        close(fd);
         unlink(tmpl);
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
         return -1;
     }
-    return fd;
+    return 0;
 #endif
 }
 
@@ -1549,43 +1544,24 @@ static void ducknng_body_delete_tempfile(const char *path) {
 #endif
 }
 
-static int ducknng_body_write_tempfile(int fd, const uint8_t *data, size_t len, char **errmsg) {
-    size_t written = 0;
-    while (written < len) {
-        int n;
-        size_t chunk = len - written;
-        if (chunk > 65536) chunk = 65536;
-#ifdef _WIN32
-        n = _write(fd, data + written, (unsigned int)chunk);
-#else
-        n = (int)write(fd, data + written, chunk);
-#endif
-        if (n <= 0) {
-            if (errmsg) *errmsg = ducknng_strdup("ducknng: write to temp file failed");
-            return -1;
-        }
-        written += (size_t)n;
-    }
-    return 0;
-}
-
 /* ---------------------------------------------------------------------------
  * Temp-file based DuckDB reader for Parquet body codec
  * --------------------------------------------------------------------------- */
 static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
     ducknng_body_parse_bind_data *bind, const uint8_t *body, size_t body_len,
-    int codec_kind, char **errmsg) {
+    int codec_kind, duckdb_file_system fs, char **errmsg) {
     char *path = NULL;
     char *quoted_path = NULL;
     char *sql = NULL;
     uint8_t *payload = NULL;
     size_t payload_len = 0;
     size_t sql_len;
-    int fd = -1;
+    duckdb_file_handle fh = NULL;
+    duckdb_file_open_options opts = NULL;
     int rc = -1;
     const char *query_template = NULL;
     if (errmsg) *errmsg = NULL;
-    if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt) || !bind) {
+    if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt) || !bind || !fs) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for body reader");
         return -1;
     }
@@ -1599,24 +1575,45 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
         if (errmsg) *errmsg = ducknng_strdup("ducknng: body must not be empty for this codec");
         return -1;
     }
-    fd = ducknng_body_open_tempfile(&path, errmsg);
-    if (fd < 0) goto cleanup;
-    if (ducknng_body_write_tempfile(fd, body, body_len, errmsg) != 0) {
-#ifdef _WIN32
-        _close(fd);
-#else
-        close(fd);
-#endif
-        fd = -1;
+    if (ducknng_body_make_tempfile_path(&path, errmsg) != 0) goto cleanup;
+    opts = duckdb_create_file_open_options();
+    if (!opts) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory creating file open options");
         goto cleanup;
     }
-#ifdef _WIN32
-    _close(fd);
-#else
-    close(fd);
-#endif
-    fd = -1;
-    /* Build SQL — path was made by mkstemp/tempnam so no user-controlled content.
+    duckdb_file_open_options_set_flag(opts, DUCKDB_FILE_FLAG_WRITE, true);
+    duckdb_file_open_options_set_flag(opts, DUCKDB_FILE_FLAG_CREATE, true);
+    if (duckdb_file_system_open(fs, path, opts, &fh) == DuckDBError || !fh) {
+        if (errmsg && !*errmsg) {
+            duckdb_error_data err = duckdb_file_system_error_data(fs);
+            if (err) {
+                const char *msg = duckdb_error_data_message(err);
+                if (msg && msg[0]) *errmsg = ducknng_strdup(msg);
+                duckdb_destroy_error_data(&err);
+            }
+            if (!*errmsg) *errmsg = ducknng_strdup("ducknng: failed to open temp file via DuckDB FS");
+        }
+        goto cleanup;
+    }
+    duckdb_destroy_file_open_options(&opts);
+    opts = NULL;
+    if (duckdb_file_handle_write(fh, (void *)body, (int64_t)body_len) != (int64_t)body_len) {
+        if (errmsg && !*errmsg) {
+            duckdb_error_data err = duckdb_file_handle_error_data(fh);
+            if (err) {
+                const char *msg = duckdb_error_data_message(err);
+                if (msg && msg[0]) *errmsg = ducknng_strdup(msg);
+                duckdb_destroy_error_data(&err);
+            }
+            if (!*errmsg) *errmsg = ducknng_strdup("ducknng: write to temp file failed");
+        }
+        duckdb_destroy_file_handle(&fh);
+        fh = NULL;
+        goto cleanup;
+    }
+    duckdb_destroy_file_handle(&fh);
+    fh = NULL;
+    /* Build SQL — path was generated internally so no user-controlled content.
      * Still use sql_quote_literal for correctness with any OS path chars. */
     quoted_path = ducknng_sql_quote_literal(path);
     if (!quoted_path) {
@@ -1643,6 +1640,8 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
     bind->row_count = (idx_t)bind->array.length;
     rc = 0;
 cleanup:
+    if (fh) duckdb_destroy_file_handle(&fh);
+    if (opts) duckdb_destroy_file_open_options(&opts);
     if (payload) duckdb_free(payload);
     if (sql) duckdb_free(sql);
     if (quoted_path) duckdb_free(quoted_path);
@@ -1836,8 +1835,16 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         }
-        case DUCKNNG_BODY_CODEC_PARQUET:
-            if (ducknng_body_parse_run_tempfile_reader(ctx, bind, body, body_len, bind->codec_kind, &errmsg) != 0) {
+        case DUCKNNG_BODY_CODEC_PARQUET: {
+            duckdb_client_context client_ctx = NULL;
+            duckdb_file_system fs = NULL;
+            int trc;
+            duckdb_table_function_get_client_context(info, &client_ctx);
+            if (client_ctx) fs = duckdb_client_context_get_file_system(client_ctx);
+            trc = ducknng_body_parse_run_tempfile_reader(ctx, bind, body, body_len, bind->codec_kind, fs, &errmsg);
+            if (fs) duckdb_destroy_file_system(&fs);
+            if (client_ctx) duckdb_destroy_client_context(&client_ctx);
+            if (trc != 0) {
                 destroy_body_parse_bind_data(bind);
                 duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body with DuckDB file reader");
                 if (errmsg) duckdb_free(errmsg);
@@ -1862,6 +1869,7 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             }
             duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
+        }
         case DUCKNNG_BODY_CODEC_FORM: {
             if (ducknng_parse_form_urlencoded(body, body_len,
                     &bind->form_keys, &bind->form_values, &bind->form_count, &errmsg) != 0) {

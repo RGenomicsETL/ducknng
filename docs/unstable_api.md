@@ -61,17 +61,20 @@ sites across the codebase:
 
 **Functions:** `duckdb_table_function_get_client_context(bind_info, out_ctx)`
 
-**What it does.** Retrieves the DuckDB client context from inside a table-function bind
-callback, avoiding the need to pass a context pointer through `extra_info`.
+**What it does.** Retrieves the DuckDB `duckdb_client_context` from inside a
+table-function bind callback.
 
-**Current situation.** `ducknng_body_parse_bind`, `ducknng_ncurl_table_bind`, and other
-TVF bind callbacks receive a `ducknng_sql_context *` via `duckdb_bind_get_extra_info`.
-This works correctly; the existing pattern is not wrong.
+**Current situation.** All TVF bind callbacks in `ducknng` receive a
+`ducknng_sql_context *` (the extension's own runtime/service state) via
+`duckdb_bind_get_extra_info`. That struct carries the service, session map, TLS
+config, and codec connection — none of which come from a DuckDB `duckdb_client_context`.
+`duckdb_table_function_get_client_context` returns a DuckDB client context handle, not
+the extension's state, so it cannot replace `extra_info` for `ducknng`'s purposes.
 
-**Recommendation: LOW priority.** The existing `extra_info` pattern is clear. Migrating
-to `duckdb_table_function_get_client_context` would simplify registration (no need to
-store the context pointer as extra info) but is not urgent. Revisit if the number of
-table functions grows significantly.
+**Recommendation: NOT applicable.** The `extra_info` pattern must remain for
+`ducknng_sql_context *` propagation. `duckdb_table_function_get_client_context` is only
+useful if a TVF bind callback needs to call back into DuckDB's catalog or connection APIs
+using the originating client context, which no current `ducknng` bind callback does.
 
 ---
 
@@ -113,34 +116,53 @@ callback to test and fold constant arguments.
 ## `unstable_new_open_connect_functions`
 
 **Functions:** `duckdb_connection_get_client_context`,
-`duckdb_client_context_get_connection_id`, `duckdb_get_table_names`
+`duckdb_connection_get_arrow_options`, `duckdb_client_context_get_connection_id`,
+`duckdb_destroy_client_context`, `duckdb_destroy_arrow_options`, `duckdb_get_table_names`
 
 **What it does.** Exposes the internal client context from a `duckdb_connection` handle,
-and provides a connection-level unique ID.
+provides a connection-level unique ID, retrieves per-connection Arrow options, and lists
+table names reachable from a connection.
 
-**Current situation.** Not used. Session identification in `ducknng` uses its own
-`ducknng_session` and `ducknng_service` structures keyed by connection handle.
+**Current situation.** `ducknng` assigns `session_id` values from a `uint64_t` counter
+starting at 1 (`svc->next_session_id`). `session_id` is part of the public wire protocol
+— it appears in `query_open` JSON replies and is echoed back in `fetch`, `close`, and
+`cancel` requests. Tests rely on sequential predictable values.
 
-**Recommendation: LOW priority.** `duckdb_client_context_get_connection_id` could
-simplify session-key lookups. Not needed now.
+`duckdb_client_context_get_connection_id` returns the DuckDB-internal connection ID, which
+is non-sequential and not predictable from the client's perspective. Using it as the
+public `session_id` would break the protocol contract and require updating every test and
+documented example. It could be stored as a private diagnostic field on the session
+struct for log correlation without affecting the wire ID.
+
+**Recommendation: NOT applicable for public session_id.** The counter is correct and
+cheap. `duckdb_client_context_get_connection_id` could be stored as `session_duckdb_conn_id`
+on `ducknng_session` for diagnostic use, but that is a low-value addition given the
+counter already provides unique session identification.
 
 ---
 
 ## `unstable_new_vector_functions`
 
-**Functions:** `duckdb_unsafe_vector_assign_string_element_len`, `duckdb_create_vector`,
-`duckdb_vector_reference_vector`, `duckdb_create_selection_vector`
+**Functions:** `duckdb_create_vector`, `duckdb_destroy_vector`, `duckdb_slice_vector`,
+`duckdb_vector_reference_value`, `duckdb_vector_reference_vector`,
+`duckdb_vector_copy_sel`, `duckdb_create_selection_vector`,
+`duckdb_destroy_selection_vector`, `duckdb_selection_vector_get_data_ptr`,
+`duckdb_unsafe_vector_assign_string_element_len`
 
 **What it does.** Provides lower-level vector manipulation: zero-copy vector references,
-selection vectors for filtering without copying, and string assignment with explicit
-length.
+selection vectors for filtering without copying, string assignment with explicit length,
+and standalone vector allocation with arbitrary capacity.
 
-**Recommendation: MEDIUM priority for string length.** See string functions note above.
-`duckdb_create_selection_vector` is not needed today; `ducknng` does not implement custom
-pushdown operators.
+`duckdb_create_vector` / `duckdb_destroy_vector` allocate standalone `duckdb_vector`
+objects outside a data chunk. `duckdb_slice_vector` reindexes a vector through a
+selection vector. `duckdb_vector_reference_value` fills a vector with a single scalar
+value. `duckdb_vector_copy_sel` copies elements with per-element selection.
 
-**Update:** `duckdb_unsafe_vector_assign_string_element_len` is now adopted — see the
-string functions entry above.
+**Update:** `duckdb_unsafe_vector_assign_string_element_len` is adopted — see the
+string functions entry above. The remaining vector manipulation functions
+(`duckdb_create_vector`, `duckdb_slice_vector`, `duckdb_vector_copy_sel`, etc.) are
+not needed today; `ducknng` does not implement custom pushdown operators or standalone
+vector allocation outside TVF scan callbacks.
 
 ---
 
@@ -214,11 +236,14 @@ from within an extension.
 
 ## `unstable_new_logger_functions`
 
-**Functions:** `duckdb_create_log_storage`, `duckdb_log_storage_set_write_log_entry`,
-`duckdb_register_log_storage`
+**Functions:** `duckdb_create_log_storage`, `duckdb_destroy_log_storage`,
+`duckdb_log_storage_set_write_log_entry`, `duckdb_log_storage_set_extra_data`,
+`duckdb_log_storage_set_name`, `duckdb_register_log_storage`
 
-**What it does.** Lets extensions register a custom log sink that receives DuckDB's
-internal log entries.
+**What it does.** Lets extensions register a named custom log sink that receives DuckDB's
+internal log entries. `duckdb_log_storage_set_write_log_entry` installs the write
+callback. `duckdb_log_storage_set_extra_data` attaches extension state with a destroy
+callback. `duckdb_log_storage_set_name` labels the sink for diagnostics.
 
 **Recommendation: LOW priority.** Could expose DuckDB-level log lines through the
 `ducknng` observability surface. Not urgent.
@@ -286,22 +311,193 @@ Adopt if `ducknng` exposes typed error codes through the protocol.
 
 ---
 
+## `unstable_new_geo_functions`
+
+**Functions:** `duckdb_geometry_type_get_crs(type) -> char *`
+
+**What it does.** Returns the CRS (coordinate reference system) string for a DuckDB
+`GEOMETRY` logical type. Useful for extensions that introspect geometry column metadata.
+
+**Recommendation: NOT applicable.** `ducknng` does not handle geometry types. The
+transport layer encodes unsupported types as Arrow binary blobs; no CRS metadata is
+exposed.
+
+---
+
+## `unstable_new_prepared_statement_functions`
+
+**Functions:** `duckdb_prepared_statement_column_count`,
+`duckdb_prepared_statement_column_name`, `duckdb_prepared_statement_column_logical_type`,
+`duckdb_prepared_statement_column_type`
+
+**What it does.** Exposes output column metadata (count, name, logical type, type enum)
+from a `duckdb_prepared_statement` before it is executed. Previously, column metadata was
+only available after calling `duckdb_execute_prepared` or its variants.
+
+**Current situation.** `ducknng` builds its Arrow IPC schema after execution via
+`duckdb_to_arrow_schema` on the result's logical types. There is no current need to
+inspect columns before execution.
+
+**Recommendation: LOW priority.** Could be used in a future `describe` or
+`query_prepare` RPC method that returns schema metadata without executing the query.
+Keep in mind for protocol extensions.
+
+---
+
+## `unstable_new_query_execution_functions`
+
+**Functions:** `duckdb_result_get_arrow_options(result) -> duckdb_arrow_options`
+
+**What it does.** Retrieves the Arrow options associated with a `duckdb_result`. Arrow
+options control encoding details such as large string offsets and timezone handling.
+
+**Pairing.** `duckdb_connection_get_arrow_options` (in `unstable_new_open_connect_functions`)
+gets the per-connection options that were in effect when the result was produced.
+`duckdb_result_get_arrow_options` retrieves those options from the result object itself.
+Both must be destroyed with `duckdb_destroy_arrow_options`.
+
+**Recommendation: LOW priority.** The current emit path uses `duckdb_to_arrow_schema`
+and `duckdb_data_chunk_to_arrow` without Arrow options. If encoding fidelity for
+timezone-aware or large-string columns becomes important, these can be wired in.
+
+---
+
+## `unstable_new_scalar_function_state_functions`
+
+**Functions:** `duckdb_scalar_function_get_state`,
+`duckdb_scalar_function_set_init`, `duckdb_scalar_function_init_set_error`,
+`duckdb_scalar_function_init_set_state`, `duckdb_scalar_function_init_get_client_context`,
+`duckdb_scalar_function_init_get_bind_data`, `duckdb_scalar_function_init_get_extra_info`
+
+**What it does.** Adds a per-execution-thread local state to scalar functions. An `init`
+callback is called once per execution context to allocate thread-local state (e.g. a
+compiled regex, a connection handle, a reusable buffer). The execute callback retrieves
+that state with `duckdb_scalar_function_get_state`.
+
+**Current situation.** `ducknng` scalar functions are stateless or use shared state via
+`extra_info`. HTTP lookup functions carry bind-time constant data through the bind-data
+pattern adopted in `unstable_new_scalar_function_functions`.
+
+**Recommendation: LOW priority.** Relevant if a future scalar function needs per-thread
+initialisation (e.g. a connection pool slot per DuckDB worker thread). Not needed today.
+
+---
+
+## `unstable_new_table_description_functions`
+
+**Functions:** `duckdb_table_description_get_column_count`,
+`duckdb_table_description_get_column_type`
+
+**What it does.** Extends the `duckdb_table_description` API (opened with
+`duckdb_table_description_create` / `duckdb_table_description_create_ext`) with column
+count and type introspection. A table description gives schema metadata for a named table
+without executing a query.
+
+**Recommendation: NOT applicable.** `ducknng` does not introspect named tables.
+
+---
+
+## `unstable_new_value_functions`
+
+**Functions:** `duckdb_create_map_value`, `duckdb_create_union_value`,
+`duckdb_create_time_ns`, `duckdb_get_time_ns`
+
+**What it does.** Constructs `duckdb_value` objects for MAP, UNION, and TIME_NS types.
+Useful in TVF bind callbacks and scalar bind callbacks where values must be returned
+without executing a query.
+
+**Current situation.** `ducknng` bind callbacks use `duckdb_get_varchar` / `duckdb_get_int64`
+/ `duckdb_get_double` for the constant-folded values in HTTP lookup functions. MAP, UNION,
+and TIME_NS are not part of the current RPC payload surface.
+
+**Recommendation: LOW priority.** Adopt if `ducknng` needs to return MAP or UNION typed
+results from bind-phase constant folding or from new RPC methods.
+
+---
+
 ## Summary table
 
 | Group | Priority | Action |
 |---|---|---|
 | `unstable_new_arrow_functions` | **DONE** | Emit side adopted in `ducknng_ipc_out.c`; receive side deferred |
 | `unstable_new_error_data_functions` | **DONE** | Adopted in `ducknng_ipc_out.c` alongside Arrow rewrite |
-| `unstable_new_string_functions` / vector string | **DONE** | `duckdb_valid_utf8_check` in `ducknng_sql_bytes_look_text`; `duckdb_unsafe_vector_assign_string_element_len` at all 111 vector string-assign sites |
+| `unstable_new_string_functions` / vector string | **DONE** | `duckdb_valid_utf8_check` in `ducknng_sql_bytes_look_text`; `duckdb_unsafe_vector_assign_string_element_len` at all vector string-assign sites |
 | `unstable_new_scalar_function_functions` | **DONE** | Bind phase adopted for the four HTTP lookup scalar functions; bind data pre-folds constant name argument |
-| `unstable_new_table_function_functions` | **LOW** | Simplify TVF registration by removing `extra_info` context pointer |
-| `unstable_new_file_system_api` | **LOW** | Replace OS tempfile I/O in the Parquet branch |
 | `unstable_new_expression_functions` | **DONE** | Used inside scalar bind callbacks (`duckdb_expression_is_foldable`, `duckdb_expression_fold`) |
-| `unstable_new_open_connect_functions` | **LOW** | Simplify session key lookup |
+| `unstable_new_table_function_functions` | NOT applicable | `duckdb_table_function_get_client_context` returns a DuckDB context, not `ducknng_sql_context`; `extra_info` pattern must remain |
+| `unstable_new_file_system_api` | **LOW** | Replace OS tempfile I/O in the Parquet branch |
+| `unstable_new_open_connect_functions` | NOT applicable | `duckdb_client_context_get_connection_id` would change the public wire session_id; counter is correct |
 | `unstable_new_logger_functions` | **LOW** | Expose DuckDB log lines if needed |
 | `unstable_new_config_options_functions` | **LOW** | Adopt when tunable knobs are wanted |
+| `unstable_new_prepared_statement_functions` | **LOW** | Useful for a future `query_prepare` or `describe` RPC method |
+| `unstable_new_query_execution_functions` | **LOW** | `duckdb_result_get_arrow_options` for timezone/large-string encoding fidelity |
+| `unstable_new_scalar_function_state_functions` | **LOW** | Per-thread init state; not needed today |
+| `unstable_new_value_functions` | **LOW** | MAP/UNION/TIME_NS construction; not part of current payload surface |
+| `unstable_new_vector_functions` | PARTIAL | `duckdb_unsafe_vector_assign_string_element_len` adopted; remaining vector manipulation functions not needed |
+| `unstable_new_geo_functions` | NOT applicable | GEOMETRY CRS metadata; `ducknng` does not handle geometry columns |
+| `unstable_new_table_description_functions` | NOT applicable | Named-table schema introspection not used |
 | `unstable_new_copy_functions_api` | NOT applicable | — |
 | `unstable_new_catalog_interface` | NOT applicable | — |
 | `unstable_instance_cache` | NOT applicable | — |
 | `unstable_new_append_functions` | NOT applicable | — |
 | `unstable_deprecated` | **DO NOT USE** | Avoid entirely |
+
+---
+
+## DuckDB async query surface (stable API)
+
+This section covers the DuckDB pending-query API, which is part of the stable v1.2.0 C
+API, not the unstable extension API. It is documented here because it intersects directly
+with `ducknng`'s session lifecycle and async dispatch model.
+
+### Pending query API
+
+**Functions (stable):** `duckdb_pending_prepared`, `duckdb_pending_prepared_streaming`,
+`duckdb_destroy_pending`, `duckdb_pending_error`, `duckdb_pending_execute_task`,
+`duckdb_pending_execute_check_state`, `duckdb_execute_pending`,
+`duckdb_pending_execution_is_finished`
+
+**Task execution (stable):** `duckdb_execute_tasks`, `duckdb_create_task_state`,
+`duckdb_execute_tasks_state`, `duckdb_execute_n_tasks_state`, `duckdb_finish_execution`,
+`duckdb_destroy_task_state`
+
+**What it does.** `duckdb_pending_prepared` starts a prepared statement asynchronously,
+returning a `duckdb_pending_result` instead of blocking. The caller then calls
+`duckdb_pending_execute_task` in a loop, yielding between calls, until the state
+transitions to `DUCKDB_PENDING_RESULT_READY`. At that point `duckdb_execute_pending`
+collects the final `duckdb_result`. `duckdb_pending_execute_check_state` probes state
+without advancing execution; `duckdb_pending_execution_is_finished` maps a state enum
+to a boolean.
+
+`duckdb_execute_tasks` drives DuckDB background work from external threads — this is the
+multi-threaded execution model where DuckDB task work is pumped by a thread pool that the
+caller controls.
+
+**Status: ADOPTED in session query lifecycle.**
+
+`ducknng_methods.c` uses this API in the `query_open` / `fetch` session flow:
+
+- `query_open` calls `duckdb_pending_prepared` on the final extracted statement,
+  creating a `duckdb_pending_result` that is stored on the `ducknng_session`.
+- The first `fetch` call drives execution by looping `duckdb_pending_execute_task` until
+  `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain a
+  streaming `duckdb_result`. Subsequent `fetch` calls read chunks with
+  `duckdb_fetch_chunk`.
+
+**Outstanding design question: cooperative vs. preemptive task dispatch.**
+
+The current `fetch` handler drives the pending result to completion in a tight loop on
+whichever NNG worker thread picks up the fetch request. This is simple and correct, but
+it monopolises an NNG thread for the duration of the query, preventing that thread from
+handling other requests.
+
+A more cooperative model would pump `duckdb_pending_execute_task` in a dedicated task
+thread or use `duckdb_execute_tasks` with a thread pool, signalling the NNG layer when
+the result is ready via an NNG AIO completion. The NNG AIO (`nng_aio`) primitive in
+`ducknng` is already used for raw send/receive futures. Bridging it to the DuckDB pending
+result would require a dedicated poller thread or integration with NNG's task scheduler,
+but would allow NNG worker threads to remain unblocked during long queries.
+
+This is a concrete future improvement path but not a blocking issue today: the server
+is already functional and correct; the cost is reduced concurrency under heavy parallel
+query load.

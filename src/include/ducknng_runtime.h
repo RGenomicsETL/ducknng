@@ -8,6 +8,26 @@
 #include <stdatomic.h>
 #include <nng/supplemental/http/http.h>
 
+/* ---------------------------------------------------------------------------
+ * DuckDB log entry ring buffer
+ * --------------------------------------------------------------------------- */
+#define DUCKNNG_LOG_RING_CAP 512
+
+typedef struct ducknng_log_entry {
+    duckdb_timestamp ts;
+    char *level;
+    char *log_type;
+    char *message;
+} ducknng_log_entry;
+
+typedef struct ducknng_log_ring {
+    ducknng_log_entry entries[DUCKNNG_LOG_RING_CAP];
+    size_t head;   /* index of oldest entry */
+    size_t count;  /* number of valid entries (0..DUCKNNG_LOG_RING_CAP) */
+    ducknng_mutex mu;
+    int mu_initialized;
+} ducknng_log_ring;
+
 typedef struct ducknng_client_socket {
     uint64_t socket_id;
     char *protocol;
@@ -138,6 +158,7 @@ typedef struct ducknng_runtime {
     int shutting_down;
     atomic_uintptr_t current_request_service_ptr;
     ducknng_method_registry registry;
+    ducknng_log_ring log_ring;
 } ducknng_runtime;
 
 /* User codec helpers. Registry is keyed by lower-cased trimmed content_type.
@@ -186,3 +207,14 @@ const ducknng_http_request_context *ducknng_runtime_current_thread_http_request_
 void ducknng_runtime_current_authorizer_context_set(ducknng_runtime *rt,
     const ducknng_authorizer_context *auth_ctx);
 const ducknng_authorizer_context *ducknng_runtime_current_thread_authorizer_context_get(ducknng_runtime *rt);
+
+/* Log ring helpers */
+void ducknng_log_ring_init(ducknng_log_ring *ring);
+void ducknng_log_ring_destroy(ducknng_log_ring *ring);
+void ducknng_log_ring_append(ducknng_log_ring *ring, const duckdb_timestamp *ts,
+    const char *level, const char *log_type, const char *message);
+/* Snapshot: caller provides arrays of at least DUCKNNG_LOG_RING_CAP entries.
+ * Returns the number of entries written. Caller must free each non-NULL
+ * level/log_type/message string with duckdb_free. */
+size_t ducknng_log_ring_snapshot(ducknng_log_ring *ring,
+    duckdb_timestamp *out_ts, char **out_level, char **out_log_type, char **out_message);

@@ -155,6 +155,7 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         }
     }
     if (ducknng_cond_init(&rt->aio_cv) == 0) rt->aio_cv_initialized = 1;
+    ducknng_log_ring_init(&rt->log_ring);
     ducknng_method_registry_init(&rt->registry);
     if (!ducknng_register_builtin_methods(rt, &errmsg)) {
         ducknng_method_registry_destroy(&rt->registry);
@@ -312,6 +313,7 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->user_codec_cap = 0;
     }
     ducknng_method_registry_destroy(&rt->registry);
+    ducknng_log_ring_destroy(&rt->log_ring);
     if (rt->execution_pool) {
         for (i = 0; i < rt->execution_pool_count; i++) {
             if (rt->execution_pool[i]) duckdb_disconnect(&rt->execution_pool[i]);
@@ -808,4 +810,69 @@ char *ducknng_runtime_find_user_codec(ducknng_runtime *rt, const char *content_t
     ducknng_mutex_unlock(&rt->mu);
     duckdb_free(key);
     return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * DuckDB log entry ring buffer
+ * --------------------------------------------------------------------------- */
+
+void ducknng_log_ring_init(ducknng_log_ring *ring) {
+    if (!ring) return;
+    memset(ring, 0, sizeof(*ring));
+    if (ducknng_mutex_init(&ring->mu) == 0) ring->mu_initialized = 1;
+}
+
+void ducknng_log_ring_destroy(ducknng_log_ring *ring) {
+    size_t i;
+    if (!ring) return;
+    for (i = 0; i < DUCKNNG_LOG_RING_CAP; i++) {
+        if (ring->entries[i].level) { duckdb_free(ring->entries[i].level); ring->entries[i].level = NULL; }
+        if (ring->entries[i].log_type) { duckdb_free(ring->entries[i].log_type); ring->entries[i].log_type = NULL; }
+        if (ring->entries[i].message) { duckdb_free(ring->entries[i].message); ring->entries[i].message = NULL; }
+    }
+    if (ring->mu_initialized) ducknng_mutex_destroy(&ring->mu);
+}
+
+void ducknng_log_ring_append(ducknng_log_ring *ring, const duckdb_timestamp *ts,
+    const char *level, const char *log_type, const char *message) {
+    size_t slot;
+    ducknng_log_entry *e;
+    if (!ring || !ring->mu_initialized) return;
+    ducknng_mutex_lock(&ring->mu);
+    if (ring->count < DUCKNNG_LOG_RING_CAP) {
+        slot = (ring->head + ring->count) % DUCKNNG_LOG_RING_CAP;
+        ring->count++;
+    } else {
+        /* overwrite oldest */
+        slot = ring->head;
+        ring->head = (ring->head + 1) % DUCKNNG_LOG_RING_CAP;
+        e = &ring->entries[slot];
+        if (e->level) { duckdb_free(e->level); e->level = NULL; }
+        if (e->log_type) { duckdb_free(e->log_type); e->log_type = NULL; }
+        if (e->message) { duckdb_free(e->message); e->message = NULL; }
+    }
+    e = &ring->entries[slot];
+    if (ts) e->ts = *ts; else memset(&e->ts, 0, sizeof(e->ts));
+    e->level = level ? ducknng_strdup(level) : NULL;
+    e->log_type = log_type ? ducknng_strdup(log_type) : NULL;
+    e->message = message ? ducknng_strdup(message) : NULL;
+    ducknng_mutex_unlock(&ring->mu);
+}
+
+size_t ducknng_log_ring_snapshot(ducknng_log_ring *ring,
+    duckdb_timestamp *out_ts, char **out_level, char **out_log_type, char **out_message) {
+    size_t i, n;
+    if (!ring || !ring->mu_initialized || !out_ts || !out_level || !out_log_type || !out_message) return 0;
+    ducknng_mutex_lock(&ring->mu);
+    n = ring->count;
+    for (i = 0; i < n; i++) {
+        size_t idx = (ring->head + i) % DUCKNNG_LOG_RING_CAP;
+        ducknng_log_entry *e = &ring->entries[idx];
+        out_ts[i] = e->ts;
+        out_level[i] = e->level ? ducknng_strdup(e->level) : NULL;
+        out_log_type[i] = e->log_type ? ducknng_strdup(e->log_type) : NULL;
+        out_message[i] = e->message ? ducknng_strdup(e->message) : NULL;
+    }
+    ducknng_mutex_unlock(&ring->mu);
+    return n;
 }

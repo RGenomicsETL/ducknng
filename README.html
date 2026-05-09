@@ -682,7 +682,7 @@ back from <code>ducknng_list_servers()</code>.</p>
 <span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
 <span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>|      listen_url       |</span>
 <span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
-<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37035</span> |</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42133</span> |</span>
 <span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span></code></pre></div>
 <p><strong>Raw socket send/receive.</strong> Open a REQ socket, dial it,
 then send the built-in manifest request frame byte-for-byte and decode
@@ -3061,7 +3061,9 @@ dial a REQ socket, run remote SQL</h3>
 <span id="cb31-22"><a href="#cb31-22" tabindex="-1"></a>  <span class="st">&quot;SELECT i, i &gt; 50 AS gt_50 FROM exec_demo ORDER BY i&quot;</span>,</span>
 <span id="cb31-23"><a href="#cb31-23" tabindex="-1"></a>  <span class="at">want_result =</span> <span class="cn">TRUE</span></span>
 <span id="cb31-24"><a href="#cb31-24" tabindex="-1"></a>))<span class="sc">$</span>data</span>
-<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a><span class="cn">NULL</span></span></code></pre></div>
+<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a>   i gt_50</span>
+<span id="cb31-26"><a href="#cb31-26" tabindex="-1"></a><span class="dv">1</span> <span class="dv">42</span> <span class="cn">FALSE</span></span>
+<span id="cb31-27"><a href="#cb31-27" tabindex="-1"></a><span class="dv">2</span> <span class="dv">99</span>  <span class="cn">TRUE</span></span></code></pre></div>
 <p>The same table is visible locally through the DuckDB connection that
 hosts the server:</p>
 <div class="sourceCode" id="cb32"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT * FROM exec_demo ORDER BY i&quot;</span>)</span>
@@ -3196,6 +3198,54 @@ than silently ignored.</p>
 <code>docs/registry.md</code>, <code>docs/transports.md</code>, and
 <code>docs/http.md</code>. <code>NEWS.md</code> summarizes landed
 changes.</p>
+<h2 id="introspection-examples">Introspection examples</h2>
+<h3 id="duckdb-log-entries">DuckDB log entries</h3>
+<p><code>ducknng_log_entries()</code> returns a snapshot of the most
+recent DuckDB log entries captured by the extension’s in-memory ring
+buffer (capacity 512). The ring is populated via the DuckDB logger API;
+entries are captured without any per-call configuration.</p>
+<div class="sourceCode" id="cb35"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb35-1"><a href="#cb35-1" tabindex="-1"></a><span class="kw">SELECT</span> ts, <span class="kw">level</span>, log_type, <span class="kw">LEFT</span>(message, <span class="dv">80</span>) <span class="kw">AS</span> message</span>
+<span id="cb35-2"><a href="#cb35-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_log_entries()</span>
+<span id="cb35-3"><a href="#cb35-3" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> ts</span>
+<span id="cb35-4"><a href="#cb35-4" tabindex="-1"></a><span class="kw">LIMIT</span> <span class="dv">5</span>;</span>
+<span id="cb35-5"><a href="#cb35-5" tabindex="-1"></a><span class="op">+</span><span class="co">----+-------+----------+---------+</span></span>
+<span id="cb35-6"><a href="#cb35-6" tabindex="-1"></a>| ts | <span class="kw">level</span> | log_type | message |</span>
+<span id="cb35-7"><a href="#cb35-7" tabindex="-1"></a><span class="op">+</span><span class="co">----+-------+----------+---------+</span></span>
+<span id="cb35-8"><a href="#cb35-8" tabindex="-1"></a><span class="op">+</span><span class="co">----+-------+----------+---------+</span></span></code></pre></div>
+<h3 id="pipe-event-monitor">Pipe-event monitor</h3>
+<p>Each running service maintains a bounded ring of NNG pipe events
+(ADD_PRE, ADD_POST, REM_POST).
+<code>ducknng_read_monitor(name, after_seq, max_events)</code> pages
+through the ring. <code>ducknng_monitor_status(name)</code> returns ring
+and active-pipe counters.</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb36-1"><a href="#cb36-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_start_server(<span class="st">&#39;monitor_demo&#39;</span>, <span class="st">&#39;tcp://127.0.0.1:0&#39;</span>, <span class="dv">1</span>, <span class="dv">134217728</span>, <span class="dv">30000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>);</span>
+<span id="cb36-2"><a href="#cb36-2" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------------------------------------------------------------------------------+</span></span>
+<span id="cb36-3"><a href="#cb36-3" tabindex="-1"></a>| ducknng_start_server(<span class="st">&#39;monitor_demo&#39;</span>, <span class="st">&#39;tcp://127.0.0.1:0&#39;</span>, <span class="dv">1</span>, <span class="dv">134217728</span>, <span class="dv">30000</span>, <span class="fu">CAST</span>(<span class="dv">0</span> <span class="kw">AS</span> <span class="ot">&quot;UBIGINT&quot;</span>)) |</span>
+<span id="cb36-4"><a href="#cb36-4" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------------------------------------------------------------------------------+</span></span>
+<span id="cb36-5"><a href="#cb36-5" tabindex="-1"></a>| <span class="kw">true</span>                                                                                                 |</span>
+<span id="cb36-6"><a href="#cb36-6" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------------------------------------------------------------------------------+</span></span></code></pre></div>
+<div class="sourceCode" id="cb37"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb37-1"><a href="#cb37-1" tabindex="-1"></a><span class="kw">SELECT</span> event_capacity, event_count, oldest_seq, newest_seq,</span>
+<span id="cb37-2"><a href="#cb37-2" tabindex="-1"></a>       dropped_events, active_pipes, max_active_pipes</span>
+<span id="cb37-3"><a href="#cb37-3" tabindex="-1"></a><span class="kw">FROM</span> ducknng_monitor_status(<span class="st">&#39;monitor_demo&#39;</span>);</span>
+<span id="cb37-4"><a href="#cb37-4" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-------------+------------+------------+----------------+--------------+------------------+</span></span>
+<span id="cb37-5"><a href="#cb37-5" tabindex="-1"></a>| event_capacity | event_count | oldest_seq | newest_seq | dropped_events | active_pipes | max_active_pipes |</span>
+<span id="cb37-6"><a href="#cb37-6" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-------------+------------+------------+----------------+--------------+------------------+</span></span>
+<span id="cb37-7"><a href="#cb37-7" tabindex="-1"></a>| <span class="dv">0</span>              | <span class="dv">0</span>           | <span class="dv">0</span>          | <span class="dv">0</span>          | <span class="dv">0</span>              | <span class="dv">0</span>            | <span class="dv">0</span>                |</span>
+<span id="cb37-8"><a href="#cb37-8" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-------------+------------+------------+----------------+--------------+------------------+</span></span></code></pre></div>
+<p><code>ducknng_list_pipes(name)</code> lists currently open NNG pipes
+for a service.</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb38-1"><a href="#cb38-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
+<span id="cb38-2"><a href="#cb38-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
+<span id="cb38-3"><a href="#cb38-3" tabindex="-1"></a><span class="op">+</span><span class="co">---------+-----------+-------------+---------------+</span></span>
+<span id="cb38-4"><a href="#cb38-4" tabindex="-1"></a>| pipe_id | opened_ms | remote_addr | peer_identity |</span>
+<span id="cb38-5"><a href="#cb38-5" tabindex="-1"></a><span class="op">+</span><span class="co">---------+-----------+-------------+---------------+</span></span>
+<span id="cb38-6"><a href="#cb38-6" tabindex="-1"></a><span class="op">+</span><span class="co">---------+-----------+-------------+---------------+</span></span></code></pre></div>
+<div class="sourceCode" id="cb39"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb39-1"><a href="#cb39-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
+<span id="cb39-2"><a href="#cb39-2" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span>
+<span id="cb39-3"><a href="#cb39-3" tabindex="-1"></a>| ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>) |</span>
+<span id="cb39-4"><a href="#cb39-4" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span>
+<span id="cb39-5"><a href="#cb39-5" tabindex="-1"></a>| <span class="kw">true</span>                                |</span>
+<span id="cb39-6"><a href="#cb39-6" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span></code></pre></div>
 <h2 id="status">Status</h2>
 <p>Sealed and runnable in 0.1.0: NNG transports and socket patterns;
 first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary
@@ -3208,8 +3258,9 @@ helpers (<code>ducknng_http_ndjson</code>,
 <code>ducknng_http_sse</code>); fast C admission (mTLS, exact
 peer-identity allowlists, IP/CIDR allowlists, per-service and
 per-principal resource limits); SQL authorizer callbacks; bounded
-per-service pipe-event monitor and active-pipe snapshot; body codec
-layer with built-in providers and user-registered codec hooks.</p>
+per-service pipe-event monitor and active-pipe snapshot; DuckDB log ring
+captured via the logger API (<code>ducknng_log_entries()</code>); body
+codec layer with built-in providers and user-registered codec hooks.</p>
 <p>Intentionally deferred:</p>
 <ul>
 <li>CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.</li>

@@ -57,7 +57,7 @@ SELECT getvariable('tour_url') AS listen_url;
 +-----------------------+
 |      listen_url       |
 +-----------------------+
-| tcp://127.0.0.1:37035 |
+| tcp://127.0.0.1:42133 |
 +-----------------------+
 ```
 
@@ -1632,7 +1632,9 @@ send_recv(req, encode_ducknng_exec_request(
   "SELECT i, i > 50 AS gt_50 FROM exec_demo ORDER BY i",
   want_result = TRUE
 ))$data
-NULL
+   i gt_50
+1 42 FALSE
+2 99  TRUE
 ```
 
 The same table is visible locally through the DuckDB connection that
@@ -1743,6 +1745,74 @@ For deeper write-ups see `docs/protocol.md`, `docs/manifest.md`,
 `docs/security.md`, `docs/registry.md`, `docs/transports.md`, and
 `docs/http.md`. `NEWS.md` summarizes landed changes.
 
+## Introspection examples
+
+### DuckDB log entries
+
+`ducknng_log_entries()` returns a snapshot of the most recent DuckDB log
+entries captured by the extension’s in-memory ring buffer (capacity
+512). The ring is populated via the DuckDB logger API; entries are
+captured without any per-call configuration.
+
+``` sql
+SELECT ts, level, log_type, LEFT(message, 80) AS message
+FROM ducknng_log_entries()
+ORDER BY ts
+LIMIT 5;
++----+-------+----------+---------+
+| ts | level | log_type | message |
++----+-------+----------+---------+
++----+-------+----------+---------+
+```
+
+### Pipe-event monitor
+
+Each running service maintains a bounded ring of NNG pipe events
+(ADD_PRE, ADD_POST, REM_POST).
+`ducknng_read_monitor(name, after_seq, max_events)` pages through the
+ring. `ducknng_monitor_status(name)` returns ring and active-pipe
+counters.
+
+``` sql
+SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
++------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS "UBIGINT")) |
++------------------------------------------------------------------------------------------------------+
+| true                                                                                                 |
++------------------------------------------------------------------------------------------------------+
+```
+
+``` sql
+SELECT event_capacity, event_count, oldest_seq, newest_seq,
+       dropped_events, active_pipes, max_active_pipes
+FROM ducknng_monitor_status('monitor_demo');
++----------------+-------------+------------+------------+----------------+--------------+------------------+
+| event_capacity | event_count | oldest_seq | newest_seq | dropped_events | active_pipes | max_active_pipes |
++----------------+-------------+------------+------------+----------------+--------------+------------------+
+| 0              | 0           | 0          | 0          | 0              | 0            | 0                |
++----------------+-------------+------------+------------+----------------+--------------+------------------+
+```
+
+`ducknng_list_pipes(name)` lists currently open NNG pipes for a service.
+
+``` sql
+SELECT pipe_id, opened_ms, remote_addr, peer_identity
+FROM ducknng_list_pipes('monitor_demo');
++---------+-----------+-------------+---------------+
+| pipe_id | opened_ms | remote_addr | peer_identity |
++---------+-----------+-------------+---------------+
++---------+-----------+-------------+---------------+
+```
+
+``` sql
+SELECT ducknng_stop_server('monitor_demo');
++-------------------------------------+
+| ducknng_stop_server('monitor_demo') |
++-------------------------------------+
+| true                                |
++-------------------------------------+
+```
+
 ## Status
 
 Sealed and runnable in 0.1.0: NNG transports and socket patterns;
@@ -1755,8 +1825,9 @@ serving, background workers, and streaming helpers
 (`ducknng_http_ndjson`, `ducknng_http_sse`); fast C admission (mTLS,
 exact peer-identity allowlists, IP/CIDR allowlists, per-service and
 per-principal resource limits); SQL authorizer callbacks; bounded
-per-service pipe-event monitor and active-pipe snapshot; body codec
-layer with built-in providers and user-registered codec hooks.
+per-service pipe-event monitor and active-pipe snapshot; DuckDB log ring
+captured via the logger API (`ducknng_log_entries()`); body codec layer
+with built-in providers and user-registered codec hooks.
 
 Intentionally deferred:
 
