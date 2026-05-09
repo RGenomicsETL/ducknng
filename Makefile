@@ -1,13 +1,10 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke subscriber_gateway_demo subscriber_gateway_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke subscriber_gateway_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
 
 http_smoke: release
 	python3 test/http_smoke.py build/release/ducknng.duckdb_extension
-
-subscriber_gateway_demo: release
-	python3 demo/subscriber_gateway.py build/release/ducknng.duckdb_extension
 
 subscriber_gateway_rdm: release
 	R -e "rmarkdown::render('demo/subscriber_gateway.Rmd')"

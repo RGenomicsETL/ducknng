@@ -70,6 +70,10 @@ If you launch an aio with:
 - `ducknng_recv_socket_raw_aio(...)`
 - `ducknng_get_rpc_manifest_raw_aio(...)`
 - `ducknng_run_rpc_raw_aio(...)`
+- `ducknng_open_query_raw_aio(...)`
+- `ducknng_fetch_query_raw_aio(...)`
+- `ducknng_close_query_raw_aio(...)`
+- `ducknng_cancel_query_raw_aio(...)`
 - `ducknng_ncurl_aio(...)`
 
 then you should eventually release the aio handle explicitly with:

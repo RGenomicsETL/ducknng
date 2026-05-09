@@ -26,8 +26,6 @@ The following features are intentionally outside the current contract. They are 
 
 **Run-end encoded arrays.** Not implemented on either the emit or accept side.
 
-**Per-principal rate limits.** Rate limiting at the level of individual verified peer identities or bearer-token principals is explicitly deferred. The current service-level limits (`max_active_pipes`, `max_inflight_requests`, `max_open_sessions`, `max_sessions_per_peer_identity`) are the stable admission controls. Finer-grained per-principal in-flight caps, cumulative byte limits, and session-open rate limits are additive hardening that does not need to land before the API is considered sealed.
-
 **Large UTF-8 / large binary / fixed-size binary.** Not implemented. The server emits ordinary `utf8` and `binary` regardless of value size.
 
 **Duration.** DuckDB `INTERVAL` falls through to an error at the Arrow IPC encoder boundary. No `duration` Arrow type is emitted.

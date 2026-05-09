@@ -82,6 +82,7 @@ ducknng_register_http_route_pattern(service_name, method, match_kind, path_patte
 ducknng_unregister_http_route(service_name, method, path)
 ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pattern)
 ducknng_list_http_routes()
+ducknng_list_http_workers()
 ducknng_http_request()
 ducknng_http_request_body()
 ducknng_http_headers_get(headers_json, name)
