@@ -40,6 +40,13 @@ static int ducknng_sql_arrow_set_nested_null(duckdb_vector vec,
             duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
             (void)ducknng_sql_arrow_set_nested_null(child_vec, schema->children[child], index);
         }
+    } else if (schema_view.type == NANOARROW_TYPE_DENSE_UNION ||
+               schema_view.type == NANOARROW_TYPE_SPARSE_UNION) {
+        /* null the tag child and all member children */
+        for (child = 0; child < (idx_t)schema->n_children + 1; child++) {
+            duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
+            ducknng_sql_arrow_set_null(child_vec, index);
+        }
     } else if (schema_view.type == NANOARROW_TYPE_LIST ||
                schema_view.type == NANOARROW_TYPE_LARGE_LIST) {
         duckdb_list_entry *entries = (duckdb_list_entry *)duckdb_vector_get_data(vec);
@@ -173,6 +180,52 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
             (uint8_t)schema_view.decimal_precision,
             (uint8_t)schema_view.decimal_scale);
         return *out_type ? 0 : -1;
+    case NANOARROW_TYPE_DENSE_UNION:
+    case NANOARROW_TYPE_SPARSE_UNION: {
+        idx_t nmembers = (idx_t)schema->n_children;
+        duckdb_logical_type *member_types = NULL;
+        const char **member_names = NULL;
+        idx_t i2;
+        int ok = 1;
+        if (nmembers > 0) {
+            member_types = (duckdb_logical_type *)duckdb_malloc(sizeof(*member_types) * (size_t)nmembers);
+            member_names = (const char **)duckdb_malloc(sizeof(*member_names) * (size_t)nmembers);
+            if (!member_types || !member_names) ok = 0;
+            if (member_types) memset(member_types, 0, sizeof(*member_types) * (size_t)nmembers);
+            if (member_names) memset(member_names, 0, sizeof(*member_names) * (size_t)nmembers);
+        }
+        for (i2 = 0; ok && i2 < nmembers; i2++) {
+            member_names[i2] = schema->children[i2] && schema->children[i2]->name
+                ? schema->children[i2]->name : "";
+            ok = schema->children[i2] &&
+                ducknng_sql_arrow_schema_to_logical_type(schema->children[i2], &member_types[i2], errmsg) == 0;
+        }
+        if (ok) *out_type = duckdb_create_union_type(member_types, member_names, nmembers);
+        ok = ok && *out_type;
+        if (member_types) {
+            for (i2 = 0; i2 < nmembers; i2++) {
+                if (member_types[i2]) duckdb_destroy_logical_type(&member_types[i2]);
+            }
+            duckdb_free(member_types);
+        }
+        if (member_names) duckdb_free(member_names);
+        return ok ? 0 : -1;
+    }
+    case NANOARROW_TYPE_LARGE_STRING:
+        *out_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+        return *out_type ? 0 : -1;
+    case NANOARROW_TYPE_LARGE_BINARY:
+        *out_type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
+        return *out_type ? 0 : -1;
+    case NANOARROW_TYPE_FIXED_SIZE_BINARY:
+        *out_type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
+        return *out_type ? 0 : -1;
+    case NANOARROW_TYPE_DURATION:
+    case NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO:
+    case NANOARROW_TYPE_INTERVAL_DAY_TIME:
+    case NANOARROW_TYPE_INTERVAL_MONTHS:
+        *out_type = duckdb_create_logical_type(DUCKDB_TYPE_INTERVAL);
+        return *out_type ? 0 : -1;
     case NANOARROW_TYPE_LIST:
     case NANOARROW_TYPE_LARGE_LIST: {
         duckdb_logical_type child_type = NULL;
@@ -228,7 +281,7 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
     }
     default:
         if (errmsg) *errmsg = ducknng_strdup(
-            "ducknng: remote unary row replies currently support BOOLEAN, numeric/date/time/timestamp/decimal scalars, VARCHAR, BLOB, LIST, MAP, and STRUCT (DENSE_UNION/SPARSE_UNION schemas are emitted but not yet decoded into DuckDB column vectors)");
+            "ducknng: remote unary row replies support BOOLEAN, numeric/date/time/timestamp/decimal scalars, VARCHAR, BLOB, LARGE_STRING, LARGE_BINARY, FIXED_SIZE_BINARY, DURATION, LIST, MAP, STRUCT, DENSE_UNION, and SPARSE_UNION");
         return -1;
     }
 }
@@ -533,6 +586,139 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
         for (i = 0; i < count; i++) {
             if (ArrowArrayViewIsNull(col_view, src_offset + i)) {
                 (void)ducknng_sql_arrow_set_nested_null(vec, col_schema, dst_offset + i);
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_DENSE_UNION:
+    case NANOARROW_TYPE_SPARSE_UNION: {
+        /*
+         * DuckDB UNION is stored as a STRUCT: child[0] is the UTINYINT tag
+         * (0-based member index), and child[k+1] holds member k values.
+         * Arrow union buffers[0] carries type_ids; dense union buffers[1]
+         * carries per-element child offsets; sparse union uses the parent index.
+         * ArrowArrayViewUnionChildIndex maps type_id -> child index.
+         * ArrowArrayViewUnionChildOffset returns the index into that child
+         * (handles both dense and sparse transparently).
+         */
+        idx_t nchildren = (idx_t)col_view->n_children;
+        duckdb_vector tag_vec = duckdb_struct_vector_get_child(vec, 0);
+        uint8_t *tag_out = (uint8_t *)duckdb_vector_get_data(tag_vec);
+        idx_t child;
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            int64_t src = (int64_t)(src_offset + i);
+            if (ArrowArrayViewIsNull(col_view, src)) {
+                ducknng_sql_arrow_set_null(vec, dst);
+                for (child = 0; child < nchildren; child++)
+                    ducknng_sql_arrow_set_null(duckdb_struct_vector_get_child(vec, child + 1), dst);
+                continue;
+            }
+            int8_t child_index = ArrowArrayViewUnionChildIndex(col_view, src);
+            int64_t child_offset = ArrowArrayViewUnionChildOffset(col_view, src);
+            tag_out[dst] = (uint8_t)child_index;
+            /* write the active member; null out all others */
+            for (child = 0; child < nchildren; child++) {
+                duckdb_vector member_vec = duckdb_struct_vector_get_child(vec, child + 1);
+                if ((int8_t)child == child_index) {
+                    if (ducknng_sql_arrow_assign_column_at(member_vec,
+                            col_view->children[child_index],
+                            col_schema->children[child_index],
+                            (idx_t)child_offset, dst, 1, errmsg) != 0)
+                        return -1;
+                } else {
+                    ducknng_sql_arrow_set_null(member_vec, dst);
+                }
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_LARGE_STRING: {
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            struct ArrowStringView value;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                value = ArrowArrayViewGetStringUnsafe(col_view, src_offset + i);
+                duckdb_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_LARGE_BINARY:
+    case NANOARROW_TYPE_FIXED_SIZE_BINARY: {
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            struct ArrowBufferView value;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                value = ArrowArrayViewGetBytesUnsafe(col_view, src_offset + i);
+                ducknng_sql_arrow_assign_blob(vec, dst, value.data.data, (idx_t)value.size_bytes);
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_DURATION: {
+        duckdb_interval *out = (duckdb_interval *)duckdb_vector_get_data(vec);
+        int64_t to_micros = schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND ? 1000000LL :
+            (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI ? 1000LL :
+            (schema_view.time_unit == NANOARROW_TIME_UNIT_NANO  ? 0LL   : 1LL));
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                int64_t raw = ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
+                out[dst].months = 0;
+                out[dst].days   = 0;
+                /* NANO: truncate to micros (1 ns = 0.001 us) */
+                out[dst].micros = schema_view.time_unit == NANOARROW_TIME_UNIT_NANO
+                    ? raw / 1000LL
+                    : raw * to_micros;
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO: {
+        duckdb_interval *out = (duckdb_interval *)duckdb_vector_get_data(vec);
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                struct ArrowInterval iv;
+                ArrowArrayViewGetIntervalUnsafe(col_view, (int64_t)(src_offset + i), &iv);
+                out[dst].months = iv.months;
+                out[dst].days   = iv.days;
+                out[dst].micros = iv.ns / 1000LL;
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_INTERVAL_DAY_TIME: {
+        duckdb_interval *out = (duckdb_interval *)duckdb_vector_get_data(vec);
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                struct ArrowInterval iv;
+                ArrowArrayViewGetIntervalUnsafe(col_view, (int64_t)(src_offset + i), &iv);
+                out[dst].months = 0;
+                out[dst].days   = iv.days;
+                out[dst].micros = (int64_t)iv.ms * 1000LL;
+            }
+        }
+        return 0;
+    }
+    case NANOARROW_TYPE_INTERVAL_MONTHS: {
+        duckdb_interval *out = (duckdb_interval *)duckdb_vector_get_data(vec);
+        for (i = 0; i < count; i++) {
+            idx_t dst = dst_offset + i;
+            if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
+            else {
+                struct ArrowInterval iv;
+                ArrowArrayViewGetIntervalUnsafe(col_view, (int64_t)(src_offset + i), &iv);
+                out[dst].months = iv.months;
+                out[dst].days   = 0;
+                out[dst].micros = 0;
             }
         }
         return 0;

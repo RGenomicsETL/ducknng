@@ -37,6 +37,8 @@ void ducknng_http_route_reset(ducknng_http_route *route) {
     if (route->method) duckdb_free(route->method);
     if (route->path) duckdb_free(route->path);
     if (route->handler_sql) duckdb_free(route->handler_sql);
+    if (route->static_dir_path) duckdb_free(route->static_dir_path);
+    if (route->auth_allow_identities_json) duckdb_free(route->auth_allow_identities_json);
     memset(route, 0, sizeof(*route));
 }
 
@@ -46,11 +48,17 @@ int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *s
     dst->route_id = src->route_id;
     dst->match_kind = src->match_kind;
     dst->request_max_bytes = src->request_max_bytes;
+    dst->auth_require_identity = src->auth_require_identity;
     dst->method = src->method ? ducknng_strdup(src->method) : NULL;
     dst->path = src->path ? ducknng_strdup(src->path) : NULL;
     dst->handler_sql = src->handler_sql ? ducknng_strdup(src->handler_sql) : NULL;
+    dst->static_dir_path = src->static_dir_path ? ducknng_strdup(src->static_dir_path) : NULL;
+    dst->auth_allow_identities_json = src->auth_allow_identities_json ?
+        ducknng_strdup(src->auth_allow_identities_json) : NULL;
     if ((src->method && !dst->method) || (src->path && !dst->path) ||
-        (src->handler_sql && !dst->handler_sql)) {
+        (src->handler_sql && !dst->handler_sql) ||
+        (src->static_dir_path && !dst->static_dir_path) ||
+        (src->auth_allow_identities_json && !dst->auth_allow_identities_json)) {
         ducknng_http_route_reset(dst);
         return -1;
     }
@@ -1081,14 +1089,130 @@ done:
     return rc;
 }
 
+static const char *ducknng_static_mime_for_ext(const char *ext) {
+    if (!ext) return "application/octet-stream";
+    if (strcmp(ext, "html") == 0 || strcmp(ext, "htm") == 0) return "text/html";
+    if (strcmp(ext, "css") == 0) return "text/css";
+    if (strcmp(ext, "js") == 0) return "application/javascript";
+    if (strcmp(ext, "json") == 0) return "application/json";
+    if (strcmp(ext, "txt") == 0) return "text/plain";
+    if (strcmp(ext, "png") == 0) return "image/png";
+    if (strcmp(ext, "jpg") == 0 || strcmp(ext, "jpeg") == 0) return "image/jpeg";
+    if (strcmp(ext, "gif") == 0) return "image/gif";
+    if (strcmp(ext, "svg") == 0) return "image/svg+xml";
+    if (strcmp(ext, "ico") == 0) return "image/x-icon";
+    if (strcmp(ext, "wasm") == 0) return "application/wasm";
+    if (strcmp(ext, "xml") == 0) return "application/xml";
+    return "application/octet-stream";
+}
+
+static int ducknng_path_has_traversal(const char *rel_path) {
+    const char *p = rel_path;
+    if (!p) return 0;
+    while (*p) {
+        if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\\' || p[2] == '\0')) return 1;
+        while (*p && *p != '/' && *p != '\\') p++;
+        if (*p) p++;
+    }
+    return 0;
+}
+
+static int ducknng_serve_static_file(const char *static_dir, const char *route_prefix,
+    const char *request_path, ducknng_http_route_reply *reply, char **errmsg) {
+    const char *rel;
+    size_t dir_len, rel_len, path_len;
+    char *full_path;
+    const char *ext;
+    const char *mime;
+    FILE *f;
+    long file_size;
+    uint8_t *buf;
+    size_t nread;
+    if (errmsg) *errmsg = NULL;
+    if (!static_dir || !request_path || !reply) return -1;
+    /* compute relative path: strip route_prefix from request_path */
+    rel = request_path;
+    if (route_prefix && route_prefix[0]) {
+        size_t prefix_len = strlen(route_prefix);
+        if (strncmp(request_path, route_prefix, prefix_len) == 0)
+            rel = request_path + prefix_len;
+    }
+    while (*rel == '/' || *rel == '\\') rel++;
+    if (!rel[0]) rel = "index.html";
+    if (ducknng_path_has_traversal(rel)) {
+        reply->status = 403;
+        reply->body_text = ducknng_strdup("ducknng: path traversal not permitted");
+        return 0;
+    }
+    dir_len = strlen(static_dir);
+    rel_len = strlen(rel);
+    path_len = dir_len + 1 + rel_len + 1;
+    full_path = (char *)duckdb_malloc(path_len);
+    if (!full_path) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building static path");
+        return -1;
+    }
+    memcpy(full_path, static_dir, dir_len);
+    full_path[dir_len] = '/';
+    memcpy(full_path + dir_len + 1, rel, rel_len + 1);
+    /* find extension */
+    ext = NULL;
+    {
+        const char *dot = NULL;
+        const char *p = full_path;
+        while (*p) { if (*p == '.') dot = p + 1; p++; }
+        if (dot && dot > full_path) ext = dot;
+    }
+    mime = ducknng_static_mime_for_ext(ext);
+    f = fopen(full_path, "rb");
+    duckdb_free(full_path);
+    if (!f) {
+        reply->status = 404;
+        reply->body_text = ducknng_strdup("Not Found");
+        return 0;
+    }
+    fseek(f, 0, SEEK_END);
+    file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (file_size < 0) {
+        fclose(f);
+        reply->status = 500;
+        reply->body_text = ducknng_strdup("ducknng: failed to stat static file");
+        return 0;
+    }
+    buf = (uint8_t *)duckdb_malloc((size_t)file_size + 1);
+    if (!buf) {
+        fclose(f);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory reading static file");
+        return -1;
+    }
+    nread = fread(buf, 1, (size_t)file_size, f);
+    fclose(f);
+    buf[nread] = 0;
+    reply->status = 200;
+    reply->content_type = ducknng_strdup(mime);
+    reply->body = buf;
+    reply->body_len = nread;
+    return 0;
+}
+
 int ducknng_service_handle_http_route(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_http_route_reply *reply, char **errmsg) {
     duckdb_result result;
     ducknng_service_sql_scope scope;
     int rc = -1;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !svc->rt || !request_ctx || !reply ||
-        !request_ctx->route.handler_sql || !request_ctx->route.handler_sql[0]) {
+    if (!svc || !request_ctx || !reply) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
+        return -1;
+    }
+    /* static file serving: bypass SQL */
+    if (request_ctx->route.static_dir_path && request_ctx->route.static_dir_path[0]) {
+        return ducknng_serve_static_file(
+            request_ctx->route.static_dir_path, request_ctx->route.path,
+            request_ctx->path, reply, errmsg);
+    }
+    if (!svc->rt || !request_ctx->route.handler_sql || !request_ctx->route.handler_sql[0]) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP route execution state");
         return -1;
     }
@@ -1378,7 +1502,7 @@ nng_msg *ducknng_handle_request_with_identity(ducknng_service *svc, nng_msg *req
         ducknng_authorizer_decision_reset(&decision);
         return reply;
     }
-    if (ducknng_service_begin_request(svc, &limit_err) != 0) {
+    if (ducknng_service_begin_request(svc, caller_identity, &limit_err) != 0) {
         reply = ducknng_error_msg(NULL, DUCKNNG_STATUS_BUSY,
             limit_err ? limit_err : "ducknng: max inflight requests exceeded");
         if (limit_err) duckdb_free(limit_err);
@@ -1389,12 +1513,12 @@ nng_msg *ducknng_handle_request_with_identity(ducknng_service *svc, nng_msg *req
         reply = ducknng_error_msg(NULL, DUCKNNG_STATUS_UNAUTHORIZED,
             decision.reason ? decision.reason : "ducknng: request is not authorized");
         ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(svc);
+        ducknng_service_end_request(svc, caller_identity, 0);
         return reply;
     }
     reply = ducknng_dispatch_request(svc, &frame, caller_identity, &decision);
     ducknng_authorizer_decision_reset(&decision);
-    ducknng_service_end_request(svc);
+    ducknng_service_end_request(svc, caller_identity, reply ? nng_msg_len(reply) : 0);
     return reply;
 }
 
@@ -1434,7 +1558,7 @@ nng_msg *ducknng_handle_request(ducknng_service *svc, nng_msg *req) {
         if (caller_identity) duckdb_free(caller_identity);
         return reply;
     }
-    if (ducknng_service_begin_request(svc, &limit_err) != 0) {
+    if (ducknng_service_begin_request(svc, caller_identity, &limit_err) != 0) {
         reply = ducknng_error_msg(NULL, DUCKNNG_STATUS_BUSY,
             limit_err ? limit_err : "ducknng: max inflight requests exceeded");
         if (limit_err) duckdb_free(limit_err);
@@ -1446,13 +1570,13 @@ nng_msg *ducknng_handle_request(ducknng_service *svc, nng_msg *req) {
         reply = ducknng_error_msg(NULL, DUCKNNG_STATUS_UNAUTHORIZED,
             decision.reason ? decision.reason : "ducknng: request is not authorized");
         ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(svc);
+        ducknng_service_end_request(svc, caller_identity, 0);
         if (caller_identity) duckdb_free(caller_identity);
         return reply;
     }
     reply = ducknng_dispatch_request(svc, &frame, caller_identity, &decision);
     ducknng_authorizer_decision_reset(&decision);
-    ducknng_service_end_request(svc);
+    ducknng_service_end_request(svc, caller_identity, reply ? nng_msg_len(reply) : 0);
     if (caller_identity) duckdb_free(caller_identity);
     return reply;
 }
@@ -1547,6 +1671,9 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
     return svc;
 }
 
+static void ducknng_service_clear_principals(ducknng_service *svc);
+static ducknng_principal_state *ducknng_service_find_or_create_principal_locked(ducknng_service *svc, const char *identity);
+
 void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_session **sessions = NULL;
     size_t session_count = 0;
@@ -1566,6 +1693,28 @@ void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_service_clear_http_routes(svc);
     ducknng_service_clear_pipe_events(svc);
     ducknng_service_clear_pipe_states(svc);
+    /* stop and free workers */
+    if (svc->http_workers) {
+        for (i = 0; i < svc->http_worker_count; i++) {
+            ducknng_http_worker *w = svc->http_workers[i];
+            if (!w) continue;
+            if (w->mu_initialized) ducknng_mutex_lock(&w->mu);
+            w->stopping = 1;
+            if (w->cv_initialized) ducknng_cond_broadcast(&w->cv);
+            if (w->mu_initialized) ducknng_mutex_unlock(&w->mu);
+            if (w->thread_started) ducknng_thread_join(w->thread);
+            if (w->cv_initialized) { ducknng_cond_destroy(&w->cv); w->cv_initialized = 0; }
+            if (w->mu_initialized) { ducknng_mutex_destroy(&w->mu); w->mu_initialized = 0; }
+            if (w->name) duckdb_free(w->name);
+            if (w->sql) duckdb_free(w->sql);
+            duckdb_free(w);
+        }
+        duckdb_free(svc->http_workers);
+        svc->http_workers = NULL;
+        svc->http_worker_count = 0;
+        svc->http_worker_cap = 0;
+    }
+    ducknng_service_clear_principals(svc);
     for (i = 0; i < session_count; i++) {
         if (sessions && sessions[i]) ducknng_session_destroy(sessions[i]);
     }
@@ -1585,6 +1734,239 @@ void ducknng_service_destroy(ducknng_service *svc) {
         svc->mu_initialized = 0;
     }
     duckdb_free(svc);
+}
+
+/* --- HTTP worker lifecycle --- */
+
+static void *ducknng_http_worker_thread_main(void *arg) {
+    ducknng_http_worker *w = (ducknng_http_worker *)arg;
+    ducknng_service *svc = w->svc;
+    ducknng_mutex_lock(&w->mu);
+    while (!w->stopping) {
+        char *sql;
+        ducknng_cond_timedwait_ms(&w->cv, &w->mu, w->interval_ms);
+        if (w->stopping) break;
+        sql = w->sql ? ducknng_strdup(w->sql) : NULL;
+        ducknng_mutex_unlock(&w->mu);
+        if (sql && svc) {
+            ducknng_service_sql_scope scope;
+            memset(&scope, 0, sizeof(scope));
+            if (ducknng_service_enter_request_sql(svc, &scope, NULL) == 0) {
+                duckdb_result result;
+                memset(&result, 0, sizeof(result));
+                (void)duckdb_query(scope.con, sql, &result);
+                duckdb_destroy_result(&result);
+                ducknng_service_leave_request_sql(&scope);
+            }
+        }
+        if (sql) duckdb_free(sql);
+        ducknng_mutex_lock(&w->mu);
+    }
+    ducknng_mutex_unlock(&w->mu);
+    return NULL;
+}
+
+int ducknng_service_register_http_worker(ducknng_service *svc, const char *name,
+    const char *sql, uint64_t interval_ms, char **errmsg) {
+    ducknng_http_worker *w = NULL;
+    ducknng_http_worker **new_workers;
+    size_t new_cap;
+    size_t i;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !name || !name[0] || !sql || !sql[0] || interval_ms == 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: name, sql, and interval_ms are required for http worker");
+        return -1;
+    }
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_worker_count; i++) {
+        if (svc->http_workers[i] && svc->http_workers[i]->name &&
+            strcmp(svc->http_workers[i]->name, name) == 0) {
+            if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: http worker with that name already exists");
+            return -1;
+        }
+    }
+    if (svc->http_worker_count == svc->http_worker_cap) {
+        new_cap = svc->http_worker_cap ? svc->http_worker_cap * 2 : 4;
+        new_workers = (ducknng_http_worker **)duckdb_malloc(sizeof(*new_workers) * new_cap);
+        if (!new_workers) {
+            if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory growing worker table");
+            return -1;
+        }
+        memset(new_workers, 0, sizeof(*new_workers) * new_cap);
+        if (svc->http_workers && svc->http_worker_count)
+            memcpy(new_workers, svc->http_workers, sizeof(*new_workers) * svc->http_worker_count);
+        if (svc->http_workers) duckdb_free(svc->http_workers);
+        svc->http_workers = new_workers;
+        svc->http_worker_cap = new_cap;
+    }
+    w = (ducknng_http_worker *)duckdb_malloc(sizeof(*w));
+    if (!w) {
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating http worker");
+        return -1;
+    }
+    memset(w, 0, sizeof(*w));
+    w->svc = svc;
+    w->name = ducknng_strdup(name);
+    w->sql = ducknng_strdup(sql);
+    w->interval_ms = interval_ms;
+    if (!w->name || !w->sql) {
+        if (w->name) duckdb_free(w->name);
+        if (w->sql) duckdb_free(w->sql);
+        duckdb_free(w);
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for http worker name/sql");
+        return -1;
+    }
+    if (ducknng_mutex_init(&w->mu) != 0) {
+        if (w->name) duckdb_free(w->name);
+        if (w->sql) duckdb_free(w->sql);
+        duckdb_free(w);
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to init http worker mutex");
+        return -1;
+    }
+    w->mu_initialized = 1;
+    if (ducknng_cond_init(&w->cv) != 0) {
+        ducknng_mutex_destroy(&w->mu);
+        if (w->name) duckdb_free(w->name);
+        if (w->sql) duckdb_free(w->sql);
+        duckdb_free(w);
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to init http worker condvar");
+        return -1;
+    }
+    w->cv_initialized = 1;
+    if (ducknng_thread_create(&w->thread, ducknng_http_worker_thread_main, w) != 0) {
+        ducknng_cond_destroy(&w->cv);
+        ducknng_mutex_destroy(&w->mu);
+        if (w->name) duckdb_free(w->name);
+        if (w->sql) duckdb_free(w->sql);
+        duckdb_free(w);
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to start http worker thread");
+        return -1;
+    }
+    w->thread_started = 1;
+    svc->http_workers[svc->http_worker_count++] = w;
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    return 0;
+}
+
+int ducknng_service_unregister_http_worker(ducknng_service *svc, const char *name, char **errmsg) {
+    size_t i;
+    ducknng_http_worker *w = NULL;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !name || !name[0]) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service and name are required");
+        return -1;
+    }
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_worker_count; i++) {
+        if (svc->http_workers[i] && svc->http_workers[i]->name &&
+            strcmp(svc->http_workers[i]->name, name) == 0) {
+            w = svc->http_workers[i];
+            svc->http_workers[i] = svc->http_workers[--svc->http_worker_count];
+            svc->http_workers[svc->http_worker_count] = NULL;
+            break;
+        }
+    }
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    if (!w) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: http worker not found");
+        return -1;
+    }
+    if (w->mu_initialized) ducknng_mutex_lock(&w->mu);
+    w->stopping = 1;
+    if (w->cv_initialized) ducknng_cond_broadcast(&w->cv);
+    if (w->mu_initialized) ducknng_mutex_unlock(&w->mu);
+    if (w->thread_started) ducknng_thread_join(w->thread);
+    if (w->cv_initialized) { ducknng_cond_destroy(&w->cv); w->cv_initialized = 0; }
+    if (w->mu_initialized) { ducknng_mutex_destroy(&w->mu); w->mu_initialized = 0; }
+    if (w->name) duckdb_free(w->name);
+    if (w->sql) duckdb_free(w->sql);
+    duckdb_free(w);
+    return 0;
+}
+
+int ducknng_service_http_workers_snapshot(ducknng_service *svc,
+    ducknng_http_worker **out_workers, size_t *out_count, char **errmsg) {
+    ducknng_http_worker *snap = NULL;
+    size_t i;
+    if (out_workers) *out_workers = NULL;
+    if (out_count) *out_count = 0;
+    if (!svc) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service not found");
+        return -1;
+    }
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    if (svc->http_worker_count > 0) {
+        snap = (ducknng_http_worker *)duckdb_malloc(sizeof(*snap) * svc->http_worker_count);
+        if (!snap) {
+            if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory snapshotting workers");
+            return -1;
+        }
+        for (i = 0; i < svc->http_worker_count; i++) {
+            memset(&snap[i], 0, sizeof(snap[i]));
+            snap[i].name = svc->http_workers[i]->name ? ducknng_strdup(svc->http_workers[i]->name) : NULL;
+            snap[i].sql = svc->http_workers[i]->sql ? ducknng_strdup(svc->http_workers[i]->sql) : NULL;
+            snap[i].interval_ms = svc->http_workers[i]->interval_ms;
+        }
+    }
+    if (out_count) *out_count = svc->http_worker_count;
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    if (out_workers) *out_workers = snap;
+    return 0;
+}
+
+void ducknng_service_http_workers_free(ducknng_http_worker *workers, size_t count) {
+    size_t i;
+    if (!workers) return;
+    for (i = 0; i < count; i++) {
+        if (workers[i].name) duckdb_free(workers[i].name);
+        if (workers[i].sql) duckdb_free(workers[i].sql);
+    }
+    duckdb_free(workers);
+}
+
+/* --- Route-local auth --- */
+
+int ducknng_service_set_http_route_auth(ducknng_service *svc, const char *method,
+    const char *path, int require_identity, const char *allow_identities_json, char **errmsg) {
+    size_t i;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !method || !path) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service, method, and path are required");
+        return -1;
+    }
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    for (i = 0; i < svc->http_route_count; i++) {
+        ducknng_http_route *r = &svc->http_routes[i];
+        if (r->method && strcmp(r->method, method) == 0 &&
+            r->path && strcmp(r->path, path) == 0) {
+            r->auth_require_identity = require_identity;
+            if (r->auth_allow_identities_json) {
+                duckdb_free(r->auth_allow_identities_json);
+                r->auth_allow_identities_json = NULL;
+            }
+            if (allow_identities_json && allow_identities_json[0]) {
+                r->auth_allow_identities_json = ducknng_strdup(allow_identities_json);
+                if (!r->auth_allow_identities_json) {
+                    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for identities JSON");
+                    return -1;
+                }
+            }
+            if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+            return 0;
+        }
+    }
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route not found");
+    return -1;
 }
 
 static const char *ducknng_pipe_event_name(nng_pipe_ev ev) {
@@ -2222,7 +2604,7 @@ static int ducknng_service_register_http_route_inner(ducknng_service *svc, const
     ducknng_transport_url parsed;
     char *parse_err = NULL;
     if (errmsg) *errmsg = NULL;
-    if (!svc || !method || !path || !handler_sql || !handler_sql[0]) {
+    if (!svc || !method || !path || !handler_sql) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP route requires service, method, path, and handler_sql");
         return -1;
     }
@@ -2465,7 +2847,10 @@ int ducknng_service_authorizer_active(const ducknng_service *svc) {
 
 int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     uint64_t max_active_pipes, uint64_t max_inflight_requests,
-    uint64_t max_sessions_per_peer_identity, char **errmsg) {
+    uint64_t max_sessions_per_peer_identity,
+    uint64_t max_inflight_per_principal,
+    uint64_t max_reply_bytes_per_principal,
+    uint64_t max_session_open_rate_per_principal, char **errmsg) {
     if (errmsg) *errmsg = NULL;
     if (!svc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: service not found");
@@ -2476,6 +2861,9 @@ int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     svc->max_active_pipes = max_active_pipes;
     svc->max_inflight_requests = max_inflight_requests;
     svc->max_sessions_per_peer_identity = max_sessions_per_peer_identity;
+    svc->max_inflight_per_principal = max_inflight_per_principal;
+    svc->max_reply_bytes_per_principal = max_reply_bytes_per_principal;
+    svc->max_session_open_rate_per_principal = max_session_open_rate_per_principal;
     if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
     return 0;
 }
@@ -2535,6 +2923,21 @@ uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *s
     return svc->max_sessions_per_peer_identity;
 }
 
+uint64_t ducknng_service_max_inflight_per_principal(const ducknng_service *svc) {
+    if (!svc) return 0;
+    return svc->max_inflight_per_principal;
+}
+
+uint64_t ducknng_service_max_reply_bytes_per_principal(const ducknng_service *svc) {
+    if (!svc) return 0;
+    return svc->max_reply_bytes_per_principal;
+}
+
+uint64_t ducknng_service_max_session_open_rate_per_principal(const ducknng_service *svc) {
+    if (!svc) return 0;
+    return svc->max_session_open_rate_per_principal;
+}
+
 const char *ducknng_service_execution_model(const ducknng_service *svc) {
     return ducknng_execution_model_name(svc ? svc->execution_model : DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION);
 }
@@ -2574,7 +2977,99 @@ size_t ducknng_service_inflight_request_count(const ducknng_service *svc) {
     return atomic_load_explicit(&svc->inflight_request_count_visible, memory_order_acquire);
 }
 
-int ducknng_service_begin_request(ducknng_service *svc, char **errmsg) {
+/* --- Per-principal state helpers (caller must hold svc->mu) --- */
+
+static ducknng_principal_state *ducknng_service_find_or_create_principal_locked(
+    ducknng_service *svc, const char *identity) {
+    size_t i;
+    ducknng_principal_state *p;
+    ducknng_principal_state *new_principals;
+    size_t new_cap;
+    if (!svc || !identity || !identity[0]) return NULL;
+    for (i = 0; i < svc->principal_count; i++) {
+        if (svc->principals[i].identity && strcmp(svc->principals[i].identity, identity) == 0)
+            return &svc->principals[i];
+    }
+    /* not found – allocate a new slot */
+    if (svc->principal_count == svc->principal_cap) {
+        new_cap = svc->principal_cap ? svc->principal_cap * 2 : 8;
+        new_principals = (ducknng_principal_state *)duckdb_malloc(
+            sizeof(*new_principals) * new_cap);
+        if (!new_principals) return NULL;
+        memset(new_principals, 0, sizeof(*new_principals) * new_cap);
+        if (svc->principals && svc->principal_count)
+            memcpy(new_principals, svc->principals,
+                sizeof(*new_principals) * svc->principal_count);
+        if (svc->principals) duckdb_free(svc->principals);
+        svc->principals = new_principals;
+        svc->principal_cap = new_cap;
+    }
+    p = &svc->principals[svc->principal_count];
+    memset(p, 0, sizeof(*p));
+    p->identity = ducknng_strdup(identity);
+    if (!p->identity) return NULL;
+    svc->principal_count++;
+    return p;
+}
+
+static void ducknng_service_clear_principals(ducknng_service *svc) {
+    size_t i;
+    if (!svc || !svc->principals) return;
+    for (i = 0; i < svc->principal_count; i++) {
+        if (svc->principals[i].identity) duckdb_free(svc->principals[i].identity);
+        if (svc->principals[i].session_open_times) duckdb_free(svc->principals[i].session_open_times);
+    }
+    duckdb_free(svc->principals);
+    svc->principals = NULL;
+    svc->principal_count = 0;
+    svc->principal_cap = 0;
+}
+
+int ducknng_service_check_and_record_session_open_locked(ducknng_service *svc,
+    const char *identity, uint64_t now_ms, char **errmsg) {
+    ducknng_principal_state *ps;
+    uint64_t *new_times;
+    size_t new_cap;
+    size_t valid;
+    size_t i;
+    if (errmsg) *errmsg = NULL;
+    if (!svc || !identity || !identity[0]) return 0;
+    if (svc->max_session_open_rate_per_principal == 0) return 0;
+    ps = ducknng_service_find_or_create_principal_locked(svc, identity);
+    if (!ps) return 0; /* OOM: silently allow */
+    /* Expire entries older than 1 second */
+    valid = 0;
+    for (i = 0; i < ps->session_open_count; i++) {
+        size_t idx = (ps->session_open_head + i) % (ps->session_open_cap ? ps->session_open_cap : 1);
+        if (ps->session_open_times[idx] + 1000 > now_ms) {
+            ps->session_open_times[valid] = ps->session_open_times[idx];
+            valid++;
+        }
+    }
+    ps->session_open_count = valid;
+    ps->session_open_head = 0;
+    /* Check rate */
+    if (ps->session_open_count >= (size_t)svc->max_session_open_rate_per_principal) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: session open rate per principal exceeded");
+        return -1;
+    }
+    /* Record this open */
+    if (ps->session_open_count == ps->session_open_cap) {
+        new_cap = ps->session_open_cap ? ps->session_open_cap * 2 : 8;
+        new_times = (uint64_t *)duckdb_malloc(sizeof(uint64_t) * new_cap);
+        if (!new_times) return 0; /* OOM: silently allow */
+        if (ps->session_open_times && ps->session_open_count)
+            memcpy(new_times, ps->session_open_times, sizeof(uint64_t) * ps->session_open_count);
+        if (ps->session_open_times) duckdb_free(ps->session_open_times);
+        ps->session_open_times = new_times;
+        ps->session_open_cap = new_cap;
+    }
+    ps->session_open_times[ps->session_open_count] = now_ms;
+    ps->session_open_count++;
+    return 0;
+}
+
+int ducknng_service_begin_request(ducknng_service *svc, const char *caller_identity, char **errmsg) {
     if (errmsg) *errmsg = NULL;
     if (!svc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: service not found");
@@ -2586,17 +3081,45 @@ int ducknng_service_begin_request(ducknng_service *svc, char **errmsg) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: max inflight requests exceeded");
         return -1;
     }
+    if (caller_identity && caller_identity[0]) {
+        ducknng_principal_state *ps = ducknng_service_find_or_create_principal_locked(svc, caller_identity);
+        if (ps) {
+            if (svc->max_inflight_per_principal > 0 &&
+                ps->inflight_count >= (size_t)svc->max_inflight_per_principal) {
+                if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: max inflight requests per principal exceeded");
+                return -1;
+            }
+            if (svc->max_reply_bytes_per_principal > 0 &&
+                ps->cumulative_reply_bytes >= svc->max_reply_bytes_per_principal) {
+                if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: reply byte quota for principal exceeded");
+                return -1;
+            }
+            ps->inflight_count++;
+        }
+    }
     svc->inflight_request_count++;
     atomic_store_explicit(&svc->inflight_request_count_visible, svc->inflight_request_count, memory_order_release);
     if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
     return 0;
 }
 
-void ducknng_service_end_request(ducknng_service *svc) {
+void ducknng_service_end_request(ducknng_service *svc, const char *caller_identity, size_t reply_bytes) {
     if (!svc) return;
     if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
     if (svc->inflight_request_count > 0) svc->inflight_request_count--;
     atomic_store_explicit(&svc->inflight_request_count_visible, svc->inflight_request_count, memory_order_release);
+    if (caller_identity && caller_identity[0]) {
+        size_t i;
+        for (i = 0; i < svc->principal_count; i++) {
+            if (svc->principals[i].identity && strcmp(svc->principals[i].identity, caller_identity) == 0) {
+                if (svc->principals[i].inflight_count > 0) svc->principals[i].inflight_count--;
+                svc->principals[i].cumulative_reply_bytes += (uint64_t)reply_bytes;
+                break;
+            }
+        }
+    }
     if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
 }
 

@@ -118,5 +118,9 @@ target_include_directories(${EXTENSION_NAME} PRIVATE
     third_party/nanoarrow/thirdparty/flatcc/include
 )
 
+target_compile_definitions(${EXTENSION_NAME} PRIVATE
+    NANOARROW_NAMESPACE=DucknngNanoarrow
+)
+
 target_link_libraries(${EXTENSION_NAME} PRIVATE nng Threads::Threads)
 find_package(Threads REQUIRED)

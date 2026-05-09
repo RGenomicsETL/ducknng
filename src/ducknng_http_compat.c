@@ -1114,7 +1114,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
             ducknng_authorizer_decision_reset(&decision);
             goto done;
         }
-        if (ducknng_service_begin_request(state->svc, &limit_err) != 0) {
+        if (ducknng_service_begin_request(state->svc, caller_identity, &limit_err) != 0) {
             rv = ducknng_http_alloc_text_response(&res, 503,
                 limit_err ? limit_err : "ducknng: max inflight requests exceeded");
             if (limit_err) duckdb_free(limit_err);
@@ -1127,7 +1127,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
             rv = ducknng_http_alloc_text_response(&res, status,
                 decision.reason ? decision.reason : "ducknng: request is not authorized");
             ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
             goto done;
         }
         request_ctx.svc = state->svc;
@@ -1144,20 +1144,56 @@ static void ducknng_http_route_handler(nng_aio *aio) {
         request_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
         if (ducknng_http_route_copy(&request_ctx.route, &route) != 0) {
             ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
             rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to copy HTTP route context");
             goto done;
+        }
+        /* route-local auth check */
+        if (route.auth_require_identity && (!caller_identity || !caller_identity[0])) {
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
+            rv = ducknng_http_alloc_text_response(&res, 401, "ducknng: route requires caller identity");
+            goto done;
+        }
+        if (route.auth_allow_identities_json && route.auth_allow_identities_json[0] &&
+            caller_identity && caller_identity[0]) {
+            /* simple substring check for "\"identity\"" in the JSON array */
+            size_t id_len = strlen(caller_identity);
+            char *needle = (char *)duckdb_malloc(id_len + 3);
+            int id_allowed = 0;
+            if (needle) {
+                needle[0] = '"';
+                memcpy(needle + 1, caller_identity, id_len);
+                needle[id_len + 1] = '"';
+                needle[id_len + 2] = '\0';
+                id_allowed = strstr(route.auth_allow_identities_json, needle) != NULL;
+                duckdb_free(needle);
+            }
+            if (!id_allowed) {
+                ducknng_authorizer_decision_reset(&decision);
+                ducknng_service_end_request(state->svc, caller_identity, 0);
+                rv = ducknng_http_alloc_text_response(&res, 403, "ducknng: caller identity not allowed for this route");
+                goto done;
+            }
         }
         if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
             rv = ducknng_http_alloc_text_response(&res, 500,
                 handler_err ? handler_err : "ducknng: HTTP route handler failed");
             if (handler_err) duckdb_free(handler_err);
             ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc);
+            {
+                size_t reply_bytes = route_reply.body ? route_reply.body_len :
+                    (route_reply.body_text ? strlen(route_reply.body_text) : 0);
+                ducknng_service_end_request(state->svc, caller_identity, reply_bytes);
+            }
             goto done;
         }
         ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(state->svc);
+        {
+            size_t reply_bytes = route_reply.body ? route_reply.body_len :
+                (route_reply.body_text ? strlen(route_reply.body_text) : 0);
+            ducknng_service_end_request(state->svc, caller_identity, reply_bytes);
+        }
     }
     {
         char *reply_err = NULL;
@@ -1266,7 +1302,7 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
             ducknng_http_finish_response(aio, res, rv);
             return;
         }
-        if (ducknng_service_begin_request(state->svc, &limit_err) != 0) {
+        if (ducknng_service_begin_request(state->svc, caller_identity, &limit_err) != 0) {
             rv = ducknng_http_alloc_text_response(&res, 503,
                 limit_err ? limit_err : "ducknng: max inflight requests exceeded");
             if (limit_err) duckdb_free(limit_err);
@@ -1281,14 +1317,15 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
             rv = ducknng_http_alloc_text_response(&res, status,
                 decision.reason ? decision.reason : "ducknng: request is not authorized");
             ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
             if (caller_identity) duckdb_free(caller_identity);
             ducknng_http_finish_response(aio, res, rv);
             return;
         }
         reply_msg = ducknng_handle_decoded_request(state->svc, &frame, caller_identity, &decision);
         ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(state->svc);
+        ducknng_service_end_request(state->svc, caller_identity,
+            reply_msg ? nng_msg_len(reply_msg) : 0);
     }
     if (caller_identity) duckdb_free(caller_identity);
     if (!reply_msg) {

@@ -309,6 +309,17 @@ int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
             return 1;
         }
     }
+    {
+        char *rate_errmsg = NULL;
+        uint64_t now_ms = ducknng_now_ms();
+        if (ducknng_service_check_and_record_session_open_locked(svc, owner_identity, now_ms, &rate_errmsg) != 0) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = rate_errmsg;
+            else if (rate_errmsg) duckdb_free(rate_errmsg);
+            if (result) duckdb_destroy_result(result);
+            return 1;
+        }
+    }
     if (svc->session_count == svc->session_cap) {
         new_cap = svc->session_cap ? svc->session_cap * 2 : 4;
         new_sessions = (ducknng_session **)duckdb_malloc(sizeof(*new_sessions) * new_cap);
@@ -493,6 +504,16 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
         if (owner_session_count >= (size_t)svc->max_sessions_per_peer_identity) {
             ducknng_mutex_unlock(&svc->mu);
             if (errmsg) *errmsg = ducknng_strdup("ducknng: max sessions per peer identity exceeded");
+            return 1;
+        }
+    }
+    {
+        char *rate_errmsg = NULL;
+        uint64_t now_ms = ducknng_now_ms();
+        if (ducknng_service_check_and_record_session_open_locked(svc, owner_identity, now_ms, &rate_errmsg) != 0) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (errmsg) *errmsg = rate_errmsg;
+            else if (rate_errmsg) duckdb_free(rate_errmsg);
             return 1;
         }
     }

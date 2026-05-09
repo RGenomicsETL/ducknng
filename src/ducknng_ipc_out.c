@@ -163,11 +163,13 @@ static int ducknng_set_arrow_schema_type(duckdb_logical_type logical_type, struc
             }
             return 0;
         }
+        case DUCKDB_TYPE_INTERVAL:
+            return ArrowSchemaSetType(schema, NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO) == NANOARROW_OK ? 0 : -1;
         default:
             if (errmsg) {
                 *errmsg = ducknng_strdup(
                     "ducknng: unary exec row replies currently support BOOLEAN, numeric/date/time/timestamp/decimal scalars, "
-                    "HUGEINT, UUID, TIMESTAMP_TZ, ENUM, VARCHAR, BLOB, LIST, MAP, STRUCT, and UNION");
+                    "HUGEINT, UUID, TIMESTAMP_TZ, ENUM, VARCHAR, BLOB, INTERVAL, LIST, MAP, STRUCT, and UNION");
             }
             return -1;
     }
@@ -453,12 +455,22 @@ static int ducknng_append_vector_value(duckdb_logical_type logical_type, duckdb_
             }
             return ArrowArrayFinishElement(array) == NANOARROW_OK ? 0 : -1;
         }
+        case DUCKDB_TYPE_INTERVAL: {
+            duckdb_interval iv = ((duckdb_interval *)data)[row];
+            struct ArrowInterval interval;
+            interval.type = NANOARROW_TYPE_INTERVAL_MONTH_DAY_NANO;
+            interval.months = iv.months;
+            interval.days   = iv.days;
+            interval.ns     = iv.micros * 1000LL;
+            interval.ms     = 0;
+            return ArrowArrayAppendInterval(array, &interval) == NANOARROW_OK ? 0 : -1;
+        }
         default:
             if (errmsg) {
                 *errmsg = ducknng_strdup(
                     "ducknng: encountered unsupported DuckDB type while encoding unary row reply "
                     "(BOOLEAN, numeric/date/time/timestamp/decimal scalars, HUGEINT, UUID, "
-                    "TIMESTAMP_TZ, ENUM, VARCHAR, BLOB, LIST, MAP, STRUCT, UNION are supported)");
+                    "TIMESTAMP_TZ, ENUM, VARCHAR, BLOB, INTERVAL, LIST, MAP, STRUCT, UNION are supported)");
             }
             return -1;
     }

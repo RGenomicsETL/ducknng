@@ -1,0 +1,163 @@
+# name: test/sql/ducknng_http_extras.test
+# group: [ducknng]
+
+require ducknng
+
+# Start an HTTP service for route auth, static file, and worker tests
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('http_extras_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE http_extras_mount = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'http_extras_api'
+)
+
+statement ok
+SET VARIABLE http_extras_base = replace(getvariable('http_extras_mount')::VARCHAR, '/_ducknng', '')
+
+# Register a basic route; verify new columns default to NULL / false
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_extras_api',
+  'GET',
+  '/info',
+  'SELECT 200 AS status, ''text/plain'' AS content_type, ''ok'' AS body_text'
+) THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT auth_require_identity, static_dir_path IS NULL, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1	1
+
+# ducknng_set_http_route_auth: 3-arg clears auth
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info') THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1
+
+# ducknng_set_http_route_auth: 4-arg sets require_identity
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info', true) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+1	1
+
+# ducknng_set_http_route_auth: 5-arg sets require_identity and allow-list
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info', true, '["client1","client2"]') THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT auth_require_identity, auth_allow_identities_json = '["client1","client2"]', static_dir_path IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+1	1	1
+
+# ducknng_set_http_route_auth: 3-arg clears auth again
+
+query I
+SELECT CASE WHEN ducknng_set_http_route_auth('http_extras_api', 'GET', '/info') THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT auth_require_identity, auth_allow_identities_json IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/info'
+----
+0	1
+
+# ducknng_register_http_static: registers a prefix route with a static dir path
+
+query I
+SELECT CASE WHEN ducknng_register_http_static('http_extras_api', '/files/', '/tmp') THEN 1 ELSE 0 END
+----
+1
+
+query III
+SELECT match_kind = 'prefix', path = '/files/', static_dir_path = '/tmp'
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_extras_api' AND path = '/files/'
+----
+1	1	1
+
+# ducknng_register_http_worker / ducknng_list_http_workers / ducknng_unregister_http_worker
+
+query I
+SELECT count(*) FROM ducknng_list_http_workers() WHERE service_name = 'http_extras_api'
+----
+0
+
+query I
+SELECT CASE WHEN ducknng_register_http_worker(
+  'http_extras_api',
+  'noop_worker',
+  'SELECT 1',
+  60000::UBIGINT
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIII
+SELECT service_name = 'http_extras_api', worker_name = 'noop_worker', sql = 'SELECT 1', interval_ms = 60000
+FROM ducknng_list_http_workers()
+WHERE service_name = 'http_extras_api'
+----
+1	1	1	1
+
+query I
+SELECT CASE WHEN ducknng_unregister_http_worker('http_extras_api', 'noop_worker') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT count(*) FROM ducknng_list_http_workers() WHERE service_name = 'http_extras_api'
+----
+0
+
+# ducknng_http_ndjson and ducknng_http_sse: verify output shape
+
+query III
+SELECT status = 200, content_type = 'application/x-ndjson; charset=utf-8', body_text = 'line1'
+FROM ducknng_http_ndjson(200, 'line1')
+----
+1	1	1
+
+query III
+SELECT status = 200, content_type = 'text/event-stream; charset=utf-8', body_text = 'data: hello'
+FROM ducknng_http_sse(200, 'data: hello')
+----
+1	1	1
+
+query I
+SELECT CASE WHEN ducknng_stop_server('http_extras_api') THEN 1 ELSE 0 END
+----
+1

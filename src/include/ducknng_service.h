@@ -94,7 +94,35 @@ typedef struct ducknng_http_route {
     char *path;
     char *handler_sql;
     uint64_t request_max_bytes;
+    char *static_dir_path;           /* non-NULL: serve files from this directory */
+    int auth_require_identity;       /* 1: require non-empty caller_identity */
+    char *auth_allow_identities_json; /* JSON array of allowed identities; NULL = any */
 } ducknng_http_route;
+
+typedef struct ducknng_principal_state {
+    char *identity;
+    size_t inflight_count;
+    uint64_t cumulative_reply_bytes;
+    /* sliding-window ring buffer for session-open rate */
+    uint64_t *session_open_times;  /* allocated ring buffer of ms timestamps */
+    size_t session_open_head;      /* index of oldest entry */
+    size_t session_open_count;     /* number of valid entries */
+    size_t session_open_cap;       /* allocated capacity */
+} ducknng_principal_state;
+
+typedef struct ducknng_http_worker {
+    char *name;
+    char *sql;
+    uint64_t interval_ms;
+    ducknng_thread thread;
+    ducknng_mutex mu;
+    ducknng_cond cv;
+    int stopping;
+    int mu_initialized;
+    int cv_initialized;
+    int thread_started;
+    struct ducknng_service *svc;
+} ducknng_http_worker;
 
 typedef struct ducknng_http_request_context {
     ducknng_service *svc;
@@ -200,6 +228,15 @@ struct ducknng_service {
     uint64_t max_active_pipes;
     uint64_t max_inflight_requests;
     uint64_t max_sessions_per_peer_identity;
+    uint64_t max_inflight_per_principal;
+    uint64_t max_reply_bytes_per_principal;
+    uint64_t max_session_open_rate_per_principal;
+    ducknng_principal_state *principals;
+    size_t principal_count;
+    size_t principal_cap;
+    ducknng_http_worker **http_workers;
+    size_t http_worker_count;
+    size_t http_worker_cap;
     size_t recv_max_bytes;
     int running;
     int shutting_down;
@@ -241,13 +278,19 @@ int ducknng_service_set_authorizer(ducknng_service *svc, const char *authorizer_
 int ducknng_service_authorizer_active(const ducknng_service *svc);
 int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     uint64_t max_active_pipes, uint64_t max_inflight_requests,
-    uint64_t max_sessions_per_peer_identity, char **errmsg);
+    uint64_t max_sessions_per_peer_identity,
+    uint64_t max_inflight_per_principal,
+    uint64_t max_reply_bytes_per_principal,
+    uint64_t max_session_open_rate_per_principal, char **errmsg);
 int ducknng_service_set_execution_model(ducknng_service *svc, const char *model, char **errmsg);
 const char *ducknng_execution_model_name(int model);
 uint64_t ducknng_service_max_open_sessions(const ducknng_service *svc);
 uint64_t ducknng_service_max_active_pipes(const ducknng_service *svc);
 uint64_t ducknng_service_max_inflight_requests(const ducknng_service *svc);
 uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *svc);
+uint64_t ducknng_service_max_inflight_per_principal(const ducknng_service *svc);
+uint64_t ducknng_service_max_reply_bytes_per_principal(const ducknng_service *svc);
+uint64_t ducknng_service_max_session_open_rate_per_principal(const ducknng_service *svc);
 const char *ducknng_service_execution_model(const ducknng_service *svc);
 const char *ducknng_service_peer_identity_format(const ducknng_service *svc);
 void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security);
@@ -285,8 +328,8 @@ int ducknng_service_http_routes_snapshot(ducknng_service *svc, ducknng_http_rout
 void ducknng_service_http_routes_free(ducknng_http_route *routes, size_t count);
 int ducknng_service_handle_http_route(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_http_route_reply *reply, char **errmsg);
-int ducknng_service_begin_request(ducknng_service *svc, char **errmsg);
-void ducknng_service_end_request(ducknng_service *svc);
+int ducknng_service_begin_request(ducknng_service *svc, const char *caller_identity, char **errmsg);
+void ducknng_service_end_request(ducknng_service *svc, const char *caller_identity, size_t reply_bytes);
 int ducknng_service_pipe_monitor_stats(ducknng_service *svc,
     ducknng_pipe_monitor_stats *out_stats, char **errmsg);
 int ducknng_service_pipe_events_snapshot(ducknng_service *svc, uint64_t after_seq, uint64_t max_events,
@@ -301,4 +344,18 @@ int ducknng_service_authorize_request(ducknng_service *svc, const ducknng_author
     ducknng_authorizer_decision *decision, char **errmsg);
 nng_msg *ducknng_handle_decoded_request(ducknng_service *svc, const ducknng_frame *frame,
     const char *caller_identity, const ducknng_authorizer_decision *decision);
+int ducknng_service_set_http_route_auth(ducknng_service *svc, const char *method,
+    const char *path, int require_identity, const char *allow_identities_json, char **errmsg);
+int ducknng_service_register_http_worker(ducknng_service *svc, const char *name,
+    const char *sql, uint64_t interval_ms, char **errmsg);
+int ducknng_service_unregister_http_worker(ducknng_service *svc, const char *name,
+    char **errmsg);
+int ducknng_service_http_workers_snapshot(ducknng_service *svc,
+    ducknng_http_worker **out_workers, size_t *out_count, char **errmsg);
+void ducknng_service_http_workers_free(ducknng_http_worker *workers, size_t count);
+/* Called with svc->mu already held. Checks and records a session-open event for
+   the given identity. Returns 0 on success, -1 if the rate limit is exceeded
+   (sets *errmsg). Pass now_ms from ducknng_now_ms(). */
+int ducknng_service_check_and_record_session_open_locked(ducknng_service *svc,
+    const char *identity, uint64_t now_ms, char **errmsg);
 const char *ducknng_service_resolved_listen(const ducknng_service *svc);

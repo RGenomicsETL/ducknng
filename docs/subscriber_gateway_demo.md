@@ -1,6 +1,6 @@
 # Subscriber gateway demo
 
-The live helper for the multi-process subscriber gateway now lives in `demo/subscriber_gateway.py`:
+The live helper for the subscriber gateway lives in `demo/subscriber_gateway.py`:
 
 ```sh
 make subscriber_gateway_demo
@@ -12,16 +12,28 @@ The rendered walkthrough for the same topology lives in `demo/subscriber_gateway
 make subscriber_gateway_rdm
 ```
 
-This is the honest `ducknng` shape today:
+This is the honest `ducknng` shape:
 
-- one public DuckDB process runs an HTTP gateway service
-- several private DuckDB processes run backend subscriber services
+- one gateway service runs an HTTP edge, identity resolution, and subscriber lookup
+- several private backend services run ordinary NNG query-session services
 - the gateway resolves auth to a tenant and principal
 - the gateway resolves that tenant to one enabled subscriber backend
-- backend query sessions stay private to those workers
+- backend query sessions stay private to the gateway
 - the gateway owns the public continuation-token contract
 
 That is the important property at this layer: a public API edge in front of a worker plane, with query-session affinity staying on the private side.
+
+## Execution model
+
+All three services in the Rmd demo use `service_serialized_connection`, which gives each service its own dedicated DuckDB connection. This means a gateway route handler can make synchronous NNG calls to a sibling backend service without deadlocking, even when all services share one DuckDB runtime. The flow for a `/v1/query/start` request is:
+
+1. Client makes HTTP request to gateway
+2. Gateway service (on its dedicated connection) runs the route SQL
+3. Route SQL calls `ducknng_open_query_raw(backend_url, ...)` — this blocks the gateway's connection while waiting for the NNG reply
+4. Backend service (on its own dedicated connection) receives the NNG request, runs the query, returns the result
+5. Gateway assembles the HTTP response
+
+The Python demo (`demo/subscriber_gateway.py`) uses separate DuckDB processes, which is the recommended shape for production deployments with genuine per-tenant data isolation. The Rmd demo uses the in-process topology because it requires no external processes and fully demonstrates the routing, auth, session, and continuation-token contract.
 
 ## Why the gateway uses raw session helpers
 
@@ -34,7 +46,7 @@ HTTP route handlers execute as SQL queries. DuckDB binds table functions eagerly
 
 are the ergonomic client surface, but they are the wrong surface for per-request dynamic route SQL where method inputs come from request-body columns or continuation-token columns.
 
-The route demo therefore uses the raw synchronous session helpers instead:
+The route demo therefore uses the raw synchronous session helpers:
 
 - `ducknng_open_query_raw(...)`
 - `ducknng_fetch_query_raw(...)`
@@ -61,36 +73,22 @@ That keeps the gateway route layer generic. The route can carry tenant affinity,
 HTTP client
     |
     v
-public gateway process
-  ducknng_start_server('gateway', 'http://127.0.0.1:18080/_ducknng', ...)
+gateway service (service_serialized_connection)
+  ducknng_start_server('gateway', 'http://127.0.0.1:0/_ducknng', ...)
   ducknng_register_http_route('gateway', 'POST', '/v1/query/start', ...)
   ducknng_register_http_route('gateway', 'POST', '/v1/query/fetch', ...)
   ducknng_register_http_route('gateway', 'POST', '/v1/query/close', ...)
     |
     +--> subscriber backend: alice
-    |      ducknng_start_server('subscriber_alice', 'tcp://127.0.0.1:17011', ...)
+    |      ducknng_start_server('subscriber_alice', 'tcp://127.0.0.1:0', ...)
+    |      ducknng_set_service_execution_model('subscriber_alice', 'service_serialized_connection')
     |
     +--> subscriber backend: bob
-           ducknng_start_server('subscriber_bob', 'tcp://127.0.0.1:17012', ...)
+           ducknng_start_server('subscriber_bob', 'tcp://127.0.0.1:0', ...)
+           ducknng_set_service_execution_model('subscriber_bob', 'service_serialized_connection')
 ```
 
-The demo uses two dedicated subscribers, `alice` and `bob`, each with its own `tenant_numbers` table. The public route request uses bearer auth. The gateway resolves that auth through `gateway_identities`, finds one enabled worker for the tenant through `gateway_subscribers`, and then routes the query to the matching private backend. The continuation token carries the tenant id, subscriber id, backend `session_id`, backend `session_token`, and fetch hints. The backend URL stays private in the gateway registry.
-
-That is already enough to demonstrate:
-
-- auth-to-tenant and tenant-to-subscriber resolution from ordinary SQL tables
-- multi-batch fetch continuation
-- explicit early close
-- cross-tenant close rejection
-- Arrow IPC result transport over HTTP
-
-## Why this is multi-process
-
-`ducknng` defaults to `server.execution.model = "shared_serialized_connection"`, where route handlers run on the same shared DuckDB execution lane as other service-owned SQL in that process. For same-runtime gateway demos, switch the gateway service to `service_serialized_connection` or `request_connection` before traffic if route handlers need to synchronously call sibling services.
-
-Because of that, a route handler should not synchronously call another `ducknng` service in the same runtime when that backend also needs that same execution lane. The public gateway demo is intentionally multi-process so the HTTP route can make synchronous backend session calls without deadlocking or timing out on the same shared connection.
-
-This is also why the demo is a better proof than an in-process sqllogictest sketch. It exercises the real network and process boundary the framework is designed for.
+The demo uses two backends, `alice` and `bob`, each tenant's query filtered by `WHERE owner = '<tenant>'` in the client SQL. The gateway resolves bearer auth through `gateway_identities`, finds one enabled worker for the tenant through `gateway_subscribers`, and routes the query to the matching private backend. The continuation token carries the tenant id, subscriber id, backend `session_id`, backend `session_token`, and fetch hints. The backend URL stays private in the gateway tables.
 
 ## Public contract
 
@@ -103,7 +101,7 @@ The demo exposes three public routes:
 `/v1/query/start` accepts JSON with at least:
 
 ```json
-{"sql":"SELECT owner, i, v FROM tenant_numbers ORDER BY i"}
+{"sql":"SELECT owner, i, v FROM tenant_numbers WHERE owner = 'alice' ORDER BY i"}
 ```
 
 with bearer auth such as:
@@ -119,19 +117,17 @@ It returns the first Arrow batch as the HTTP body when rows are available. If mo
 - `X-Ducknng-Tenant: <tenant_id>`
 - `X-Ducknng-Subscriber: <subscriber_id>`
 
-`/v1/query/fetch` accepts `{"token":"..."}` and either returns another Arrow batch with a replacement continuation token or returns `204` with `X-Ducknng-End-Of-Stream: true` after closing the backend session.
+`/v1/query/fetch` accepts `{"token":"..."}` and either returns another Arrow batch with a replacement continuation token or returns `204` with `X-Ducknng-End-Of-Stream: true` after the backend session is exhausted.
 
 `/v1/query/close` accepts `{"token":"..."}` and explicitly closes a live backend session when the client stops early. A valid token presented by the wrong tenant returns `403`.
 
-## What this demonstrates well
+## What this demonstrates
 
-This demo is a good foundation for a real product edge because it proves the pieces that matter:
+- auth-to-tenant and tenant-to-subscriber resolution from ordinary SQL tables
+- multi-batch fetch continuation
+- explicit early close
+- cross-tenant close rejection
+- Arrow IPC result transport over HTTP
+- in-process multi-service topology with `service_serialized_connection`
 
-- low-level HTTP routes can be the public edge
-- the backend query plane can stay private
-- route SQL can do dynamic session control without transport-specific RPC copies
-- continuation tokens can remain gateway-owned instead of leaking raw backend state as the public API
-- subscriber selection can stay table-driven instead of hardwired into the route surface
-- Arrow remains the row payload contract
-
-What it does not try to do is reimplement DuckDB catalog/storage extension work such as `ATTACH 'md:...'` or `ATTACH 'openduck:...'`. That is a different layer. Here the goal is the low-level gateway and worker pattern on top of `ducknng`'s current HTTP and session primitives.
+What it does not try to do is reimplement DuckDB catalog or storage extension work. The goal is the low-level gateway and worker pattern on top of `ducknng`'s HTTP and session primitives.

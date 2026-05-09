@@ -249,29 +249,27 @@ FROM ducknng_query_rpc(
 ----
 MAP(VARCHAR, INTEGER)	a	b	1	2
 
-# UNION is emitted as Arrow dense_union; the raw frame is well-formed but the
-# DuckDB-facing decoder for dense_union vectors is not implemented yet, so the
-# The current contract surfaces UNION values via raw frames / ducknng_parse_body rather
-# than ducknng_query_rpc.
-statement error
-SELECT *
+# UNION is emitted as Arrow dense_union and decoded back to DuckDB UNION type.
+query I
+SELECT uv
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT union_value(num := 42::INTEGER) AS uv',
   0::UBIGINT
 )
 ----
-ducknng: remote unary row replies currently support
+42
 
-statement error
-SELECT *
+# INTERVAL roundtrips through Arrow INTERVAL_MONTH_DAY_NANO.
+query I
+SELECT iv
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT INTERVAL 1 DAY AS iv',
   0::UBIGINT
 )
 ----
-ducknng: unary exec row replies currently support
+1 day
 
 statement ok
 CREATE TEMP TABLE rpc_open AS
