@@ -4,7 +4,10 @@ output: github_document
 
 <!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
 
-```{r, include = FALSE}
+<details>
+<summary>Setup</summary>
+
+```{r setup, echo = TRUE, results = 'hide', message = FALSE, warning = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 library(DBI)
@@ -83,7 +86,7 @@ wait_healthz <- function(base_url, timeout_s = 10) {
 }
 
 # ---------------------------------------------------------------------------
-# Route SQL (identical logic to the Python demo workers)
+# Route SQL
 # ---------------------------------------------------------------------------
 start_sql <- "
 WITH req AS (
@@ -743,6 +746,8 @@ bob_token   <- "demo-bob-token"
 
 wait_healthz(gateway_base_url)
 ```
+
+</details>
 
 # Subscriber gateway demo
 
