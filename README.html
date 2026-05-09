@@ -604,17 +604,22 @@ padding-top: 0px;
 <!-- README.md is generated from README.Rmd using [duckknit](https://github.com/rundel/duckknit). Please edit that file -->
 
 <h1 id="ducknng">ducknng</h1>
-<p><code>ducknng</code> is a pure C DuckDB extension that exposes DuckDB
-SQL and manifest-declared RPC over <a href="https://nng.nanomsg.org/">NNG</a> transports and HTTP/HTTPS
-carriers. A SQL session can call another DuckDB session across
+<p><code>ducknng</code> is a pure C DuckDB extension providing a binding
+to the <a href="https://nng.nanomsg.org/">NNG</a> scalability protocols.
+It is inspired by <a href="https://github.com/r-lib/nanonext"><code>nanonext</code></a> and
+follows its ergonomic model: transport is chosen by URL scheme, aio
+handles wrap pending NNG operations as SQL-visible futures, and TLS
+material may come from filesystem paths or in-memory PEM. On top of the
+raw socket and transport layer, <code>ducknng</code> adds a framed RPC
+envelope, Arrow IPC tabular payloads, manifest-declared methods, and an
+HTTP/HTTPS carrier so DuckDB sessions can reach one another over
 <code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>,
 <code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>,
-<code>http://</code>, or <code>https://</code>. RPC row payloads ride on
-Arrow IPC. Long-lived handles — servers, sockets, AIO futures, TLS
-configs, query sessions — are manually managed at the SQL surface.</p>
-<p>It draws on two R packages. <a href="https://github.com/r-lib/nanonext"><code>nanonext</code></a>
-supplies the socket and AIO ergonomics; <a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
-supplies the thin versioned envelope.</p>
+<code>http://</code>, or <code>https://</code>. Long-lived handles —
+servers, sockets, AIO futures, TLS configs, query sessions — are
+manually managed at the SQL surface.</p>
+<p>It also draws on <a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
+for the thin versioned RPC envelope design.</p>
 <h2 id="layer-map">Layer map</h2>
 <table>
 <thead>
@@ -677,7 +682,7 @@ back from <code>ducknng_list_servers()</code>.</p>
 <span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
 <span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>|      listen_url       |</span>
 <span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
-<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:35283</span> |</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:38447</span> |</span>
 <span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span></code></pre></div>
 <p><strong>Raw socket send/receive.</strong> Open a REQ socket, dial it,
 then send the built-in manifest request frame byte-for-byte and decode

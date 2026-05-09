@@ -44,9 +44,9 @@ LOAD 'build/release/ducknng.duckdb_extension';
 
 # ducknng
 
-`ducknng` is a pure C DuckDB extension that exposes DuckDB SQL and manifest-declared RPC over [NNG](https://nng.nanomsg.org/) transports and HTTP/HTTPS carriers. A SQL session can call another DuckDB session across `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, or `https://`. RPC row payloads ride on Arrow IPC. Long-lived handles — servers, sockets, AIO futures, TLS configs, query sessions — are manually managed at the SQL surface.
+`ducknng` is a pure C DuckDB extension providing a binding to the [NNG](https://nng.nanomsg.org/) scalability protocols. It is inspired by [`nanonext`](https://github.com/r-lib/nanonext) and follows its ergonomic model: transport is chosen by URL scheme, aio handles wrap pending NNG operations as SQL-visible futures, and TLS material may come from filesystem paths or in-memory PEM. On top of the raw socket and transport layer, `ducknng` adds a framed RPC envelope, Arrow IPC tabular payloads, manifest-declared methods, and an HTTP/HTTPS carrier so DuckDB sessions can reach one another over `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, or `https://`. Long-lived handles — servers, sockets, AIO futures, TLS configs, query sessions — are manually managed at the SQL surface.
 
-It draws on two R packages. [`nanonext`](https://github.com/r-lib/nanonext) supplies the socket and AIO ergonomics; [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) supplies the thin versioned envelope.
+It also draws on [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) for the thin versioned RPC envelope design.
 
 ## Layer map
 
