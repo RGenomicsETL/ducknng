@@ -504,9 +504,9 @@ static void ducknng_tls_configs_scan(duckdb_function_info info, duckdb_data_chun
         auth_mode[i] = row->auth_mode;
         peer_allowlist_active[i] = row->peer_allowlist_active;
         peer_allowlist_count[i] = row->peer_allowlist_count;
-        if (row->source) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), i, row->source);
+        if (row->source) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->source, (idx_t)strlen(row->source));
         else set_null(duckdb_data_chunk_get_vector(output, 1), i);
-        if (row->peer_allowlist_json) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 12), i, row->peer_allowlist_json);
+        if (row->peer_allowlist_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 12), i, row->peer_allowlist_json, (idx_t)strlen(row->peer_allowlist_json));
         else set_null(duckdb_data_chunk_get_vector(output, 12), i);
     }
     init->offset += chunk_size;

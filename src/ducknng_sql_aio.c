@@ -1457,9 +1457,9 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
         kind_name = ducknng_aio_kind_name(snapshot.kind);
         state_name = ducknng_aio_state_name(snapshot.state);
         phase_name = ducknng_aio_phase_name(snapshot.phase);
-        if (kind_name) duckdb_vector_assign_string_element(child_vecs[2], row, kind_name); else set_null(child_vecs[2], row);
-        if (state_name) duckdb_vector_assign_string_element(child_vecs[3], row, state_name); else set_null(child_vecs[3], row);
-        if (phase_name) duckdb_vector_assign_string_element(child_vecs[4], row, phase_name); else set_null(child_vecs[4], row);
+        if (kind_name) duckdb_unsafe_vector_assign_string_element_len(child_vecs[2], row, kind_name, (idx_t)strlen(kind_name)); else set_null(child_vecs[2], row);
+        if (state_name) duckdb_unsafe_vector_assign_string_element_len(child_vecs[3], row, state_name, (idx_t)strlen(state_name)); else set_null(child_vecs[3], row);
+        if (phase_name) duckdb_unsafe_vector_assign_string_element_len(child_vecs[4], row, phase_name, (idx_t)strlen(phase_name)); else set_null(child_vecs[4], row);
         if (snapshot.send_done) {
             bool *send_ok = (bool *)duckdb_vector_get_data(child_vecs[7]);
             send_ok[row] = snapshot.send_result == 0;
@@ -1472,7 +1472,7 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
         } else {
             set_null(child_vecs[9], row);
         }
-        if (error_copy) duckdb_vector_assign_string_element(child_vecs[11], row, error_copy);
+        if (error_copy) duckdb_unsafe_vector_assign_string_element_len(child_vecs[11], row, error_copy, (idx_t)strlen(error_copy));
         else set_null(child_vecs[11], row);
         if (error_copy) duckdb_free(error_copy);
         {
@@ -1484,8 +1484,7 @@ static void ducknng_aio_status_scalar(duckdb_function_info info, duckdb_data_chu
             if (nng_err != 0) {
                 int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(child_vecs[12]);
                 nng_errors[row] = nng_err;
-                duckdb_vector_assign_string_element(child_vecs[13], row,
-                    ducknng_nng_strerror(nng_err));
+                duckdb_unsafe_vector_assign_string_element_len(child_vecs[13], row, ducknng_nng_strerror(nng_err), (idx_t)strlen(ducknng_nng_strerror(nng_err)));
             } else {
                 set_null(child_vecs[12], row);
                 set_null(child_vecs[13], row);
@@ -1569,7 +1568,7 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
         out_aio_id[row] = slot->aio_id;
         out_ok[row] = slot->state == DUCKNNG_CLIENT_AIO_READY ||
             (slot->state == DUCKNNG_CLIENT_AIO_COLLECTED && !slot->error);
-        if (slot->error) duckdb_vector_assign_string_element(child_vecs[2], row, slot->error);
+        if (slot->error) duckdb_unsafe_vector_assign_string_element_len(child_vecs[2], row, slot->error, (idx_t)strlen(slot->error));
         else set_null(child_vecs[2], row);
         if ((slot->state == DUCKNNG_CLIENT_AIO_READY || slot->state == DUCKNNG_CLIENT_AIO_COLLECTED) && slot->reply_msg) {
             assign_blob(child_vecs[3], row, (const uint8_t *)nng_msg_body(slot->reply_msg), (idx_t)nng_msg_len(slot->reply_msg));
@@ -1587,8 +1586,7 @@ static void ducknng_aio_collect_row_scalar(duckdb_function_info info, duckdb_dat
             if (nng_err != 0) {
                 int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(child_vecs[4]);
                 nng_errors[row] = nng_err;
-                duckdb_vector_assign_string_element(child_vecs[5], row,
-                    ducknng_nng_strerror(nng_err));
+                duckdb_unsafe_vector_assign_string_element_len(child_vecs[5], row, ducknng_nng_strerror(nng_err), (idx_t)strlen(ducknng_nng_strerror(nng_err)));
             } else {
                 set_null(child_vecs[4], row);
                 set_null(child_vecs[5], row);
@@ -1650,13 +1648,13 @@ static void ducknng_ncurl_aio_collect_row_scalar(duckdb_function_info info, duck
         out_ok[row] = slot->state == DUCKNNG_CLIENT_AIO_READY ||
             (slot->state == DUCKNNG_CLIENT_AIO_COLLECTED && !slot->error);
         if (out_ok[row]) out_status[row] = (int32_t)slot->http_status; else set_null(child_vecs[2], row);
-        if (slot->error) duckdb_vector_assign_string_element(child_vecs[3], row, slot->error);
+        if (slot->error) duckdb_unsafe_vector_assign_string_element_len(child_vecs[3], row, slot->error, (idx_t)strlen(slot->error));
         else set_null(child_vecs[3], row);
-        if (slot->http_headers_json) duckdb_vector_assign_string_element(child_vecs[4], row, slot->http_headers_json);
+        if (slot->http_headers_json) duckdb_unsafe_vector_assign_string_element_len(child_vecs[4], row, slot->http_headers_json, (idx_t)strlen(slot->http_headers_json));
         else set_null(child_vecs[4], row);
         if (slot->http_body) assign_blob(child_vecs[5], row, slot->http_body, (idx_t)slot->http_body_len);
         else set_null(child_vecs[5], row);
-        if (slot->http_body_text) duckdb_vector_assign_string_element(child_vecs[6], row, slot->http_body_text);
+        if (slot->http_body_text) duckdb_unsafe_vector_assign_string_element_len(child_vecs[6], row, slot->http_body_text, (idx_t)strlen(slot->http_body_text));
         else set_null(child_vecs[6], row);
         if (slot->state == DUCKNNG_CLIENT_AIO_READY || slot->state == DUCKNNG_CLIENT_AIO_ERROR ||
                 slot->state == DUCKNNG_CLIENT_AIO_CANCELLED) {
@@ -1910,15 +1908,14 @@ static void ducknng_aio_collect_scan(duckdb_function_info info, duckdb_data_chun
         ducknng_aio_collect_row *row = &bind->rows[init->offset + i];
         aio_ids[i] = row->aio_id;
         ok[i] = row->ok;
-        if (row->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), i, row->error);
+        if (row->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, row->error, (idx_t)strlen(row->error));
         else set_null(duckdb_data_chunk_get_vector(output, 2), i);
         if (row->frame) assign_blob(duckdb_data_chunk_get_vector(output, 3), i, row->frame, row->frame_len);
         else set_null(duckdb_data_chunk_get_vector(output, 3), i);
         if (row->has_nng_error) {
             int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
             nng_errors[i] = row->nng_error;
-            duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i,
-                ducknng_nng_strerror(row->nng_error));
+            duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, ducknng_nng_strerror(row->nng_error), (idx_t)strlen(ducknng_nng_strerror(row->nng_error)));
         } else {
             set_null(duckdb_data_chunk_get_vector(output, 4), i);
             set_null(duckdb_data_chunk_get_vector(output, 5), i);

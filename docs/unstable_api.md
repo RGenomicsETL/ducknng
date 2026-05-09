@@ -16,18 +16,9 @@ This document records findings from a systematic review of all `unstable_*` API 
 nanoarrow `ArrowSchema` / `ArrowArray` using DuckDB's own type mapping rather than a
 hand-written translation table.
 
-**Current situation.** `ducknng_ipc_out.c` builds Arrow IPC from DuckDB result chunks
-using a manually maintained `ducknng_set_arrow_schema_type` switch. `ducknng_ipc_in.c`
-decodes Arrow IPC and produces nanoarrow arrays that are later scanned back into DuckDB
-vectors by `ducknng_sql_arrow.c`. Both translation paths are non-trivial and must track
-every new DuckDB type that DuckDB adds.
+**Current situation.** `ducknng_ipc_out.c` previously built Arrow IPC from DuckDB result chunks using a manually maintained `ducknng_set_arrow_schema_type` switch (~530 lines of hand-written per-type dispatch). That path has been replaced: `duckdb_to_arrow_schema` generates the Arrow schema from the DuckDB result's logical types, and `duckdb_data_chunk_to_arrow` converts each fetched chunk. `ducknng_ipc_in.c` and `ducknng_sql_arrow.c` handle the receive direction and continue to use nanoarrow directly (the receive-side rewrite requires a `duckdb_connection` inside scan callbacks, which is not available without additional architectural changes).
 
-**Recommendation: HIGH priority adoption.** `duckdb_to_arrow_schema` and
-`duckdb_data_chunk_to_arrow` can replace the manual schema switch in `ducknng_ipc_out.c`,
-eliminating the risk of missing new types. `duckdb_schema_from_arrow` and
-`duckdb_data_chunk_from_arrow` can replace `ducknng_sql_arrow_schema_to_logical_type` and
-the per-type vector write logic in `ducknng_sql_arrow.c`. Adopt in a dedicated refactor
-pass; keep the existing path until the new one is tested.
+**Status: ADOPTED (emit side).** `duckdb_to_arrow_schema` and `duckdb_data_chunk_to_arrow` are in use in `src/ducknng_ipc_out.c`. `duckdb_schema_from_arrow` and `duckdb_data_chunk_from_arrow` are deferred pending an architectural solution for threading a connection into TVF scan callbacks.
 
 ---
 
@@ -40,14 +31,29 @@ pass; keep the existing path until the new one is tested.
 `duckdb_unsafe_vector_assign_string_element_len` assigns a string element with a known
 length, avoiding an internal `strlen` call.
 
-**Current situation.** `ducknng_util.c` contains `ducknng_sql_bytes_look_text`, which
-does its own UTF-8 validation. Several scan paths call
-`duckdb_vector_assign_string_element` (which does `strlen` on every assign).
+**Status: ADOPTED.**
 
-**Recommendation: MEDIUM priority.** Replace `ducknng_sql_bytes_look_text` with
-`duckdb_valid_utf8_check`. Replace `duckdb_vector_assign_string_element` calls in hot
-scan paths with `duckdb_unsafe_vector_assign_string_element_len` where the length is
-already known. Both are one-line changes per call site.
+`ducknng_sql_bytes_look_text` in `src/ducknng_sql_api.c` now uses `duckdb_valid_utf8_check`
+as the UTF-8 gate. The function retains a fast pre-pass that rejects null bytes and
+disallowed control characters (below U+0020 except tab, line feed, carriage return) before
+delegating the multi-byte UTF-8 validation to DuckDB.
+
+`duckdb_unsafe_vector_assign_string_element_len` is now used in all vector string-assignment
+sites across the codebase:
+
+- `src/ducknng_sql_arrow.c`: Arrow IPC `STRING` and `LARGE_STRING` scan paths (Arrow IPC
+  guarantees UTF-8 for these column types, so skipping the internal UTF-8 check is correct
+  by the Arrow specification).
+- `src/ducknng_sql_api.c` and `src/ducknng_sql_arrow.c`: BLOB assignments (BLOB is opaque
+  binary; UTF-8 validation is inappropriate).
+- All remaining `duckdb_vector_assign_string_element` call sites across
+  `ducknng_sql_http.c`, `ducknng_sql_registry.c`, `ducknng_sql_tls.c`,
+  `ducknng_sql_service.c`, `ducknng_sql_body.c`, `ducknng_sql_aio.c`,
+  `ducknng_sql_session.c`, `ducknng_sql_socket.c`, `ducknng_sql_monitor.c`,
+  `ducknng_sql_rpc.c`, and `ducknng_sql_auth.c`: these assign either C string literals,
+  internal struct fields populated from C code, or values extracted from DuckDB VARCHAR
+  inputs (already validated as UTF-8 by DuckDB). All are replaced with
+  `duckdb_unsafe_vector_assign_string_element_len` paired with `strlen`.
 
 ---
 
@@ -72,19 +78,35 @@ table functions grows significantly.
 ## `unstable_new_scalar_function_functions`
 
 **Functions:** `duckdb_scalar_function_set_bind`, `duckdb_scalar_function_bind_get_argument`,
-`duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_bind_set_bind_data`,
-`duckdb_scalar_function_get_bind_data`
+`duckdb_scalar_function_bind_get_argument_count`, `duckdb_scalar_function_set_bind_data`,
+`duckdb_scalar_function_set_bind_data_copy`, `duckdb_scalar_function_get_bind_data`,
+`duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_bind_set_error`,
+`duckdb_scalar_function_bind_get_extra_info`
 
 **What it does.** Adds a bind phase to scalar functions so they can inspect constant
 arguments at planning time and constant-fold or specialise their execution path.
 
-**Current situation.** All scalar functions in `ducknng` (`ducknng_frame_payload`,
-`ducknng_frame_type`, etc.) perform all work at execute time.
+**Adopted.** The four HTTP lookup functions (`ducknng_http_headers_get`,
+`ducknng_http_query_param_get`, `ducknng_http_cookie_get`,
+`ducknng_http_path_params_get`) now register a bind callback
+(`ducknng_http_lookup_bind_cb`) via `duckdb_scalar_function_set_bind`.
+When the second argument (the lookup name) is a constant at planning time, the bind
+callback folds it once using the expression fold API and stores the result in a
+`ducknng_http_lookup_bind_data` struct attached with `duckdb_scalar_function_set_bind_data`.
+The execute callbacks retrieve this with `duckdb_scalar_function_get_bind_data` and skip
+the per-row `duckdb_malloc`/`memcpy` for the name when a pre-folded value is available.
+Copy and destroy callbacks are registered for the bind data so it is correctly managed
+across parallel plans.
 
-**Recommendation: MEDIUM priority.** Functions that take a constant codec or format
-name could validate and specialise at bind time rather than per-row. Not urgent for
-current functions but worth using for any new scalar function that accepts a constant
-string selector.
+The internal registration helper `ducknng_sql_register_scalar_logical_types_ex` now
+accepts a `duckdb_scalar_function_bind_t bind_fn` parameter (NULL for all existing
+functions). A new public function `ducknng_sql_register_volatile_scalar_with_bind` and
+macro `DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND` are exposed in
+`src/include/ducknng_sql_shared.h`.
+
+Pairs with `unstable_new_expression_functions` (`duckdb_expression_is_foldable`,
+`duckdb_expression_fold`, `duckdb_destroy_expression`) which are used inside the bind
+callback to test and fold constant arguments.
 
 ---
 
@@ -116,6 +138,9 @@ length.
 **Recommendation: MEDIUM priority for string length.** See string functions note above.
 `duckdb_create_selection_vector` is not needed today; `ducknng` does not implement custom
 pushdown operators.
+
+**Update:** `duckdb_unsafe_vector_assign_string_element_len` is now adopted — see the
+string functions entry above.
 
 ---
 
@@ -167,8 +192,11 @@ not through `COPY`. No benefit from this group.
 **What it does.** Lets the extension ask the planner whether a given expression is
 constant and fold it to a value at bind time.
 
-**Recommendation: LOW priority.** Useful alongside `unstable_new_scalar_function_functions`
-if scalar functions acquire bind phases. Not needed independently.
+**Adopted.** Used inside the scalar bind callback `ducknng_http_lookup_bind_cb`
+(`src/ducknng_sql_http.c`). `duckdb_expression_is_foldable` tests whether arg 1 is
+a constant, and `duckdb_expression_fold` collapses it to a `duckdb_value` that is
+then extracted with `duckdb_get_varchar`. The expression and value are destroyed with
+`duckdb_destroy_expression` and `duckdb_destroy_value` respectively.
 
 ---
 
@@ -233,6 +261,8 @@ These are the original Arrow result-set APIs, deprecated in favour of
 **Recommendation: LOW priority.** Current string-based error propagation is adequate.
 Adopt if `ducknng` exposes typed error codes through the protocol.
 
+**Update:** adopted as a side-effect of the emit-side Arrow rewrite. `duckdb_error_data_has_error`, `duckdb_error_data_message`, and `duckdb_destroy_error_data` are now used in `src/ducknng_ipc_out.c` to check and extract errors from `duckdb_to_arrow_schema` and `duckdb_data_chunk_to_arrow` return values.
+
 ---
 
 ## `unstable_instance_cache`
@@ -260,16 +290,16 @@ Adopt if `ducknng` exposes typed error codes through the protocol.
 
 | Group | Priority | Action |
 |---|---|---|
-| `unstable_new_arrow_functions` | **HIGH** | Replace hand-written type switch in `ducknng_ipc_out.c` and `ducknng_sql_arrow.c` |
-| `unstable_new_string_functions` / vector string | **MEDIUM** | Replace `ducknng_sql_bytes_look_text`; use `_len` assign in scan paths |
-| `unstable_new_scalar_function_functions` | **MEDIUM** | Use bind phase for constant-argument scalar functions |
+| `unstable_new_arrow_functions` | **DONE** | Emit side adopted in `ducknng_ipc_out.c`; receive side deferred |
+| `unstable_new_error_data_functions` | **DONE** | Adopted in `ducknng_ipc_out.c` alongside Arrow rewrite |
+| `unstable_new_string_functions` / vector string | **DONE** | `duckdb_valid_utf8_check` in `ducknng_sql_bytes_look_text`; `duckdb_unsafe_vector_assign_string_element_len` at all 111 vector string-assign sites |
+| `unstable_new_scalar_function_functions` | **DONE** | Bind phase adopted for the four HTTP lookup scalar functions; bind data pre-folds constant name argument |
 | `unstable_new_table_function_functions` | **LOW** | Simplify TVF registration by removing `extra_info` context pointer |
 | `unstable_new_file_system_api` | **LOW** | Replace OS tempfile I/O in the Parquet branch |
-| `unstable_new_expression_functions` | **LOW** | Pair with scalar bind phase work |
+| `unstable_new_expression_functions` | **DONE** | Used inside scalar bind callbacks (`duckdb_expression_is_foldable`, `duckdb_expression_fold`) |
 | `unstable_new_open_connect_functions` | **LOW** | Simplify session key lookup |
 | `unstable_new_logger_functions` | **LOW** | Expose DuckDB log lines if needed |
 | `unstable_new_config_options_functions` | **LOW** | Adopt when tunable knobs are wanted |
-| `unstable_new_error_data_functions` | **LOW** | Adopt if typed error codes are surfaced |
 | `unstable_new_copy_functions_api` | NOT applicable | — |
 | `unstable_new_catalog_interface` | NOT applicable | — |
 | `unstable_instance_cache` | NOT applicable | — |

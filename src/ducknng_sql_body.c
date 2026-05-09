@@ -462,18 +462,18 @@ static void ducknng_decode_frame_scan(duckdb_function_info info, duckdb_data_chu
     type_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
     flags_data = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
     ok_data[0] = bind->ok;
-    if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->error);
+    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->error, (idx_t)strlen(bind->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     version_data[0] = bind->version;
     type_data[0] = bind->type;
     flags_data[0] = bind->flags;
-    if (bind->type_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), 0, bind->type_name);
+    if (bind->type_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, bind->type_name, (idx_t)strlen(bind->type_name));
     else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
-    if (bind->name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), 0, bind->name);
+    if (bind->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), 0, bind->name, (idx_t)strlen(bind->name));
     else set_null(duckdb_data_chunk_get_vector(output, 6), 0);
     if (bind->payload) assign_blob(duckdb_data_chunk_get_vector(output, 7), 0, bind->payload, bind->payload_len);
     else set_null(duckdb_data_chunk_get_vector(output, 7), 0);
-    if (bind->payload_text) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 8), 0, bind->payload_text);
+    if (bind->payload_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), 0, bind->payload_text, (idx_t)strlen(bind->payload_text));
     else set_null(duckdb_data_chunk_get_vector(output, 8), 0);
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;
@@ -582,7 +582,7 @@ static void ducknng_frame_payload_text_scalar(duckdb_function_info info, duckdb_
             duckdb_scalar_function_set_error(info, "ducknng: out of memory copying frame payload text");
             return;
         }
-        duckdb_vector_assign_string_element(output, row, text);
+        duckdb_unsafe_vector_assign_string_element_len(output, row, text, (idx_t)strlen(text));
         duckdb_free(text);
         duckdb_free(frame_bytes);
     }
@@ -610,7 +610,7 @@ static void ducknng_frame_error_text_scalar(duckdb_function_info info, duckdb_da
             duckdb_scalar_function_set_error(info, "ducknng: out of memory copying frame error text");
             return;
         }
-        duckdb_vector_assign_string_element(output, row, text);
+        duckdb_unsafe_vector_assign_string_element_len(output, row, text, (idx_t)strlen(text));
         duckdb_free(text);
         duckdb_free(frame_bytes);
     }
@@ -697,7 +697,7 @@ static void ducknng_frame_type_name_scalar(duckdb_function_info info, duckdb_dat
             set_null(output, row);
             continue;
         }
-        duckdb_vector_assign_string_element(output, row, type_name);
+        duckdb_unsafe_vector_assign_string_element_len(output, row, type_name, (idx_t)strlen(type_name));
         duckdb_free(frame_bytes);
     }
 }
@@ -724,7 +724,7 @@ static void ducknng_frame_name_scalar(duckdb_function_info info, duckdb_data_chu
             duckdb_scalar_function_set_error(info, "ducknng: out of memory copying frame name");
             return;
         }
-        duckdb_vector_assign_string_element(output, row, name);
+        duckdb_unsafe_vector_assign_string_element_len(output, row, name, (idx_t)strlen(name));
         duckdb_free(name);
         duckdb_free(frame_bytes);
     }
@@ -783,18 +783,18 @@ static void ducknng_body_parse_emit_frame_row(duckdb_data_chunk output, const du
     uint8_t *type_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
     uint32_t *flags_data = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
     ok_data[0] = frame ? frame->ok : false;
-    if (frame && frame->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, frame->error);
+    if (frame && frame->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, frame->error, (idx_t)strlen(frame->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     version_data[0] = frame ? frame->version : 0;
     type_data[0] = frame ? frame->type : 0;
     flags_data[0] = frame ? frame->flags : 0;
-    if (frame && frame->type_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), 0, frame->type_name);
+    if (frame && frame->type_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, frame->type_name, (idx_t)strlen(frame->type_name));
     else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
-    if (frame && frame->name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), 0, frame->name);
+    if (frame && frame->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), 0, frame->name, (idx_t)strlen(frame->name));
     else set_null(duckdb_data_chunk_get_vector(output, 6), 0);
     if (frame && frame->payload) assign_blob(duckdb_data_chunk_get_vector(output, 7), 0, frame->payload, frame->payload_len);
     else set_null(duckdb_data_chunk_get_vector(output, 7), 0);
-    if (frame && frame->payload_text) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 8), 0, frame->payload_text);
+    if (frame && frame->payload_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), 0, frame->payload_text, (idx_t)strlen(frame->payload_text));
     else set_null(duckdb_data_chunk_get_vector(output, 8), 0);
 }
 
@@ -2023,11 +2023,11 @@ static void ducknng_body_parse_scan(duckdb_function_info info, duckdb_data_chunk
             return;
         }
         if (bind->codec_kind == DUCKNNG_BODY_CODEC_TEXT) {
-            if (bind->text) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), 0, bind->text);
+            if (bind->text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), 0, bind->text, (idx_t)strlen(bind->text));
             else set_null(duckdb_data_chunk_get_vector(output, 0), 0);
         } else if (bind->codec_kind == DUCKNNG_BODY_CODEC_USER) {
             if (bind->text_is_null || !bind->text) set_null(duckdb_data_chunk_get_vector(output, 0), 0);
-            else duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), 0, bind->text);
+            else duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), 0, bind->text, (idx_t)strlen(bind->text));
         } else {
             if (bind->raw) assign_blob(duckdb_data_chunk_get_vector(output, 0), 0, bind->raw, bind->raw_len);
             else assign_blob(duckdb_data_chunk_get_vector(output, 0), 0, (const uint8_t *)"", 0);
@@ -2072,8 +2072,8 @@ static void ducknng_body_parse_scan(duckdb_function_info info, duckdb_data_chunk
             idx_t row = init->offset + i;
             const char *k = bind->form_keys[row] ? bind->form_keys[row] : "";
             const char *v = bind->form_values[row] ? bind->form_values[row] : "";
-            duckdb_vector_assign_string_element(name_vec, i, k);
-            duckdb_vector_assign_string_element(value_vec, i, v);
+            duckdb_unsafe_vector_assign_string_element_len(name_vec, i, k, (idx_t)strlen(k));
+            duckdb_unsafe_vector_assign_string_element_len(value_vec, i, v, (idx_t)strlen(v));
         }
         duckdb_data_chunk_set_size(output, batch);
         init->offset += batch;
@@ -2211,12 +2211,12 @@ static void ducknng_codecs_scan(duckdb_function_info info, duckdb_data_chunk out
         duckdb_vector v3 = duckdb_data_chunk_get_vector(output, 3);
         duckdb_vector v4 = duckdb_data_chunk_get_vector(output, 4);
         duckdb_vector v5 = duckdb_data_chunk_get_vector(output, 5);
-        if (row->provider) duckdb_vector_assign_string_element(v0, i, row->provider); else set_null(v0, i);
-        if (row->media_types) duckdb_vector_assign_string_element(v1, i, row->media_types); else set_null(v1, i);
-        if (row->kind) duckdb_vector_assign_string_element(v2, i, row->kind); else set_null(v2, i);
-        if (row->function_name) duckdb_vector_assign_string_element(v3, i, row->function_name); else set_null(v3, i);
-        if (row->output) duckdb_vector_assign_string_element(v4, i, row->output); else set_null(v4, i);
-        if (row->notes) duckdb_vector_assign_string_element(v5, i, row->notes); else set_null(v5, i);
+        if (row->provider) duckdb_unsafe_vector_assign_string_element_len(v0, i, row->provider, (idx_t)strlen(row->provider)); else set_null(v0, i);
+        if (row->media_types) duckdb_unsafe_vector_assign_string_element_len(v1, i, row->media_types, (idx_t)strlen(row->media_types)); else set_null(v1, i);
+        if (row->kind) duckdb_unsafe_vector_assign_string_element_len(v2, i, row->kind, (idx_t)strlen(row->kind)); else set_null(v2, i);
+        if (row->function_name) duckdb_unsafe_vector_assign_string_element_len(v3, i, row->function_name, (idx_t)strlen(row->function_name)); else set_null(v3, i);
+        if (row->output) duckdb_unsafe_vector_assign_string_element_len(v4, i, row->output, (idx_t)strlen(row->output)); else set_null(v4, i);
+        if (row->notes) duckdb_unsafe_vector_assign_string_element_len(v5, i, row->notes, (idx_t)strlen(row->notes)); else set_null(v5, i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);

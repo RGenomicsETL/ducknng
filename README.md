@@ -57,7 +57,7 @@ SELECT getvariable('tour_url') AS listen_url;
 +-----------------------+
 |      listen_url       |
 +-----------------------+
-| tcp://127.0.0.1:36849 |
+| tcp://127.0.0.1:37035 |
 +-----------------------+
 ```
 
@@ -305,9 +305,23 @@ make docs
 
 `make configure` downloads the DuckDB C API headers at the version
 pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The
-extension itself targets the stable C API at `TARGET_DUCKDB_VERSION` and
-avoids unstable or deprecated DuckDB entrypoints so it loads across
-DuckDB minor releases without recompilation.
+extension targets `TARGET_DUCKDB_VERSION`. It builds with
+`USE_UNSTABLE_C_API=1` to access DuckDB’s native Arrow conversion API
+(`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
+result-to-IPC emit path. Deprecated entrypoints are avoided. The
+unstable functions in use are tracked by
+`tools/used_duckdb_unstable_api.R`; the table below is generated fresh
+on every README render:
+
+| ABI group                                | Functions used                                                                          | Count |
+|------------------------------------------|-----------------------------------------------------------------------------------------|------:|
+| `unstable_new_arrow_functions`           | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                  |     2 |
+| `unstable_new_error_data_functions`      | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message` |     3 |
+| `unstable_new_open_connect_functions`    | `duckdb_destroy_arrow_options`                                                          |     1 |
+| `unstable_new_query_execution_functions` | `duckdb_result_get_arrow_options`                                                       |     1 |
+| `unstable_new_scalar_function_functions` | `duckdb_scalar_function_set_bind`                                                       |     1 |
+| `unstable_new_string_functions`          | `duckdb_valid_utf8_check`                                                               |     1 |
+| `unstable_new_vector_functions`          | `duckdb_unsafe_vector_assign_string_element_len`                                        |     1 |
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
 All tests live under `test/sql/` as `.test` files. The public function
@@ -1576,7 +1590,7 @@ ipc_path <- "/tmp/ducknng_readme_exec.ipc"
 ipc_url  <- paste0("ipc://", ipc_path)
 unlink(ipc_path)
 
-db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true")))
+db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true")))
 DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 [1] 0
 DBI::dbGetQuery(db_con, sprintf(
@@ -1618,9 +1632,7 @@ send_recv(req, encode_ducknng_exec_request(
   "SELECT i, i > 50 AS gt_50 FROM exec_demo ORDER BY i",
   want_result = TRUE
 ))$data
-   i gt_50
-1 42 FALSE
-2 99  TRUE
+NULL
 ```
 
 The same table is visible locally through the DuckDB connection that

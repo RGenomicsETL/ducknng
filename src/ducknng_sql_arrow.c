@@ -13,7 +13,8 @@ static void ducknng_sql_arrow_set_null(duckdb_vector vec, idx_t row) {
 
 static void ducknng_sql_arrow_assign_blob(duckdb_vector vec, idx_t row,
     const uint8_t *data, idx_t len) {
-    duckdb_vector_assign_string_element_len(vec, row, (const char *)data, len);
+    /* BLOB is opaque binary; no UTF-8 validation needed. */
+    duckdb_unsafe_vector_assign_string_element_len(vec, row, (const char *)data, len);
 }
 
 static int64_t ducknng_sql_arrow_floor_div_i64(int64_t value, int64_t divisor) {
@@ -429,7 +430,8 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
             if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
             else {
                 value = ArrowArrayViewGetStringUnsafe(col_view, src_offset + i);
-                duckdb_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
+                /* Arrow IPC guarantees UTF-8 for STRING columns; skip internal validation. */
+                duckdb_unsafe_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
             }
         }
         return 0;
@@ -640,7 +642,8 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
             if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
             else {
                 value = ArrowArrayViewGetStringUnsafe(col_view, src_offset + i);
-                duckdb_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
+                /* Arrow IPC guarantees UTF-8 for LARGE_STRING columns; skip internal validation. */
+                duckdb_unsafe_vector_assign_string_element_len(vec, dst, value.data, (idx_t)value.size_bytes);
             }
         }
         return 0;

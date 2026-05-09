@@ -682,7 +682,7 @@ back from <code>ducknng_list_servers()</code>.</p>
 <span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
 <span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>|      listen_url       |</span>
 <span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
-<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:36849</span> |</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37035</span> |</span>
 <span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span></code></pre></div>
 <p><strong>Raw socket send/receive.</strong> Open a REQ socket, dial it,
 then send the built-in manifest request frame byte-for-byte and decode
@@ -901,10 +901,62 @@ packages.</p>
 <span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a><span class="fu">make</span> docs</span></code></pre></div>
 <p><code>make configure</code> downloads the DuckDB C API headers at the
 version pinned in the Makefile (<code>DUCKDB_HEADER_VERSION</code>) and
-sets up CMake. The extension itself targets the stable C API at
-<code>TARGET_DUCKDB_VERSION</code> and avoids unstable or deprecated
-DuckDB entrypoints so it loads across DuckDB minor releases without
-recompilation.</p>
+sets up CMake. The extension targets <code>TARGET_DUCKDB_VERSION</code>.
+It builds with <code>USE_UNSTABLE_C_API=1</code> to access DuckDB’s
+native Arrow conversion API (<code>duckdb_to_arrow_schema</code>,
+<code>duckdb_data_chunk_to_arrow</code>) in the result-to-IPC emit path.
+Deprecated entrypoints are avoided. The unstable functions in use are
+tracked by <code>tools/used_duckdb_unstable_api.R</code>; the table
+below is generated fresh on every README render:</p>
+<table>
+<thead>
+<tr class="header">
+<th>ABI group</th>
+<th>Functions used</th>
+<th align="right">Count</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>unstable_new_arrow_functions</code></td>
+<td><code>duckdb_data_chunk_to_arrow</code>,
+<code>duckdb_to_arrow_schema</code></td>
+<td align="right">2</td>
+</tr>
+<tr class="even">
+<td><code>unstable_new_error_data_functions</code></td>
+<td><code>duckdb_destroy_error_data</code>,
+<code>duckdb_error_data_has_error</code>,
+<code>duckdb_error_data_message</code></td>
+<td align="right">3</td>
+</tr>
+<tr class="odd">
+<td><code>unstable_new_open_connect_functions</code></td>
+<td><code>duckdb_destroy_arrow_options</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="even">
+<td><code>unstable_new_query_execution_functions</code></td>
+<td><code>duckdb_result_get_arrow_options</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="odd">
+<td><code>unstable_new_scalar_function_functions</code></td>
+<td><code>duckdb_scalar_function_set_bind</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="even">
+<td><code>unstable_new_string_functions</code></td>
+<td><code>duckdb_valid_utf8_check</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="odd">
+<td><code>unstable_new_vector_functions</code></td>
+<td><code>duckdb_unsafe_vector_assign_string_element_len</code></td>
+<td align="right">1</td>
+</tr>
+</tbody>
+</table>
 <p><code>make test_release</code> runs the SQL test suite with DuckDB’s
 test runner. All tests live under <code>test/sql/</code> as
 <code>.test</code> files. The public function surface is verified by
@@ -2970,7 +3022,7 @@ dial a REQ socket, run remote SQL</h3>
 <span id="cb30-3"><a href="#cb30-3" tabindex="-1"></a>ipc_url  <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;ipc://&quot;</span>, ipc_path)</span>
 <span id="cb30-4"><a href="#cb30-4" tabindex="-1"></a><span class="fu">unlink</span>(ipc_path)</span>
 <span id="cb30-5"><a href="#cb30-5" tabindex="-1"></a></span>
-<span id="cb30-6"><a href="#cb30-6" tabindex="-1"></a>db_con <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbConnect</span>(duckdb<span class="sc">::</span><span class="fu">duckdb</span>(<span class="at">config =</span> <span class="fu">list</span>(<span class="at">allow_unsigned_extensions =</span> <span class="st">&quot;true&quot;</span>)))</span>
+<span id="cb30-6"><a href="#cb30-6" tabindex="-1"></a>db_con <span class="ot">&lt;-</span> DBI<span class="sc">::</span><span class="fu">dbConnect</span>(duckdb<span class="sc">::</span><span class="fu">duckdb</span>(<span class="at">config =</span> <span class="fu">list</span>(<span class="at">allow_unsigned_extensions =</span> <span class="st">&quot;true&quot;</span>, <span class="at">allow_extensions_metadata_mismatch =</span> <span class="st">&quot;true&quot;</span>)))</span>
 <span id="cb30-7"><a href="#cb30-7" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbExecute</span>(db_con, <span class="fu">sprintf</span>(<span class="st">&quot;LOAD &#39;%s&#39;&quot;</span>, ext_path))</span>
 <span id="cb30-8"><a href="#cb30-8" tabindex="-1"></a>[<span class="dv">1</span>] <span class="dv">0</span></span>
 <span id="cb30-9"><a href="#cb30-9" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="fu">sprintf</span>(</span>
@@ -3009,9 +3061,7 @@ dial a REQ socket, run remote SQL</h3>
 <span id="cb31-22"><a href="#cb31-22" tabindex="-1"></a>  <span class="st">&quot;SELECT i, i &gt; 50 AS gt_50 FROM exec_demo ORDER BY i&quot;</span>,</span>
 <span id="cb31-23"><a href="#cb31-23" tabindex="-1"></a>  <span class="at">want_result =</span> <span class="cn">TRUE</span></span>
 <span id="cb31-24"><a href="#cb31-24" tabindex="-1"></a>))<span class="sc">$</span>data</span>
-<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a>   i gt_50</span>
-<span id="cb31-26"><a href="#cb31-26" tabindex="-1"></a><span class="dv">1</span> <span class="dv">42</span> <span class="cn">FALSE</span></span>
-<span id="cb31-27"><a href="#cb31-27" tabindex="-1"></a><span class="dv">2</span> <span class="dv">99</span>  <span class="cn">TRUE</span></span></code></pre></div>
+<span id="cb31-25"><a href="#cb31-25" tabindex="-1"></a><span class="cn">NULL</span></span></code></pre></div>
 <p>The same table is visible locally through the DuckDB connection that
 hosts the server:</p>
 <div class="sourceCode" id="cb32"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a>DBI<span class="sc">::</span><span class="fu">dbGetQuery</span>(db_con, <span class="st">&quot;SELECT * FROM exec_demo ORDER BY i&quot;</span>)</span>

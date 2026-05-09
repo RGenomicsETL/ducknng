@@ -240,41 +240,93 @@ static int ducknng_http_sql_reject_table_inside_request_handler(duckdb_bind_info
     return 0;
 }
 
+typedef struct {
+    char *const_name; /* pre-folded lookup name at bind time, or NULL if not constant */
+} ducknng_http_lookup_bind_data;
+
+static void ducknng_http_lookup_bind_data_destroy(void *data) {
+    ducknng_http_lookup_bind_data *bd = (ducknng_http_lookup_bind_data *)data;
+    if (!bd) return;
+    if (bd->const_name) duckdb_free(bd->const_name);
+    duckdb_free(bd);
+}
+
+static void *ducknng_http_lookup_bind_data_copy(void *data) {
+    ducknng_http_lookup_bind_data *src = (ducknng_http_lookup_bind_data *)data;
+    ducknng_http_lookup_bind_data *dst;
+    if (!src) return NULL;
+    dst = (ducknng_http_lookup_bind_data *)duckdb_malloc(sizeof(*dst));
+    if (!dst) return NULL;
+    dst->const_name = src->const_name ? ducknng_strdup(src->const_name) : NULL;
+    return dst;
+}
+
+static void ducknng_http_lookup_bind_cb(duckdb_bind_info info) {
+    ducknng_http_lookup_bind_data *bd;
+    duckdb_expression name_expr;
+    bd = (ducknng_http_lookup_bind_data *)duckdb_malloc(sizeof(*bd));
+    if (!bd) { duckdb_scalar_function_bind_set_error(info, "ducknng: out of memory in bind"); return; }
+    bd->const_name = NULL;
+    name_expr = duckdb_scalar_function_bind_get_argument(info, 1);
+    if (name_expr && duckdb_expression_is_foldable(name_expr)) {
+        duckdb_client_context client_ctx = NULL;
+        duckdb_value folded = NULL;
+        duckdb_error_data err;
+        duckdb_scalar_function_get_client_context(info, &client_ctx);
+        err = duckdb_expression_fold(client_ctx, name_expr, &folded);
+        duckdb_destroy_client_context(&client_ctx);
+        if (err == NULL && folded != NULL) {
+            char *name_str = duckdb_get_varchar(folded);
+            if (name_str) {
+                bd->const_name = ducknng_strdup(name_str);
+                duckdb_free(name_str);
+            }
+        }
+        if (err) duckdb_destroy_error_data(&err);
+        if (folded) duckdb_destroy_value(&folded);
+    }
+    if (name_expr) duckdb_destroy_expression(&name_expr);
+    duckdb_scalar_function_set_bind_data(info, bd, ducknng_http_lookup_bind_data_destroy);
+    duckdb_scalar_function_set_bind_data_copy(info, ducknng_http_lookup_bind_data_copy);
+}
+
 static void ducknng_http_headers_get_scalar(duckdb_function_info info, duckdb_data_chunk input,
     duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
     duckdb_vector headers_vec = duckdb_data_chunk_get_vector(input, 0);
     duckdb_vector name_vec = duckdb_data_chunk_get_vector(input, 1);
+    ducknng_http_lookup_bind_data *bd = (ducknng_http_lookup_bind_data *)duckdb_scalar_function_get_bind_data(info);
+    int name_is_const = bd && bd->const_name;
     for (row = 0; row < count; row++) {
         char *headers_json = arg_varchar_dup(headers_vec, row);
-        char *name = arg_varchar_dup(name_vec, row);
+        char *name = name_is_const ? bd->const_name : arg_varchar_dup(name_vec, row);
         char *value = NULL;
         char *errmsg = NULL;
         int rc;
         if (!headers_json || !name) {
             if (headers_json) duckdb_free(headers_json);
-            if (name) duckdb_free(name);
+            if (!name_is_const && name) duckdb_free(name);
             set_null(output, row);
             continue;
         }
         rc = ducknng_http_headers_json_get_header(headers_json, name, 1, &value, &errmsg);
         if (rc < 0) {
             duckdb_free(headers_json);
-            duckdb_free(name);
+            if (!name_is_const) duckdb_free(name);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid headers_json");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
         if (value) {
-            duckdb_vector_assign_string_element(output, row, value);
+            duckdb_unsafe_vector_assign_string_element_len(output, row, value, (idx_t)strlen(value));
             duckdb_free(value);
         } else {
             set_null(output, row);
         }
         if (errmsg) duckdb_free(errmsg);
         duckdb_free(headers_json);
-        duckdb_free(name);
+        if (!name_is_const) duckdb_free(name);
     }
 }
 
@@ -284,35 +336,37 @@ static void ducknng_http_query_param_get_scalar(duckdb_function_info info, duckd
     idx_t row;
     duckdb_vector query_vec = duckdb_data_chunk_get_vector(input, 0);
     duckdb_vector name_vec = duckdb_data_chunk_get_vector(input, 1);
+    ducknng_http_lookup_bind_data *bd = (ducknng_http_lookup_bind_data *)duckdb_scalar_function_get_bind_data(info);
+    int name_is_const = bd && bd->const_name;
     for (row = 0; row < count; row++) {
         char *query_string = arg_varchar_dup(query_vec, row);
-        char *name = arg_varchar_dup(name_vec, row);
+        char *name = name_is_const ? bd->const_name : arg_varchar_dup(name_vec, row);
         char *value = NULL;
         char *errmsg = NULL;
         int rc;
         if (!query_string || !name) {
             if (query_string) duckdb_free(query_string);
-            if (name) duckdb_free(name);
+            if (!name_is_const && name) duckdb_free(name);
             set_null(output, row);
             continue;
         }
         rc = ducknng_query_string_get_param(query_string, name, 1, &value, &errmsg);
         if (rc < 0) {
             duckdb_free(query_string);
-            duckdb_free(name);
+            if (!name_is_const) duckdb_free(name);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid query string");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
         if (value) {
-            duckdb_vector_assign_string_element(output, row, value);
+            duckdb_unsafe_vector_assign_string_element_len(output, row, value, (idx_t)strlen(value));
             duckdb_free(value);
         } else {
             set_null(output, row);
         }
         if (errmsg) duckdb_free(errmsg);
         duckdb_free(query_string);
-        duckdb_free(name);
+        if (!name_is_const) duckdb_free(name);
     }
 }
 
@@ -322,35 +376,37 @@ static void ducknng_http_cookie_get_scalar(duckdb_function_info info, duckdb_dat
     idx_t row;
     duckdb_vector cookie_vec = duckdb_data_chunk_get_vector(input, 0);
     duckdb_vector name_vec = duckdb_data_chunk_get_vector(input, 1);
+    ducknng_http_lookup_bind_data *bd = (ducknng_http_lookup_bind_data *)duckdb_scalar_function_get_bind_data(info);
+    int name_is_const = bd && bd->const_name;
     for (row = 0; row < count; row++) {
         char *cookie_header = arg_varchar_dup(cookie_vec, row);
-        char *name = arg_varchar_dup(name_vec, row);
+        char *name = name_is_const ? bd->const_name : arg_varchar_dup(name_vec, row);
         char *value = NULL;
         char *errmsg = NULL;
         int rc;
         if (!cookie_header || !name) {
             if (cookie_header) duckdb_free(cookie_header);
-            if (name) duckdb_free(name);
+            if (!name_is_const && name) duckdb_free(name);
             set_null(output, row);
             continue;
         }
         rc = ducknng_cookie_header_get_value(cookie_header, name, 1, &value, &errmsg);
         if (rc < 0) {
             duckdb_free(cookie_header);
-            duckdb_free(name);
+            if (!name_is_const) duckdb_free(name);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid Cookie header");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
         if (value) {
-            duckdb_vector_assign_string_element(output, row, value);
+            duckdb_unsafe_vector_assign_string_element_len(output, row, value, (idx_t)strlen(value));
             duckdb_free(value);
         } else {
             set_null(output, row);
         }
         if (errmsg) duckdb_free(errmsg);
         duckdb_free(cookie_header);
-        duckdb_free(name);
+        if (!name_is_const) duckdb_free(name);
     }
 }
 
@@ -360,35 +416,37 @@ static void ducknng_http_path_params_get_scalar(duckdb_function_info info, duckd
     idx_t row;
     duckdb_vector params_vec = duckdb_data_chunk_get_vector(input, 0);
     duckdb_vector name_vec = duckdb_data_chunk_get_vector(input, 1);
+    ducknng_http_lookup_bind_data *bd = (ducknng_http_lookup_bind_data *)duckdb_scalar_function_get_bind_data(info);
+    int name_is_const = bd && bd->const_name;
     for (row = 0; row < count; row++) {
         char *path_params_json = arg_varchar_dup(params_vec, row);
-        char *name = arg_varchar_dup(name_vec, row);
+        char *name = name_is_const ? bd->const_name : arg_varchar_dup(name_vec, row);
         char *value = NULL;
         char *errmsg = NULL;
         int rc;
         if (!path_params_json || !name) {
             if (path_params_json) duckdb_free(path_params_json);
-            if (name) duckdb_free(name);
+            if (!name_is_const && name) duckdb_free(name);
             set_null(output, row);
             continue;
         }
         rc = ducknng_json_object_get_string(path_params_json, name, 0, 1, &value, &errmsg);
         if (rc < 0) {
             duckdb_free(path_params_json);
-            duckdb_free(name);
+            if (!name_is_const) duckdb_free(name);
             duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: invalid path_params_json");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
         if (value) {
-            duckdb_vector_assign_string_element(output, row, value);
+            duckdb_unsafe_vector_assign_string_element_len(output, row, value, (idx_t)strlen(value));
             duckdb_free(value);
         } else {
             set_null(output, row);
         }
         if (errmsg) duckdb_free(errmsg);
         duckdb_free(path_params_json);
-        duckdb_free(name);
+        if (!name_is_const) duckdb_free(name);
     }
 }
 
@@ -505,10 +563,10 @@ cleanup_headers_build:
         }
         if (failed) return;
         if (json) {
-            duckdb_vector_assign_string_element(output, row, json);
+            duckdb_unsafe_vector_assign_string_element_len(output, row, json, (idx_t)strlen(json));
             duckdb_free(json);
         } else {
-            duckdb_vector_assign_string_element(output, row, "[]");
+            duckdb_unsafe_vector_assign_string_element_len(output, row, "[]", (idx_t)strlen("[]"));
         }
     }
 }
@@ -839,20 +897,20 @@ static void ducknng_list_http_routes_scan(duckdb_function_info info, duckdb_data
         service_ids[i] = row->service_id;
         route_ids[i] = row->route_id;
         request_max_bytes[i] = row->request_max_bytes;
-        if (row->service_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), i, row->service_name);
+        if (row->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, row->service_name, (idx_t)strlen(row->service_name));
         else set_null(duckdb_data_chunk_get_vector(output, 3), i);
-        if (row->method) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), i, row->method);
+        if (row->method) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 4), i, row->method, (idx_t)strlen(row->method));
         else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->match_kind) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->match_kind);
+        if (row->match_kind) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, row->match_kind, (idx_t)strlen(row->match_kind));
         else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->path) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->path);
+        if (row->path) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), i, row->path, (idx_t)strlen(row->path));
         else set_null(duckdb_data_chunk_get_vector(output, 6), i);
-        if (row->handler_sql) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), i, row->handler_sql);
+        if (row->handler_sql) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), i, row->handler_sql, (idx_t)strlen(row->handler_sql));
         else set_null(duckdb_data_chunk_get_vector(output, 7), i);
         ((bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 8)))[i] = (bool)row->auth_require_identity;
-        if (row->static_dir_path) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 9), i, row->static_dir_path);
+        if (row->static_dir_path) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 9), i, row->static_dir_path, (idx_t)strlen(row->static_dir_path));
         else set_null(duckdb_data_chunk_get_vector(output, 9), i);
-        if (row->auth_allow_identities_json) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 10), i, row->auth_allow_identities_json);
+        if (row->auth_allow_identities_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 10), i, row->auth_allow_identities_json, (idx_t)strlen(row->auth_allow_identities_json));
         else set_null(duckdb_data_chunk_get_vector(output, 10), i);
     }
     init->offset += chunk_size;
@@ -996,7 +1054,7 @@ static void ducknng_http_request_scan(duckdb_function_info info, duckdb_data_chu
         return;
     }
 #define ASSIGN_REQ_STRING(IDX, VALUE) do { \
-        if ((VALUE)) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE)); \
+        if ((VALUE)) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE), (idx_t)strlen((VALUE))); \
         else set_null(duckdb_data_chunk_get_vector(output, (IDX)), 0); \
     } while (0)
     ASSIGN_REQ_STRING(0, bind->service_name);
@@ -1033,7 +1091,7 @@ static void ducknng_http_request_body_scan(duckdb_function_info info, duckdb_dat
     }
     assign_blob(duckdb_data_chunk_get_vector(output, 0), 0,
         bind->body ? bind->body : (const uint8_t *)"", bind->body_len);
-    if (bind->body_text) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->body_text);
+    if (bind->body_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->body_text, (idx_t)strlen(bind->body_text));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     init->emitted = 1;
     duckdb_data_chunk_set_size(output, 1);
@@ -1400,11 +1458,11 @@ static void ducknng_list_http_workers_scan(duckdb_function_info info, duckdb_dat
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     for (i = 0; i < chunk_size; i++) {
         ducknng_http_worker_row *row = &bind->rows[init->offset + i];
-        if (row->service_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), i, row->service_name);
+        if (row->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), i, row->service_name, (idx_t)strlen(row->service_name));
         else set_null(duckdb_data_chunk_get_vector(output, 0), i);
-        if (row->worker_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), i, row->worker_name);
+        if (row->worker_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->worker_name, (idx_t)strlen(row->worker_name));
         else set_null(duckdb_data_chunk_get_vector(output, 1), i);
-        if (row->sql) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), i, row->sql);
+        if (row->sql) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, row->sql, (idx_t)strlen(row->sql));
         else set_null(duckdb_data_chunk_get_vector(output, 2), i);
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3)))[i] = row->interval_ms;
     }
@@ -1469,14 +1527,14 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_register_http_worker_scalar, ctx, worker_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_worker", 2,
             ducknng_unregister_http_worker_scalar, ctx, two_varchar_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_http_headers_get", 2,
-            ducknng_http_headers_get_scalar, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_http_query_param_get", 2,
-            ducknng_http_query_param_get_scalar, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_http_cookie_get", 2,
-            ducknng_http_cookie_get_scalar, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_http_path_params_get", 2,
-            ducknng_http_path_params_get_scalar, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_http_headers_get", 2,
+            ducknng_http_headers_get_scalar, ducknng_http_lookup_bind_cb, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_http_query_param_get", 2,
+            ducknng_http_query_param_get_scalar, ducknng_http_lookup_bind_cb, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_http_cookie_get", 2,
+            ducknng_http_cookie_get_scalar, ducknng_http_lookup_bind_cb, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_http_path_params_get", 2,
+            ducknng_http_path_params_get_scalar, ducknng_http_lookup_bind_cb, ctx, two_varchar_types, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!register_http_headers_build_scalar(con, ctx, "ducknng_http_headers_build")) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_http_routes", ctx, 0, NULL,
             ducknng_list_http_routes_bind, ducknng_list_http_routes_init, ducknng_list_http_routes_scan)) return 0;

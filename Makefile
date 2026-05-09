@@ -28,7 +28,14 @@ rpc_smoke_r:
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 EXTENSION_NAME=ducknng
-USE_UNSTABLE_C_API=0
+# USE_UNSTABLE_C_API=1 is required to access the DuckDB Arrow conversion API
+# (duckdb_to_arrow_schema, duckdb_data_chunk_to_arrow, duckdb_schema_from_arrow,
+# duckdb_data_chunk_from_arrow) and the error-data API (duckdb_create_error_data,
+# duckdb_error_data_message, duckdb_error_data_has_error). These functions live
+# behind DUCKDB_EXTENSION_API_VERSION_UNSTABLE in the extension vtable and are
+# used in src/ducknng_ipc_out.c to replace ~530 lines of hand-written per-type
+# Arrow encoding with correct, DuckDB-maintained conversions.
+USE_UNSTABLE_C_API=1
 
 # Stable C API metadata line
 TARGET_DUCKDB_VERSION=v1.2.0

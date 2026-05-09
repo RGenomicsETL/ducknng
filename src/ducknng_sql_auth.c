@@ -197,7 +197,7 @@ static void ducknng_auth_context_scan(duckdb_function_info info, duckdb_data_chu
         return;
     }
 #define ASSIGN_AUTH_STRING(IDX, VALUE) do { \
-        if ((VALUE)) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE)); \
+        if ((VALUE)) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE), (idx_t)strlen((VALUE))); \
         else set_null(duckdb_data_chunk_get_vector(output, (IDX)), 0); \
     } while (0)
     ASSIGN_AUTH_STRING(0, bind->phase);

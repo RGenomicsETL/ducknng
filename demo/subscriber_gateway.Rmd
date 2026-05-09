@@ -630,7 +630,7 @@ FROM __ducknng_gateway_close_reply
 # ---------------------------------------------------------------------------
 # Start all services in a single in-process DuckDB connection
 # ---------------------------------------------------------------------------
-con <- dbConnect(duckdb(config = list(allow_unsigned_extensions = "true")))
+con <- dbConnect(duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true")))
 dbExecute(con, sprintf("LOAD '%s'", sql_quote(extension_path)))
 dbExecute(con, "INSTALL json")
 dbExecute(con, "LOAD json")

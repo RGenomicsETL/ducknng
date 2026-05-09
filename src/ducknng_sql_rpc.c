@@ -1495,9 +1495,9 @@ static void ducknng_get_rpc_manifest_scan(duckdb_function_info info, duckdb_data
     }
     ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     ok_data[0] = bind->ok;
-    if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->error);
+    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->error, (idx_t)strlen(bind->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    if (bind->manifest) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), 0, bind->manifest);
+    if (bind->manifest) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), 0, bind->manifest, (idx_t)strlen(bind->manifest));
     else set_null(duckdb_data_chunk_get_vector(output, 2), 0);
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;
@@ -1600,7 +1600,7 @@ static void ducknng_run_rpc_scan(duckdb_function_info info, duckdb_data_chunk ou
     statement_type = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
     result_type = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
     ok_data[0] = bind->ok;
-    if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->error);
+    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->error, (idx_t)strlen(bind->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     rows_changed[0] = bind->rows_changed;
     statement_type[0] = bind->statement_type;
@@ -1818,13 +1818,12 @@ static void ducknng_request_scan(duckdb_function_info info, duckdb_data_chunk ou
     }
     ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     ok_data[0] = bind->ok;
-    if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), 0, bind->error);
+    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->error, (idx_t)strlen(bind->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     if (bind->has_nng_error) {
         int32_t *nng_errors = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
         nng_errors[0] = bind->nng_error;
-        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), 0,
-            ducknng_nng_strerror(bind->nng_error));
+        duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), 0, ducknng_nng_strerror(bind->nng_error), (idx_t)strlen(ducknng_nng_strerror(bind->nng_error)));
     } else {
         set_null(duckdb_data_chunk_get_vector(output, 2), 0);
         set_null(duckdb_data_chunk_get_vector(output, 3), 0);
@@ -1944,13 +1943,13 @@ static void ducknng_ncurl_scan(duckdb_function_info info, duckdb_data_chunk outp
     ok_data[0] = bind->ok;
     if (bind->ok) status_data[0] = bind->status;
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    if (bind->error) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), 0, bind->error);
+    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), 0, bind->error, (idx_t)strlen(bind->error));
     else set_null(duckdb_data_chunk_get_vector(output, 2), 0);
-    if (bind->headers_json) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), 0, bind->headers_json);
+    if (bind->headers_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), 0, bind->headers_json, (idx_t)strlen(bind->headers_json));
     else set_null(duckdb_data_chunk_get_vector(output, 3), 0);
     if (bind->body) assign_blob(duckdb_data_chunk_get_vector(output, 4), 0, bind->body, bind->body_len);
     else set_null(duckdb_data_chunk_get_vector(output, 4), 0);
-    if (bind->body_text) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), 0, bind->body_text);
+    if (bind->body_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, bind->body_text, (idx_t)strlen(bind->body_text));
     else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;

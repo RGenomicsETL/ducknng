@@ -409,11 +409,11 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
         sql_authorizer_active[i] = row->sql_authorizer_active;
         peer_allowlist_count[i] = row->peer_allowlist_count;
         ip_allowlist_count[i] = row->ip_allowlist_count;
-        if (row->name) duckdb_vector_assign_string_element(vec_name, i, row->name);
+        if (row->name) duckdb_unsafe_vector_assign_string_element_len(vec_name, i, row->name, (idx_t)strlen(row->name));
         else set_null(vec_name, i);
-        if (row->listen) duckdb_vector_assign_string_element(vec_listen, i, row->listen);
+        if (row->listen) duckdb_unsafe_vector_assign_string_element_len(vec_listen, i, row->listen, (idx_t)strlen(row->listen));
         else set_null(vec_listen, i);
-        if (row->execution_model) duckdb_vector_assign_string_element(vec_execution_model, i, row->execution_model);
+        if (row->execution_model) duckdb_unsafe_vector_assign_string_element_len(vec_execution_model, i, row->execution_model, (idx_t)strlen(row->execution_model));
         else set_null(vec_execution_model, i);
     }
     init->offset += chunk_size;

@@ -311,18 +311,18 @@ static void ducknng_read_monitor_scan(duckdb_function_info info, duckdb_data_chu
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0)))[i] = row->seq;
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1)))[i] = row->ts_ms;
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2)))[i] = row->pipe_id;
-        if (row->service_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), i, row->service_name); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
-        if (row->listen) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), i, row->listen); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->transport_family) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->transport_family); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->scheme) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->scheme); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
-        if (row->event) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), i, row->event); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
+        if (row->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, row->service_name, (idx_t)strlen(row->service_name)); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
+        if (row->listen) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 4), i, row->listen, (idx_t)strlen(row->listen)); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
+        if (row->transport_family) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, row->transport_family, (idx_t)strlen(row->transport_family)); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
+        if (row->scheme) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), i, row->scheme, (idx_t)strlen(row->scheme)); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
+        if (row->event) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), i, row->event, (idx_t)strlen(row->event)); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
         if (row->admitted < 0) set_null(duckdb_data_chunk_get_vector(output, 8), i);
         else ((bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 8)))[i] = row->admitted ? true : false;
-        if (row->reason) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 9), i, row->reason); else set_null(duckdb_data_chunk_get_vector(output, 9), i);
-        if (row->remote_addr) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 10), i, row->remote_addr); else set_null(duckdb_data_chunk_get_vector(output, 10), i);
-        if (row->remote_ip) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 11), i, row->remote_ip); else set_null(duckdb_data_chunk_get_vector(output, 11), i);
+        if (row->reason) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 9), i, row->reason, (idx_t)strlen(row->reason)); else set_null(duckdb_data_chunk_get_vector(output, 9), i);
+        if (row->remote_addr) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 10), i, row->remote_addr, (idx_t)strlen(row->remote_addr)); else set_null(duckdb_data_chunk_get_vector(output, 10), i);
+        if (row->remote_ip) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 11), i, row->remote_ip, (idx_t)strlen(row->remote_ip)); else set_null(duckdb_data_chunk_get_vector(output, 11), i);
         ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 12)))[i] = row->remote_port;
-        if (row->peer_identity) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 13), i, row->peer_identity); else set_null(duckdb_data_chunk_get_vector(output, 13), i);
+        if (row->peer_identity) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 13), i, row->peer_identity, (idx_t)strlen(row->peer_identity)); else set_null(duckdb_data_chunk_get_vector(output, 13), i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -426,14 +426,14 @@ static void ducknng_list_pipes_scan(duckdb_function_info info, duckdb_data_chunk
         ducknng_pipe_row *row = &bind->rows[init->offset + i];
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0)))[i] = row->pipe_id;
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1)))[i] = row->opened_ms;
-        if (row->service_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), i, row->service_name); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
-        if (row->listen) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), i, row->listen); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
-        if (row->transport_family) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), i, row->transport_family); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->scheme) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->scheme); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->remote_addr) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->remote_addr); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
-        if (row->remote_ip) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), i, row->remote_ip); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
+        if (row->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, row->service_name, (idx_t)strlen(row->service_name)); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
+        if (row->listen) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, row->listen, (idx_t)strlen(row->listen)); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
+        if (row->transport_family) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 4), i, row->transport_family, (idx_t)strlen(row->transport_family)); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
+        if (row->scheme) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, row->scheme, (idx_t)strlen(row->scheme)); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
+        if (row->remote_addr) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), i, row->remote_addr, (idx_t)strlen(row->remote_addr)); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
+        if (row->remote_ip) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), i, row->remote_ip, (idx_t)strlen(row->remote_ip)); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
         ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 8)))[i] = row->remote_port;
-        if (row->peer_identity) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 9), i, row->peer_identity); else set_null(duckdb_data_chunk_get_vector(output, 9), i);
+        if (row->peer_identity) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 9), i, row->peer_identity, (idx_t)strlen(row->peer_identity)); else set_null(duckdb_data_chunk_get_vector(output, 9), i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -493,7 +493,7 @@ static void ducknng_monitor_status_scan(duckdb_function_info info, duckdb_data_c
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    if (bind->service_name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), 0, bind->service_name);
+    if (bind->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), 0, bind->service_name, (idx_t)strlen(bind->service_name));
     else set_null(duckdb_data_chunk_get_vector(output, 0), 0);
     col = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1)); col[0] = bind->stats.event_capacity;
     col = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2)); col[0] = bind->stats.event_count;

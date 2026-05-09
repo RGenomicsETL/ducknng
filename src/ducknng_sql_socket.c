@@ -130,12 +130,12 @@ static void ducknng_socket_result_emit(duckdb_vector output, idx_t row,
     nng_errors = (int32_t *)duckdb_vector_get_data(child_vecs[2]);
     socket_ids = (uint64_t *)duckdb_vector_get_data(child_vecs[4]);
     ok_data[row] = res && res->ok;
-    if (res && res->error) duckdb_vector_assign_string_element(child_vecs[1], row, res->error);
+    if (res && res->error) duckdb_unsafe_vector_assign_string_element_len(child_vecs[1], row, res->error, (idx_t)strlen(res->error));
     else set_null(child_vecs[1], row);
     if (res && res->has_nng_error) {
         nng_errors[row] = res->nng_error;
         nng_message = ducknng_nng_strerror(res->nng_error);
-        if (nng_message) duckdb_vector_assign_string_element(child_vecs[3], row, nng_message);
+        if (nng_message) duckdb_unsafe_vector_assign_string_element_len(child_vecs[3], row, nng_message, (idx_t)strlen(nng_message));
         else set_null(child_vecs[3], row);
     } else {
         set_null(child_vecs[2], row);
@@ -149,7 +149,7 @@ static void ducknng_socket_result_emit(duckdb_vector output, idx_t row,
     } else {
         set_null(child_vecs[5], row);
     }
-    if (res && res->url) duckdb_vector_assign_string_element(child_vecs[6], row, res->url);
+    if (res && res->url) duckdb_unsafe_vector_assign_string_element_len(child_vecs[6], row, res->url, (idx_t)strlen(res->url));
     else set_null(child_vecs[6], row);
 }
 
@@ -863,9 +863,9 @@ static void ducknng_sockets_scan(duckdb_function_info info, duckdb_data_chunk ou
         listening[i] = row->listening;
         send_timeout_ms[i] = row->send_timeout_ms;
         recv_timeout_ms[i] = row->recv_timeout_ms;
-        if (row->protocol) duckdb_vector_assign_string_element(vec_protocol, i, row->protocol);
+        if (row->protocol) duckdb_unsafe_vector_assign_string_element_len(vec_protocol, i, row->protocol, (idx_t)strlen(row->protocol));
         else set_null(vec_protocol, i);
-        if (row->url) duckdb_vector_assign_string_element(vec_url, i, row->url);
+        if (row->url) duckdb_unsafe_vector_assign_string_element_len(vec_url, i, row->url, (idx_t)strlen(row->url));
         else set_null(vec_url, i);
     }
     init->offset += chunk_size;

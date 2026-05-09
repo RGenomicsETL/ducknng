@@ -322,15 +322,15 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
     disabled = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
     for (i = 0; i < chunk_size; i++) {
         ducknng_method_row *row = &bind->rows[init->offset + i];
-        if (row->name) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), i, row->name); else set_null(duckdb_data_chunk_get_vector(output, 0), i);
-        if (row->family) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 1), i, row->family); else set_null(duckdb_data_chunk_get_vector(output, 1), i);
-        if (row->summary) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), i, row->summary); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
-        if (row->transport_pattern) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), i, row->transport_pattern); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
-        if (row->request_payload_format) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), i, row->request_payload_format); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->response_payload_format) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), i, row->response_payload_format); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->response_mode) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), i, row->response_mode); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
-        if (row->request_schema_json) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), i, row->request_schema_json); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
-        if (row->response_schema_json) duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 8), i, row->response_schema_json); else set_null(duckdb_data_chunk_get_vector(output, 8), i);
+        if (row->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), i, row->name, (idx_t)strlen(row->name)); else set_null(duckdb_data_chunk_get_vector(output, 0), i);
+        if (row->family) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->family, (idx_t)strlen(row->family)); else set_null(duckdb_data_chunk_get_vector(output, 1), i);
+        if (row->summary) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, row->summary, (idx_t)strlen(row->summary)); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
+        if (row->transport_pattern) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, row->transport_pattern, (idx_t)strlen(row->transport_pattern)); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
+        if (row->request_payload_format) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 4), i, row->request_payload_format, (idx_t)strlen(row->request_payload_format)); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
+        if (row->response_payload_format) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, row->response_payload_format, (idx_t)strlen(row->response_payload_format)); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
+        if (row->response_mode) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), i, row->response_mode, (idx_t)strlen(row->response_mode)); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
+        if (row->request_schema_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), i, row->request_schema_json, (idx_t)strlen(row->request_schema_json)); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
+        if (row->response_schema_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), i, row->response_schema_json, (idx_t)strlen(row->response_schema_json)); else set_null(duckdb_data_chunk_get_vector(output, 8), i);
         requires_auth[i] = row->requires_auth;
         disabled[i] = row->disabled;
     }

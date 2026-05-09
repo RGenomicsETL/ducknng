@@ -39,6 +39,7 @@ local({
 ```
 
 ```{duckdb, include = FALSE}
+SET allow_extensions_metadata_mismatch=true;
 LOAD 'build/release/ducknng.duckdb_extension';
 ```
 
@@ -236,7 +237,12 @@ make test_release
 make docs
 ```
 
-`make configure` downloads the DuckDB C API headers at the version pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The extension itself targets the stable C API at `TARGET_DUCKDB_VERSION` and avoids unstable or deprecated DuckDB entrypoints so it loads across DuckDB minor releases without recompilation.
+`make configure` downloads the DuckDB C API headers at the version pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The extension targets `TARGET_DUCKDB_VERSION`. It builds with `USE_UNSTABLE_C_API=1` to access DuckDB's native Arrow conversion API (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the result-to-IPC emit path. Deprecated entrypoints are avoided. The unstable functions in use are tracked by `tools/used_duckdb_unstable_api.R`; the table below is generated fresh on every README render:
+
+```{r unstable-api-table, echo = FALSE, results = "asis"}
+source("tools/used_duckdb_unstable_api.R")
+cat(ducknng_used_duckdb_unstable_api_markdown())
+```
 
 `make test_release` runs the SQL test suite with DuckDB's test runner. All tests live under `test/sql/` as `.test` files. The public function surface is verified by `test/sql/ducknng_public_surface.test`, which reads `function_catalog/functions.yaml` and checks that every declared name appears in the loaded extension catalog.
 
@@ -1006,7 +1012,7 @@ ipc_path <- "/tmp/ducknng_readme_exec.ipc"
 ipc_url  <- paste0("ipc://", ipc_path)
 unlink(ipc_path)
 
-db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true")))
+db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true")))
 DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 DBI::dbGetQuery(db_con, sprintf(
   "SELECT ducknng_start_server('sql_exec', '%s', 1, 134217728, 300000, 0::UBIGINT)", ipc_url
