@@ -603,11 +603,6 @@ padding-top: 0px;
 
 <!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
 
-<details>
-<summary>
-Setup
-</summary>
-
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a>knitr<span class="sc">::</span>opts_chunk<span class="sc">$</span><span class="fu">set</span>(<span class="at">collapse =</span> <span class="cn">TRUE</span>, <span class="at">comment =</span> <span class="st">&quot;#&gt;&quot;</span>)</span>
 <span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a><span class="fu">library</span>(DBI)</span>
@@ -1345,8 +1340,6 @@ Setup
 <span id="cb1-735"><a href="#cb1-735" tabindex="-1"></a>bob_token   <span class="ot">&lt;-</span> <span class="st">&quot;demo-bob-token&quot;</span></span>
 <span id="cb1-736"><a href="#cb1-736" tabindex="-1"></a></span>
 <span id="cb1-737"><a href="#cb1-737" tabindex="-1"></a><span class="fu">wait_healthz</span>(gateway_base_url)</span></code></pre></div>
-</details>
-
 <h1 id="subscriber-gateway-demo">Subscriber gateway demo</h1>
 <p>This is a rendered walkthrough of the subscriber gateway topology in
 <code>ducknng</code>. All three services run inside a single in-process
@@ -1355,6 +1348,16 @@ service uses <code>service_serialized_connection</code>, giving it a
 dedicated execution lane.</p>
 <p>Render it from the repo root with:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">make</span> subscriber_gateway_rdm</span></code></pre></div>
+<details>
+<summary>
+<strong>Gateway Setup</strong>
+</summary>
+
+<p>See the setup chunk above for the full service configuration, table
+definitions, token assignment, and health-check used to initialise this
+demo.</p>
+</details>
+
 <h2 id="topology">Topology</h2>
 <p>One gateway service owns the public HTTP edge, identity resolution,
 and subscriber lookup. Two private backend services expose ordinary

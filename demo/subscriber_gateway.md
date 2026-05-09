@@ -1,9 +1,5 @@
 
 <!-- demo/subscriber_gateway.md is generated from demo/subscriber_gateway.Rmd. Please edit that file -->
-<details>
-<summary>
-Setup
-</summary>
 
 ``` r
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
@@ -745,8 +741,6 @@ bob_token   <- "demo-bob-token"
 wait_healthz(gateway_base_url)
 ```
 
-</details>
-
 # Subscriber gateway demo
 
 This is a rendered walkthrough of the subscriber gateway topology in
@@ -760,6 +754,17 @@ Render it from the repo root with:
 ``` sh
 make subscriber_gateway_rdm
 ```
+
+<details>
+<summary>
+<strong>Gateway Setup</strong>
+</summary>
+
+See the setup chunk above for the full service configuration, table
+definitions, token assignment, and health-check used to initialise this
+demo.
+
+</details>
 
 ## Topology
 
