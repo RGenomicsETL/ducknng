@@ -57,7 +57,7 @@ SELECT getvariable('tour_url') AS listen_url;
 +-----------------------+
 |      listen_url       |
 +-----------------------+
-| tcp://127.0.0.1:38447 |
+| tcp://127.0.0.1:36849 |
 +-----------------------+
 ```
 
@@ -286,7 +286,7 @@ SELECT ducknng_stop_server('tour');
 ## Development
 
 Prerequisites: a C compiler, CMake, Python 3, and R with the `rmarkdown`
-and `duckknit` packages.
+and [`duckknit`](https://github.com/rundel/duckknit) packages.
 
 ``` sh
 # Download DuckDB headers and set up the build tree. Run once per checkout.
