@@ -682,7 +682,7 @@ back from <code>ducknng_list_servers()</code>.</p>
 <span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
 <span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a>|      listen_url       |</span>
 <span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span>
-<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42133</span> |</span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a>| tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:39897</span> |</span>
 <span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------------+</span></span></code></pre></div>
 <p><strong>Raw socket send/receive.</strong> Open a REQ socket, dial it,
 then send the built-in manifest request frame byte-for-byte and decode
@@ -709,7 +709,7 @@ the reply envelope.</p>
 <span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a><span class="op">+</span><span class="co">------+-----------+----------+--------------+</span></span>
 <span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>|  ok  | type_name |   name   | method_count |</span>
 <span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a><span class="op">+</span><span class="co">------+-----------+----------+--------------+</span></span>
-<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>| <span class="kw">true</span> | result    | manifest | <span class="dv">5</span>            |</span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>| <span class="kw">true</span> | result    | manifest | <span class="dv">6</span>            |</span>
 <span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a><span class="op">+</span><span class="co">------+-----------+----------+--------------+</span></span></code></pre></div>
 <p><strong>One-shot URL form</strong> — same call without holding a
 socket handle.</p>
@@ -924,25 +924,61 @@ below is generated fresh on every README render:</p>
 <td align="right">2</td>
 </tr>
 <tr class="even">
+<td><code>unstable_new_config_options_functions</code></td>
+<td><code>duckdb_client_context_get_config_option</code>,
+<code>duckdb_config_option_set_default_scope</code>,
+<code>duckdb_config_option_set_default_value</code>,
+<code>duckdb_config_option_set_description</code>,
+<code>duckdb_config_option_set_name</code>,
+<code>duckdb_config_option_set_type</code>,
+<code>duckdb_create_config_option</code>,
+<code>duckdb_destroy_config_option</code>,
+<code>duckdb_register_config_option</code></td>
+<td align="right">9</td>
+</tr>
+<tr class="odd">
 <td><code>unstable_new_error_data_functions</code></td>
 <td><code>duckdb_destroy_error_data</code>,
 <code>duckdb_error_data_has_error</code>,
 <code>duckdb_error_data_message</code></td>
 <td align="right">3</td>
 </tr>
+<tr class="even">
+<td><code>unstable_new_logger_functions</code></td>
+<td><code>duckdb_create_log_storage</code>,
+<code>duckdb_destroy_log_storage</code>,
+<code>duckdb_log_storage_set_extra_data</code>,
+<code>duckdb_log_storage_set_name</code>,
+<code>duckdb_log_storage_set_write_log_entry</code>,
+<code>duckdb_register_log_storage</code></td>
+<td align="right">6</td>
+</tr>
 <tr class="odd">
 <td><code>unstable_new_open_connect_functions</code></td>
-<td><code>duckdb_destroy_arrow_options</code></td>
-<td align="right">1</td>
+<td><code>duckdb_connection_get_arrow_options</code>,
+<code>duckdb_destroy_arrow_options</code></td>
+<td align="right">2</td>
 </tr>
 <tr class="even">
+<td><code>unstable_new_prepared_statement_functions</code></td>
+<td><code>duckdb_prepared_statement_column_count</code>,
+<code>duckdb_prepared_statement_column_logical_type</code>,
+<code>duckdb_prepared_statement_column_name</code></td>
+<td align="right">3</td>
+</tr>
+<tr class="odd">
 <td><code>unstable_new_query_execution_functions</code></td>
 <td><code>duckdb_result_get_arrow_options</code></td>
 <td align="right">1</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_scalar_function_functions</code></td>
 <td><code>duckdb_scalar_function_set_bind</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="odd">
+<td><code>unstable_new_scalar_function_state_functions</code></td>
+<td><code>duckdb_scalar_function_set_init</code></td>
 <td align="right">1</td>
 </tr>
 <tr class="even">
@@ -2274,25 +2310,26 @@ else. <code>exec</code> is registered explicitly.</p>
 <span id="cb15-22"><a href="#cb15-22" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------------------------------------------------------------------------+</span></span>
 <span id="cb15-23"><a href="#cb15-23" tabindex="-1"></a>| <span class="kw">true</span>                                                                                           |</span>
 <span id="cb15-24"><a href="#cb15-24" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------------------------------------------------------------------------+</span></span>
-<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------+---------------+---------------+----------+</span></span>
-<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a>|    name    | family  | response_mode | requires_auth | disabled |</span>
-<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------+---------------+---------------+----------+</span></span>
-<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a>| <span class="kw">cancel</span>     | <span class="kw">query</span>   | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
-<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a>| <span class="kw">close</span>      | <span class="kw">query</span>   | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
-<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a>| fetch      | <span class="kw">query</span>   | <span class="kw">rows</span>          | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
-<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a>| manifest   | control | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
-<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a>| query_open | <span class="kw">query</span>   | session_open  | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
-<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------+---------------+---------------+----------+</span></span>
-<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
-<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a>| registered_exec |</span>
-<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
-<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a>| <span class="kw">true</span>            |</span>
-<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
-<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span>
-<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a>| server_name | method_count | has_exec |</span>
-<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span>
-<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a>| ducknng     | <span class="dv">6</span>            | <span class="kw">true</span>     |</span>
-<span id="cb15-43"><a href="#cb15-43" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span></code></pre></div>
+<span id="cb15-25"><a href="#cb15-25" tabindex="-1"></a><span class="op">+</span><span class="co">---------------+---------+---------------+---------------+----------+</span></span>
+<span id="cb15-26"><a href="#cb15-26" tabindex="-1"></a>|     name      | family  | response_mode | requires_auth | disabled |</span>
+<span id="cb15-27"><a href="#cb15-27" tabindex="-1"></a><span class="op">+</span><span class="co">---------------+---------+---------------+---------------+----------+</span></span>
+<span id="cb15-28"><a href="#cb15-28" tabindex="-1"></a>| <span class="kw">cancel</span>        | <span class="kw">query</span>   | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-29"><a href="#cb15-29" tabindex="-1"></a>| <span class="kw">close</span>         | <span class="kw">query</span>   | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-30"><a href="#cb15-30" tabindex="-1"></a>| fetch         | <span class="kw">query</span>   | <span class="kw">rows</span>          | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-31"><a href="#cb15-31" tabindex="-1"></a>| manifest      | control | metadata_only | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-32"><a href="#cb15-32" tabindex="-1"></a>| query_open    | <span class="kw">query</span>   | session_open  | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-33"><a href="#cb15-33" tabindex="-1"></a>| query_prepare | <span class="kw">query</span>   | <span class="kw">rows</span>          | <span class="kw">false</span>         | <span class="kw">false</span>    |</span>
+<span id="cb15-34"><a href="#cb15-34" tabindex="-1"></a><span class="op">+</span><span class="co">---------------+---------+---------------+---------------+----------+</span></span>
+<span id="cb15-35"><a href="#cb15-35" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
+<span id="cb15-36"><a href="#cb15-36" tabindex="-1"></a>| registered_exec |</span>
+<span id="cb15-37"><a href="#cb15-37" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
+<span id="cb15-38"><a href="#cb15-38" tabindex="-1"></a>| <span class="kw">true</span>            |</span>
+<span id="cb15-39"><a href="#cb15-39" tabindex="-1"></a><span class="op">+</span><span class="co">-----------------+</span></span>
+<span id="cb15-40"><a href="#cb15-40" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span>
+<span id="cb15-41"><a href="#cb15-41" tabindex="-1"></a>| server_name | method_count | has_exec |</span>
+<span id="cb15-42"><a href="#cb15-42" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span>
+<span id="cb15-43"><a href="#cb15-43" tabindex="-1"></a>| ducknng     | <span class="dv">7</span>            | <span class="kw">true</span>     |</span>
+<span id="cb15-44"><a href="#cb15-44" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+----------+</span></span></code></pre></div>
 <h3 id="synchronous-helpers">Synchronous helpers</h3>
 <div class="sourceCode" id="cb16"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="co">-- DDL statement over RPC.</span></span>
 <span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span> <span class="kw">FROM</span> ducknng_run_rpc(</span>
@@ -2839,7 +2876,7 @@ session helpers switch carriers automatically from the scheme;
 <span id="cb26-28"><a href="#cb26-28" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+</span></span>
 <span id="cb26-29"><a href="#cb26-29" tabindex="-1"></a>| server_name | method_count |</span>
 <span id="cb26-30"><a href="#cb26-30" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+</span></span>
-<span id="cb26-31"><a href="#cb26-31" tabindex="-1"></a>| ducknng     | <span class="dv">6</span>            |</span>
+<span id="cb26-31"><a href="#cb26-31" tabindex="-1"></a>| ducknng     | <span class="dv">7</span>            |</span>
 <span id="cb26-32"><a href="#cb26-32" tabindex="-1"></a><span class="op">+</span><span class="co">-------------+--------------+</span></span>
 <span id="cb26-33"><a href="#cb26-33" tabindex="-1"></a></span>
 <span id="cb26-34"><a href="#cb26-34" tabindex="-1"></a><span class="op">+</span><span class="co">------+-----------+----------+</span></span>

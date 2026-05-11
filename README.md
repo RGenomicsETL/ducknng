@@ -57,7 +57,7 @@ SELECT getvariable('tour_url') AS listen_url;
 +-----------------------+
 |      listen_url       |
 +-----------------------+
-| tcp://127.0.0.1:42133 |
+| tcp://127.0.0.1:39897 |
 +-----------------------+
 ```
 
@@ -88,7 +88,7 @@ FROM ducknng_decode_frame(
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
-| true | result    | manifest | 5            |
+| true | result    | manifest | 6            |
 +------+-----------+----------+--------------+
 ```
 
@@ -313,15 +313,19 @@ unstable functions in use are tracked by
 `tools/used_duckdb_unstable_api.R`; the table below is generated fresh
 on every README render:
 
-| ABI group                                | Functions used                                                                          | Count |
-|------------------------------------------|-----------------------------------------------------------------------------------------|------:|
-| `unstable_new_arrow_functions`           | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                  |     2 |
-| `unstable_new_error_data_functions`      | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message` |     3 |
-| `unstable_new_open_connect_functions`    | `duckdb_destroy_arrow_options`                                                          |     1 |
-| `unstable_new_query_execution_functions` | `duckdb_result_get_arrow_options`                                                       |     1 |
-| `unstable_new_scalar_function_functions` | `duckdb_scalar_function_set_bind`                                                       |     1 |
-| `unstable_new_string_functions`          | `duckdb_valid_utf8_check`                                                               |     1 |
-| `unstable_new_vector_functions`          | `duckdb_unsafe_vector_assign_string_element_len`                                        |     1 |
+| ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
+|------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
+| `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
+| `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
+| `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
+| `unstable_new_logger_functions`                | `duckdb_create_log_storage`, `duckdb_destroy_log_storage`, `duckdb_log_storage_set_extra_data`, `duckdb_log_storage_set_name`, `duckdb_log_storage_set_write_log_entry`, `duckdb_register_log_storage`                                                                                                                                  |     6 |
+| `unstable_new_open_connect_functions`          | `duckdb_connection_get_arrow_options`, `duckdb_destroy_arrow_options`                                                                                                                                                                                                                                                                   |     2 |
+| `unstable_new_prepared_statement_functions`    | `duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_logical_type`, `duckdb_prepared_statement_column_name`                                                                                                                                                                                                      |     3 |
+| `unstable_new_query_execution_functions`       | `duckdb_result_get_arrow_options`                                                                                                                                                                                                                                                                                                       |     1 |
+| `unstable_new_scalar_function_functions`       | `duckdb_scalar_function_set_bind`                                                                                                                                                                                                                                                                                                       |     1 |
+| `unstable_new_scalar_function_state_functions` | `duckdb_scalar_function_set_init`                                                                                                                                                                                                                                                                                                       |     1 |
+| `unstable_new_string_functions`                | `duckdb_valid_utf8_check`                                                                                                                                                                                                                                                                                                               |     1 |
+| `unstable_new_vector_functions`                | `duckdb_unsafe_vector_assign_string_element_len`                                                                                                                                                                                                                                                                                        |     1 |
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
 All tests live under `test/sql/` as `.test` files. The public function
@@ -782,15 +786,16 @@ FROM m;
 +------------------------------------------------------------------------------------------------+
 | true                                                                                           |
 +------------------------------------------------------------------------------------------------+
-+------------+---------+---------------+---------------+----------+
-|    name    | family  | response_mode | requires_auth | disabled |
-+------------+---------+---------------+---------------+----------+
-| cancel     | query   | metadata_only | false         | false    |
-| close      | query   | metadata_only | false         | false    |
-| fetch      | query   | rows          | false         | false    |
-| manifest   | control | metadata_only | false         | false    |
-| query_open | query   | session_open  | false         | false    |
-+------------+---------+---------------+---------------+----------+
++---------------+---------+---------------+---------------+----------+
+|     name      | family  | response_mode | requires_auth | disabled |
++---------------+---------+---------------+---------------+----------+
+| cancel        | query   | metadata_only | false         | false    |
+| close         | query   | metadata_only | false         | false    |
+| fetch         | query   | rows          | false         | false    |
+| manifest      | control | metadata_only | false         | false    |
+| query_open    | query   | session_open  | false         | false    |
+| query_prepare | query   | rows          | false         | false    |
++---------------+---------+---------------+---------------+----------+
 +-----------------+
 | registered_exec |
 +-----------------+
@@ -799,7 +804,7 @@ FROM m;
 +-------------+--------------+----------+
 | server_name | method_count | has_exec |
 +-------------+--------------+----------+
-| ducknng     | 6            | true     |
+| ducknng     | 7            | true     |
 +-------------+--------------+----------+
 ```
 
@@ -1393,7 +1398,7 @@ SELECT ducknng_stop_server('http_rpc');
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
-| ducknng     | 6            |
+| ducknng     | 7            |
 +-------------+--------------+
 
 +------+-----------+----------+
