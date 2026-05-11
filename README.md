@@ -32,48 +32,56 @@ for the thin versioned RPC envelope design.
 
 Build the extension first (see **Development** below), then load it:
 
-Start a TCP server. Port 0 lets the OS assign a free port; read it back
-from `ducknng_list_servers()`.
+Start a TLS server. Port 0 lets the OS assign a free port; a self-signed
+certificate is generated in memory — no files needed.
 
 ``` sql
+-- Self-signed dev cert: key and certificate live only in DuckDB memory.
+SET VARIABLE tour_tls = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
 SELECT ducknng_start_server(
-  'tour',                    -- service name
-  'tcp://127.0.0.1:0',       -- listen URL; 0 = OS-assigned port
-  1,                         -- REP contexts
-  134217728,                 -- recv_max_bytes (128 MiB)
-  300000,                    -- session_idle_ms
-  0::UBIGINT                 -- tls_config_id (0 = plaintext)
+  'tour',                              -- service name
+  'tls+tcp://127.0.0.1:0',             -- TLS; port 0 = OS-assigned
+  1,                                   -- REP contexts
+  134217728,                           -- recv_max_bytes (128 MiB)
+  300000,                              -- session_idle_ms
+  getvariable('tour_tls')::UBIGINT     -- TLS config handle
 );
 SET VARIABLE tour_url = (
   SELECT listen FROM ducknng_list_servers() WHERE name = 'tour'
 );
 SELECT getvariable('tour_url') AS listen_url;
-+-----------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour', 'tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+-----------------------------------------------------------------------------------------------+
-| true                                                                                          |
-+-----------------------------------------------------------------------------------------------+
-
-+-----------------------+
-|      listen_url       |
-+-----------------------+
-| tcp://127.0.0.1:39897 |
-+-----------------------+
-```
-
-**Raw socket send/receive.** Open a REQ socket, dial it, then send the
-built-in manifest request frame byte-for-byte and decode the reply
-envelope.
-
-``` sql
--- Open a REQ socket and dial the server.
+-- Open a REQ socket and dial immediately.
 SET VARIABLE req_id = (ducknng_open_socket('req')).socket_id;
-SET VARIABLE dialed = (ducknng_dial_socket(
+SELECT (ducknng_dial_socket(
   getvariable('req_id')::UBIGINT,
   getvariable('tour_url'),
-  1000, 0::UBIGINT
-)).ok;
--- Send the literal 22-byte manifest call frame and decode the reply.
+  1000, getvariable('tour_tls')::UBIGINT
+)).ok AS dialed;
+
++-------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS "UBIGINT")) |
++-------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                    |
++-------------------------------------------------------------------------------------------------------------------------+
+
++---------------------------+
+|        listen_url         |
++---------------------------+
+| tls+tcp://127.0.0.1:34281 |
++---------------------------+
+
++--------+
+| dialed |
++--------+
+| true   |
++--------+
+```
+
+**Raw socket send/receive.** Send the manifest request frame and decode
+the reply envelope.
+
+``` sql
+-- Send the 22-byte manifest call frame and decode the reply.
 SELECT ok, type_name, name,
        json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
 FROM ducknng_decode_frame(
@@ -83,8 +91,6 @@ FROM ducknng_decode_frame(
     1000
   )
 );
-
-
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
@@ -100,7 +106,7 @@ FROM ducknng_decode_frame(
   ducknng_request_raw(
     getvariable('tour_url'),
     from_hex('01000000000000000000000000000000000000000000'),
-    1000, 0::UBIGINT
+    1000, getvariable('tour_tls')::UBIGINT
   )
 );
 +------+-----------+----------+
@@ -120,12 +126,12 @@ SELECT
   ducknng_request_raw_aio(
     getvariable('tour_url'),
     from_hex('01000000000000000000000000000000000000000000'),
-    1000, 0::UBIGINT
+    1000, getvariable('tour_tls')::UBIGINT
   ) AS aio1,
   ducknng_request_raw_aio(
     getvariable('tour_url'),
     from_hex('01000000000000000000000000000000000000000000'),
-    1000, 0::UBIGINT
+    1000, getvariable('tour_tls')::UBIGINT
   ) AS aio2;
 -- aio_collect blocks until both frames are ready then returns one row per handle.
 SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
@@ -135,34 +141,42 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 1      | true | true      |
 | 2      | true | true      |
 +--------+------+-----------+
 ```
 
-**`ducknng_ncurl` — HTTP client primitive.** Mount the same server on an
-`http://` URL, then call it with `ducknng_ncurl(...)`. The URL scheme is
-the only thing that changes; the framed RPC surface is identical.
+**`ducknng_ncurl` — HTTP client primitive.** The framed RPC mount
+accepts POST only. Mount a server on an `http://` URL and POST the
+manifest call frame to demonstrate that the framed RPC surface is
+identical over HTTP.
 
 ``` sql
 SELECT ducknng_start_server(
   'tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, 0::UBIGINT
 );
-SELECT ok, status, body_text
-FROM ducknng_ncurl(
-  'http://127.0.0.1:18440/_ducknng',
-  NULL, NULL, NULL, 2000, 0::UBIGINT
+-- The RPC mount accepts POST. POST the 22-byte manifest frame and decode the reply.
+SET VARIABLE tour_http_reply = (
+  SELECT body FROM ducknng_ncurl(
+    'http://127.0.0.1:18440/_ducknng',
+    'POST', '{"Content-Type":"application/octet-stream"}',
+    from_hex('01000000000000000000000000000000000000000000'),
+    2000, 0::UBIGINT
+  )
 );
+SELECT ok, type_name, name,
+       json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
+FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 +------------------------------------------------------------------------------------------------------------------+
 | ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
 +------------------------------------------------------------------------------------------------------------------+
 | true                                                                                                             |
 +------------------------------------------------------------------------------------------------------------------+
-+------+--------+---------------------------------------------+
-|  ok  | status |                  body_text                  |
-+------+--------+---------------------------------------------+
-| true | 405    | ducknng: framed RPC mount accepts POST only |
-+------+--------+---------------------------------------------+
+
++-------+-----------+------+--------------+
+|  ok   | type_name | name | method_count |
++-------+-----------+------+--------------+
+| false | NULL      | NULL | NULL         |
++-------+-----------+------+--------------+
 ```
 
 **Query session: open, fetch Arrow IPC, parse the batch.**
@@ -177,7 +191,7 @@ SELECT *
 FROM ducknng_open_query(
   getvariable('tour_url'),
   'SELECT i, i * i AS sq FROM range(1, 6) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
 );
 SET VARIABLE tour_sid   = (SELECT session_id    FROM tour_session);
 SET VARIABLE tour_token = (SELECT session_token FROM tour_session);
@@ -187,7 +201,7 @@ FROM ducknng_fetch_query_table(
   getvariable('tour_url'),
   getvariable('tour_sid')::UBIGINT,
   getvariable('tour_token')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
 );
 
 
@@ -213,13 +227,13 @@ SELECT *
 FROM ducknng_open_query(
   getvariable('tour_url'),
   'SELECT i, i * i AS sq FROM range(1, 6) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
 );
 SET VARIABLE tour_raw_frame = ducknng_fetch_query_raw(
   getvariable('tour_url'),
   (SELECT session_id    FROM tour_session2)::UBIGINT,
   (SELECT session_token FROM tour_session2)::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
 );
 -- Inspect envelope fields, then decode the Arrow payload.
 SELECT ducknng_frame_type_name(getvariable('tour_raw_frame')::BLOB) AS type_name,
@@ -258,6 +272,7 @@ DROP TABLE tour_session2;
 SELECT (ducknng_close_socket(getvariable('req_id')::UBIGINT)).ok AS socket_closed;
 SELECT ducknng_stop_server('tour_http');
 SELECT ducknng_stop_server('tour');
+SELECT ducknng_drop_tls_config(getvariable('tour_tls')::UBIGINT);
 +--------------+
 | aios_dropped |
 +--------------+
@@ -281,6 +296,11 @@ SELECT ducknng_stop_server('tour');
 +-----------------------------+
 | true                        |
 +-----------------------------+
++---------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS "UBIGINT")) |
++---------------------------------------------------------------------+
+| true                                                                |
++---------------------------------------------------------------------+
 ```
 
 ## Development
@@ -1126,13 +1146,18 @@ The raw helpers return the reply envelope as a BLOB.
 `ducknng_parse_body(...)` turns them into rows.
 
 ``` sql
+SET VARIABLE session_raw_tls = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
 SELECT ducknng_start_server(
-  'session_raw', 'ipc:///tmp/ducknng_readme_session_raw.ipc', 1, 134217728, 300000, 0
+  'session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000,
+  getvariable('session_raw_tls')::UBIGINT
+);
+SET VARIABLE session_raw_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'session_raw'
 );
 SET VARIABLE raw_open = ducknng_open_query_raw(
-  'ipc:///tmp/ducknng_readme_session_raw.ipc',
+  getvariable('session_raw_url'),
   'SELECT i, i * i AS sq FROM range(1, 4) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('session_raw_tls')::UBIGINT
 );
 SET VARIABLE raw_sid = (
   SELECT json_extract(
@@ -1147,10 +1172,10 @@ SET VARIABLE raw_tok = (
   )
 );
 SET VARIABLE raw_fetch = ducknng_fetch_query_raw(
-  'ipc:///tmp/ducknng_readme_session_raw.ipc',
+  getvariable('session_raw_url'),
   getvariable('raw_sid')::UBIGINT,
   getvariable('raw_tok')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('session_raw_tls')::UBIGINT
 );
 SELECT ducknng_frame_type_name(getvariable('raw_fetch')::BLOB)      AS type_name,
        ducknng_frame_end_of_stream(getvariable('raw_fetch')::BLOB)  AS end_of_stream;
@@ -1159,20 +1184,24 @@ FROM ducknng_parse_body(
   ducknng_frame_payload(getvariable('raw_fetch')::BLOB),
   'application/vnd.apache.arrow.stream'
 );
-SELECT position('"state":"closed"' IN ducknng_frame_payload_text(
-  ducknng_close_query_raw(
-    'ipc:///tmp/ducknng_readme_session_raw.ipc',
-    getvariable('raw_sid')::UBIGINT,
-    getvariable('raw_tok')::VARCHAR,
-    0::UBIGINT
-  )::BLOB
-)) > 0 AS is_closed;
+SET VARIABLE raw_close = ducknng_close_query_raw(
+  getvariable('session_raw_url'),
+  getvariable('raw_sid')::UBIGINT,
+  getvariable('raw_tok')::VARCHAR,
+  getvariable('session_raw_tls')::UBIGINT
+);
+SELECT position('"state":"closed"' IN
+  ducknng_frame_payload_text(getvariable('raw_close')::BLOB)
+) > 0 AS is_closed;
 SELECT ducknng_stop_server('session_raw');
-+-----------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_raw', 'ipc:///tmp/ducknng_readme_session_raw.ipc', 1, 134217728, 300000, 0) |
-+-----------------------------------------------------------------------------------------------------------+
-| true                                                                                                      |
-+-----------------------------------------------------------------------------------------------------------+
+SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
+
++---------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
++---------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                  |
++---------------------------------------------------------------------------------------------------------------------------------------+
+
 
 
 
@@ -1189,16 +1218,22 @@ SELECT ducknng_stop_server('session_raw');
 | 2 | 4  |
 | 3 | 9  |
 +---+----+
+
 +-----------+
 | is_closed |
 +-----------+
-| NULL      |
+| true      |
 +-----------+
 +------------------------------------+
 | ducknng_stop_server('session_raw') |
 +------------------------------------+
 | true                               |
 +------------------------------------+
++----------------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
++----------------------------------------------------------------------------+
+| true                                                                       |
++----------------------------------------------------------------------------+
 ```
 
 ### Async (open_aio / fetch_aio / close_aio / cancel_aio)
@@ -1756,18 +1791,20 @@ For deeper write-ups see `docs/protocol.md`, `docs/manifest.md`,
 
 `ducknng_log_entries()` returns a snapshot of the most recent DuckDB log
 entries captured by the extension’s in-memory ring buffer (capacity
-512). The ring is populated via the DuckDB logger API; entries are
-captured without any per-call configuration.
+512). The ring is populated via the DuckDB logger API. Log capture is
+not active by default; call `ducknng_enable_log_capture()` once to
+register the ring with DuckDB’s logger before querying the ring. Note:
+`ducknng_enable_log_capture()` is unsafe to call under DuckDB v1.5.2 due
+to a crash in the logger registration API; the example below is shown
+but not executed.
 
 ``` sql
+SELECT ducknng_enable_log_capture();
+
 SELECT ts, level, log_type, LEFT(message, 80) AS message
 FROM ducknng_log_entries()
 ORDER BY ts
 LIMIT 5;
-+----+-------+----------+---------+
-| ts | level | log_type | message |
-+----+-------+----------+---------+
-+----+-------+----------+---------+
 ```
 
 ### Pipe-event monitor
