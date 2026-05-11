@@ -1,16 +1,99 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Generate description.yml for DuckDB community-extension submission.
-# Run from the repo root: bash scripts/generate_description_yml.sh > description.yml
+# Run from the repo root:
+#   bash scripts/generate_description_yml.sh > description.yml
+#
+# With --render, run the hello_world SQL through DuckDB and include output:
+#   make release && bash scripts/generate_description_yml.sh --render > description.yml
 
 EXTENSION_NAME="ducknng"
 GIT_REF=$(git rev-parse HEAD)
 DESCRIPTION="Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, and a body codec layer"
-VERSION="0.1.0"
+VERSION="0.1.0.9000"
 LANGUAGE="C"
 BUILD="cmake"
 LICENSE="MIT"
 MAINTAINER="sounkou-bioinfo"
+
+HELLO_SQL=$(cat <<'SQLEOF'
+LOAD ducknng;
+SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);
+SELECT * FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);
+SELECT ducknng_stop_server('demo');
+SQLEOF
+)
+
+render_hello() {
+    local ext_path="$(pwd)/build/release/ducknng.duckdb_extension"
+    if [ ! -f "$ext_path" ]; then
+        non_render_hello
+        return
+    fi
+    # Write SQL to temp file, run once, then parse output line by line
+    local tmpf
+    tmpf=$(mktemp)
+    printf '%s\n' "${HELLO_SQL}" > "$tmpf"
+    /usr/local/bin/duckdb152 -unsigned -c "$(cat "$tmpf")" 2>&1 > "${tmpf}.out"
+    local output
+    output=$(cat "${tmpf}.out")
+    rm -f "$tmpf" "${tmpf}.out"
+
+    # Extract the three box-drawing tables
+    local t1 t2 t3
+    t1=$(echo "$output" | awk '/^┌/{found++; if(found==1) print; next} found==1{print; if(/^└/) exit}')
+    t2=$(echo "$output" | awk '/^┌/{found++; if(found==2) print; next} found==2{print; if(/^└/) exit}')
+    t3=$(echo "$output" | awk '/^┌/{found++; if(found==3) print; next} found==3{print; if(/^└/) exit}')
+
+    echo "    -- Load the extension"
+    echo "    LOAD ducknng;"
+    echo ""
+    echo "    -- Start an inproc REP server and run SQL"
+    echo "    SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);"
+    echo ""
+    echo "$t1" | sed 's/^/    /'
+    echo ""
+    echo "    -- ducknng_query_rpc returns the actual result rows"
+    echo "    SELECT *"
+    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);"
+    echo ""
+    echo "$t2" | sed 's/^/    /'
+    echo ""
+    echo "    SELECT ducknng_stop_server('demo');"
+    echo ""
+    echo "$t3" | sed 's/^/    /'
+}
+
+non_render_hello() {
+    echo "    -- Load the extension"
+    echo "    LOAD ducknng;"
+    echo ""
+    echo "    -- Start an inproc REP server and run SQL"
+    echo "    SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);"
+    echo ""
+    echo "    -- ducknng_query_rpc returns the actual result rows"
+    echo "    SELECT *"
+    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);"
+    echo ""
+    echo "    SELECT ducknng_stop_server('demo');"
+}
+
+HELLO_TEXT=""
+if [ "${1:-}" = "--render" ]; then
+    HELLO_TEXT=$(render_hello)
+else
+    HELLO_TEXT="    -- Load the extension
+    LOAD ducknng;
+
+    -- Start an inproc REP server and run SQL
+    SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);
+
+    -- ducknng_query_rpc returns the actual result rows
+    SELECT *
+    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);
+
+    SELECT ducknng_stop_server('demo');"
+fi
 
 cat <<YAML
 extension:
@@ -31,22 +114,7 @@ repo:
 
 docs:
   hello_world: |
-    -- Load the extension
-    LOAD ducknng;
-
-    -- Start an inproc REP server
-    SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);
-
-    -- Run remote SQL via framed RPC
-    SELECT ok, rows_changed
-    FROM ducknng_query_rpc('inproc://ducknng_demo', 'CREATE TABLE IF NOT EXISTS nums AS SELECT range AS i FROM range(1, 4)', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT);
-
-    -- Open a query session and fetch results
-    SELECT session_id, state
-    FROM ducknng_open_query('inproc://ducknng_demo', 'SELECT i, i * i AS sq FROM nums', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT);
-
-    SELECT ducknng_stop_server('demo');
-
+${HELLO_TEXT}
   extended_description: |
     ducknng is a pure C DuckDB extension that exposes a DuckDB-backed SQL and
     RPC server over NNG (Nanomsg Next Generation) using Arrow IPC with nanoarrow C

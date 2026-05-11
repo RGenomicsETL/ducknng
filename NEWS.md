@@ -1,5 +1,16 @@
 # News
 
+## ducknng 0.1.0.9000 — community submission release
+
+Community-extension submission to duckdb/community-extensions (#1904).
+
+- 110 SQL functions across 16 categories: Server, NNG Sockets, Framed RPC, HTTP Client,
+  HTTP Routes, HTTP Workers, HTTP Helpers, Body Codecs, TLS, Service, Admission,
+  Monitoring, Async I/O, Method Registry, Frame Helpers, SQL Macros.
+- Cross-platform Linux/macOS; Windows requires MinGW/Rtools (MSVC excluded for MbedTLS).
+- All 20+ sqllogictest integration tests pass.
+- Full README rendered at https://github.com/sounkou-bioinfo/ducknng
+
 ## ducknng 0.1.0 — first sealed release
 
 The 0.1.0 public API is sealed. Names, contracts, and method schemas in the current implementation and documentation are stable and should not change casually. All must-resolve items in `docs/api_sealing_checklist.md` are resolved.
