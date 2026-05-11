@@ -67,7 +67,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:36333 |
+| tls+tcp://127.0.0.1:46385 |
 +---------------------------+
 
 +--------+
@@ -141,7 +141,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 2      | true | true      |
+| 1      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -1949,11 +1949,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+-----------+---------------+-----------------+---------------+
-|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
-+-----------+---------------+-----------------+---------------+
-| 614192562 | 1778523232568 | 127.0.0.1:49834 | NULL          |
-+-----------+---------------+-----------------+---------------+
++------------+---------------+-----------------+---------------+
+|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
++------------+---------------+-----------------+---------------+
+| 1851322868 | 1778523416539 | 127.0.0.1:49202 | NULL          |
++------------+---------------+-----------------+---------------+
 ```
 
 ``` sql
@@ -1973,33 +1973,15 @@ SELECT ducknng_stop_server('monitor_demo');
 
 ## Status
 
-Sealed and runnable in 0.1.0: NNG transports and socket patterns;
-first-class one-shot AIO across socket send/recv, ncurl HTTP, and unary
-RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions);
-low-level HTTP routes with exact, prefix, or template matching, SQL
-response rows, request-context/body helpers, named request accessors,
-one-row response builders, route-local auth policies, static asset
-serving, background workers, and content-type shortcuts for NDJSON and
-SSE responses (`ducknng_http_ndjson`, `ducknng_format_sse`,
-`ducknng_add_stream_route` — `ducknng_http_ndjson` is a one-shot NDJSON
-response builder; `ducknng_format_sse` formats a Server-Sent Events
-event string; `ducknng_add_stream_route` registers a chunked-streaming
-route that writes each result row as a separate HTTP chunk); fast C
-admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists,
-per-service and per-principal resource limits); SQL authorizer
-callbacks; bounded per-service pipe-event monitor and active-pipe
-snapshot; DuckDB log ring captured via the logger API
-(`ducknng_log_entries()`); body codec layer with built-in providers and
-user-registered codec hooks.
+Version 0.1.0. All features shown in this README are implemented,
+tested, and runnable. The extension builds against DuckDB v1.5.2 using
+the C API only.
 
 Intentionally deferred:
 
 - CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
   table-function path.
-- Routing/forwarding and mesh scheduling as sealed APIs — the pipe
-  monitor and active-pipe snapshot are the membership/telemetry
-  foundation that comes first.
 
 ## References
 
