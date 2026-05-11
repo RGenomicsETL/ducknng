@@ -67,7 +67,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:43593 |
+| tls+tcp://127.0.0.1:36333 |
 +---------------------------+
 
 +--------+
@@ -141,7 +141,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 1      | true | true      |
+| 2      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -259,6 +259,39 @@ FROM ducknng_parse_body(
 | 4 | 16 |
 | 5 | 25 |
 +---+----+
+```
+
+**SSE streaming route.** `ducknng_add_stream_route` registers a
+chunked-streaming route. The SQL must return a `chunk` column; each
+non-null row is written to the client as a separate HTTP chunk.
+`ducknng_format_sse` formats a Server-Sent Events event string.
+
+``` sql
+SELECT ducknng_add_stream_route(
+  'tour_http', 'GET', '/events',
+  'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
+   FROM generate_series(1, 3) t(i)'
+);
+-- ncurl transparently reassembles the chunked body.
+SELECT ok, status, body_text
+FROM ducknng_ncurl('http://127.0.0.1:18440/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
++--------------------------------------+
+| ducknng_add_stream_route('tour_http', 'GET', '/events', 'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
+   FROM generate_series(1, 3) t(i)') |
++--------------------------------------+
+| true                                 |
++--------------------------------------+
++------+--------+-----------+
+|  ok  | status | body_text |
++------+--------+-----------+
+| true | 200    | data: tick 1
+
+data: tick 2
+
+data: tick 3
+
+          |
++------+--------+-----------+
 ```
 
 Explicit cleanup — everything that was opened must be explicitly
@@ -1916,11 +1949,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1140650898 | 1778522619682 | 127.0.0.1:56060 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 614192562 | 1778523232568 | 127.0.0.1:49834 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

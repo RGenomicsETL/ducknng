@@ -217,6 +217,20 @@ FROM ducknng_parse_body(
 );
 ```
 
+**SSE streaming route.** `ducknng_add_stream_route` registers a chunked-streaming route. The SQL must return a `chunk` column; each non-null row is written to the client as a separate HTTP chunk. `ducknng_format_sse` formats a Server-Sent Events event string.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_add_stream_route(
+  'tour_http', 'GET', '/events',
+  'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
+   FROM generate_series(1, 3) t(i)'
+);
+
+-- ncurl transparently reassembles the chunked body.
+SELECT ok, status, body_text
+FROM ducknng_ncurl('http://127.0.0.1:18440/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
+```
+
 Explicit cleanup — everything that was opened must be explicitly stopped, closed, or dropped.
 
 ```{duckdb collapse=TRUE, comment=""}
