@@ -450,6 +450,39 @@ static void ducknng_http_path_params_get_scalar(duckdb_function_info info, duckd
     }
 }
 
+/* Per-thread scratch state for ducknng_http_headers_build_scalar.
+ * Holds reusable pointer arrays that grow on demand, avoiding per-row malloc/free
+ * of the four pointer arrays themselves.  The strings they point to are still
+ * allocated and freed per-row. */
+typedef struct {
+    char **names;
+    char **values;
+    char **escaped_names;
+    char **escaped_values;
+    idx_t cap;
+} ducknng_headers_build_state;
+
+static void ducknng_headers_build_state_destroy(void *ptr) {
+    ducknng_headers_build_state *s = (ducknng_headers_build_state *)ptr;
+    if (!s) return;
+    if (s->names) duckdb_free(s->names);
+    if (s->values) duckdb_free(s->values);
+    if (s->escaped_names) duckdb_free(s->escaped_names);
+    if (s->escaped_values) duckdb_free(s->escaped_values);
+    duckdb_free(s);
+}
+
+static void ducknng_headers_build_init_cb(duckdb_init_info info) {
+    ducknng_headers_build_state *s =
+        (ducknng_headers_build_state *)duckdb_malloc(sizeof(*s));
+    if (!s) {
+        duckdb_scalar_function_init_set_error(info, "ducknng: out of memory in headers_build init");
+        return;
+    }
+    memset(s, 0, sizeof(*s));
+    duckdb_scalar_function_init_set_state(info, s, ducknng_headers_build_state_destroy);
+}
+
 static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_data_chunk input,
     duckdb_vector output) {
     idx_t row_count = duckdb_data_chunk_get_size(input);
@@ -459,6 +492,8 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
     duckdb_list_entry *value_entries = (duckdb_list_entry *)duckdb_vector_get_data(values_vec);
     duckdb_vector name_child = duckdb_list_vector_get_child(names_vec);
     duckdb_vector value_child = duckdb_list_vector_get_child(values_vec);
+    ducknng_headers_build_state *state =
+        (ducknng_headers_build_state *)duckdb_scalar_function_get_state(info);
     idx_t row;
     for (row = 0; row < row_count; row++) {
         duckdb_list_entry name_entry = name_entries[row];
@@ -470,6 +505,7 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
         char **values = NULL;
         char **escaped_names = NULL;
         char **escaped_values = NULL;
+        int using_state = 0;
         char *out = NULL;
         size_t off = 0;
         int failed = 0;
@@ -482,22 +518,60 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
             return;
         }
         if (name_entry.length > 0) {
-            names = (char **)duckdb_malloc(sizeof(*names) * (size_t)name_entry.length);
-            values = (char **)duckdb_malloc(sizeof(*values) * (size_t)name_entry.length);
-            escaped_names = (char **)duckdb_malloc(sizeof(*escaped_names) * (size_t)name_entry.length);
-            escaped_values = (char **)duckdb_malloc(sizeof(*escaped_values) * (size_t)name_entry.length);
-            if (!names || !values || !escaped_names || !escaped_values) {
-                if (names) duckdb_free(names);
-                if (values) duckdb_free(values);
-                if (escaped_names) duckdb_free(escaped_names);
-                if (escaped_values) duckdb_free(escaped_values);
-                duckdb_scalar_function_set_error(info, "ducknng: out of memory");
-                return;
+            if (state) {
+                /* Grow the per-thread scratch arrays if needed. */
+                if (state->cap < name_entry.length) {
+                    idx_t newcap = name_entry.length + 8;
+                    char **nn = (char **)duckdb_malloc(sizeof(*nn) * (size_t)newcap);
+                    char **vv = (char **)duckdb_malloc(sizeof(*vv) * (size_t)newcap);
+                    char **en = (char **)duckdb_malloc(sizeof(*en) * (size_t)newcap);
+                    char **ev = (char **)duckdb_malloc(sizeof(*ev) * (size_t)newcap);
+                    if (!nn || !vv || !en || !ev) {
+                        if (nn) duckdb_free(nn);
+                        if (vv) duckdb_free(vv);
+                        if (en) duckdb_free(en);
+                        if (ev) duckdb_free(ev);
+                        duckdb_scalar_function_set_error(info, "ducknng: out of memory growing headers_build state");
+                        return;
+                    }
+                    if (state->names) duckdb_free(state->names);
+                    if (state->values) duckdb_free(state->values);
+                    if (state->escaped_names) duckdb_free(state->escaped_names);
+                    if (state->escaped_values) duckdb_free(state->escaped_values);
+                    state->names = nn;
+                    state->values = vv;
+                    state->escaped_names = en;
+                    state->escaped_values = ev;
+                    state->cap = newcap;
+                }
+                names = state->names;
+                values = state->values;
+                escaped_names = state->escaped_names;
+                escaped_values = state->escaped_values;
+                using_state = 1;
+                memset(names, 0, sizeof(*names) * (size_t)name_entry.length);
+                memset(values, 0, sizeof(*values) * (size_t)name_entry.length);
+                memset(escaped_names, 0, sizeof(*escaped_names) * (size_t)name_entry.length);
+                memset(escaped_values, 0, sizeof(*escaped_values) * (size_t)name_entry.length);
+            } else {
+                /* Fallback: allocate per-row if no per-thread state. */
+                names = (char **)duckdb_malloc(sizeof(*names) * (size_t)name_entry.length);
+                values = (char **)duckdb_malloc(sizeof(*values) * (size_t)name_entry.length);
+                escaped_names = (char **)duckdb_malloc(sizeof(*escaped_names) * (size_t)name_entry.length);
+                escaped_values = (char **)duckdb_malloc(sizeof(*escaped_values) * (size_t)name_entry.length);
+                if (!names || !values || !escaped_names || !escaped_values) {
+                    if (names) duckdb_free(names);
+                    if (values) duckdb_free(values);
+                    if (escaped_names) duckdb_free(escaped_names);
+                    if (escaped_values) duckdb_free(escaped_values);
+                    duckdb_scalar_function_set_error(info, "ducknng: out of memory");
+                    return;
+                }
+                memset(names, 0, sizeof(*names) * (size_t)name_entry.length);
+                memset(values, 0, sizeof(*values) * (size_t)name_entry.length);
+                memset(escaped_names, 0, sizeof(*escaped_names) * (size_t)name_entry.length);
+                memset(escaped_values, 0, sizeof(*escaped_values) * (size_t)name_entry.length);
             }
-            memset(names, 0, sizeof(*names) * (size_t)name_entry.length);
-            memset(values, 0, sizeof(*values) * (size_t)name_entry.length);
-            memset(escaped_names, 0, sizeof(*escaped_names) * (size_t)name_entry.length);
-            memset(escaped_values, 0, sizeof(*escaped_values) * (size_t)name_entry.length);
         }
         for (i = 0; i < name_entry.length; i++) {
             idx_t name_idx = (idx_t)name_entry.offset + i;
@@ -549,6 +623,7 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
         out[off] = '\0';
         json = out;
 cleanup_headers_build:
+        /* Always free the per-header strings; only free the pointer arrays if not using state. */
         if (names) {
             for (i = 0; i < name_entry.length; i++) {
                 if (names[i]) duckdb_free(names[i]);
@@ -556,10 +631,12 @@ cleanup_headers_build:
                 if (escaped_names[i]) duckdb_free(escaped_names[i]);
                 if (escaped_values[i]) duckdb_free(escaped_values[i]);
             }
-            duckdb_free(names);
-            duckdb_free(values);
-            duckdb_free(escaped_names);
-            duckdb_free(escaped_values);
+            if (!using_state) {
+                duckdb_free(names);
+                duckdb_free(values);
+                duckdb_free(escaped_names);
+                duckdb_free(escaped_values);
+            }
         }
         if (failed) return;
         if (json) {
@@ -1102,13 +1179,27 @@ static int register_http_headers_build_scalar(duckdb_connection con, ducknng_sql
     duckdb_logical_type child_type;
     duckdb_logical_type param_types[2];
     duckdb_logical_type return_type;
-    int ok;
+    duckdb_scalar_function f;
+    int ok = 0;
     child_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     param_types[0] = duckdb_create_list_type(child_type);
     param_types[1] = duckdb_create_list_type(child_type);
     return_type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, 2,
-        ducknng_http_headers_build_scalar, ctx, param_types, return_type);
+    f = duckdb_create_scalar_function();
+    if (f) {
+        duckdb_scalar_function_set_name(f, name);
+        duckdb_scalar_function_add_parameter(f, param_types[0]);
+        duckdb_scalar_function_add_parameter(f, param_types[1]);
+        duckdb_scalar_function_set_return_type(f, return_type);
+        duckdb_scalar_function_set_function(f, ducknng_http_headers_build_scalar);
+        duckdb_scalar_function_set_init(f, ducknng_headers_build_init_cb);
+        duckdb_scalar_function_set_special_handling(f);
+        duckdb_scalar_function_set_volatile(f);
+        if (ducknng_set_scalar_sql_context(f, ctx)) {
+            ok = (duckdb_register_scalar_function(con, f) != DuckDBError);
+        }
+        duckdb_destroy_scalar_function(&f);
+    }
     duckdb_destroy_logical_type(&child_type);
     ducknng_http_destroy_logical_types(param_types, 2);
     duckdb_destroy_logical_type(&return_type);

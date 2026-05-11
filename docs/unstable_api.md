@@ -352,13 +352,14 @@ exposed.
 from a `duckdb_prepared_statement` before it is executed. Previously, column metadata was
 only available after calling `duckdb_execute_prepared` or its variants.
 
-**Current situation.** `ducknng` builds its Arrow IPC schema after execution via
-`duckdb_to_arrow_schema` on the result's logical types. There is no current need to
-inspect columns before execution.
-
-**Recommendation: LOW priority.** Could be used in a future `describe` or
-`query_prepare` RPC method that returns schema metadata without executing the query.
-Keep in mind for protocol extensions.
+**Status: ADOPTED.** Used to implement the `query_prepare` RPC method. The helper
+`ducknng_prepared_schema_to_ipc` in `src/ducknng_ipc_out.c` calls
+`duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_name`, and
+`duckdb_prepared_statement_column_logical_type` to build the Arrow IPC schema for a
+prepared statement and serialize a zero-batch Arrow stream. The `query_prepare` method
+handler in `src/ducknng_methods.c` prepares the final statement in a multi-statement
+query and returns this schema stream without executing the query. This gives clients the
+output column names and types before committing to execution.
 
 ---
 
@@ -374,9 +375,12 @@ gets the per-connection options that were in effect when the result was produced
 `duckdb_result_get_arrow_options` retrieves those options from the result object itself.
 Both must be destroyed with `duckdb_destroy_arrow_options`.
 
-**Recommendation: LOW priority.** The current emit path uses `duckdb_to_arrow_schema`
-and `duckdb_data_chunk_to_arrow` without Arrow options. If encoding fidelity for
-timezone-aware or large-string columns becomes important, these can be wired in.
+**Status: ADOPTED.** Both functions are used in `src/ducknng_ipc_out.c`:
+`duckdb_result_get_arrow_options` is called in the main `ducknng_result_to_ipc_stream`
+path to retrieve Arrow options from the result, and `duckdb_connection_get_arrow_options`
+is called in `ducknng_prepared_schema_to_ipc` where a result object is not available
+(schema-only path). The options are passed to `duckdb_to_arrow_schema` and
+`duckdb_data_chunk_to_arrow` to ensure correct timezone and large-string encoding.
 
 ---
 
@@ -392,12 +396,15 @@ callback is called once per execution context to allocate thread-local state (e.
 compiled regex, a connection handle, a reusable buffer). The execute callback retrieves
 that state with `duckdb_scalar_function_get_state`.
 
-**Current situation.** `ducknng` scalar functions are stateless or use shared state via
-`extra_info`. HTTP lookup functions carry bind-time constant data through the bind-data
-pattern adopted in `unstable_new_scalar_function_functions`.
-
-**Recommendation: LOW priority.** Relevant if a future scalar function needs per-thread
-initialisation (e.g. a connection pool slot per DuckDB worker thread). Not needed today.
+**Status: ADOPTED.** Used in `src/ducknng_sql_http.c` for `ducknng_http_headers_build`.
+The init callback `ducknng_headers_build_init_cb` allocates a
+`ducknng_headers_build_state` struct containing pointer arrays for header name/value
+pairs and their escaped counterparts. The struct is registered via
+`duckdb_scalar_function_init_set_state` with a corresponding destroy callback. The
+execute callback retrieves it with `duckdb_scalar_function_get_state` and reuses the
+arrays across rows, growing them on demand. If state is NULL (fallback), the function
+falls back to per-row allocation. This eliminates repeated malloc/free cycles during
+batch execution of `ducknng_http_headers_build`.
 
 ---
 
@@ -424,12 +431,11 @@ without executing a query.
 Useful in TVF bind callbacks and scalar bind callbacks where values must be returned
 without executing a query.
 
-**Current situation.** `ducknng` bind callbacks use `duckdb_get_varchar` / `duckdb_get_int64`
-/ `duckdb_get_double` for the constant-folded values in HTTP lookup functions. MAP, UNION,
-and TIME_NS are not part of the current RPC payload surface.
-
-**Recommendation: LOW priority.** Adopt if `ducknng` needs to return MAP or UNION typed
-results from bind-phase constant folding or from new RPC methods.
+**Recommendation: NOT applicable.** MAP, UNION, and TIME_NS are not part of the current
+RPC payload surface. `ducknng` bind callbacks use `duckdb_get_varchar` / `duckdb_get_int64`
+/ `duckdb_get_double` for constant-folded values in HTTP lookup functions. Revisit if
+`ducknng` needs to return MAP or UNION typed results from bind-phase constant folding or
+from new RPC methods.
 
 ---
 
@@ -447,10 +453,10 @@ results from bind-phase constant folding or from new RPC methods.
 | `unstable_new_open_connect_functions` | NOT applicable | `duckdb_client_context_get_connection_id` would change the public wire session_id; counter is correct |
 | `unstable_new_logger_functions` | **DONE** | `ducknng_enable_log_capture()` scalar defers `duckdb_register_log_storage` to query time to avoid v1.5.2 load-time crash |
 | `unstable_new_config_options_functions` | **DONE** | `ducknng.csv_max_columns` registered at load time; read in CSV/TSV body-parse bind callback |
-| `unstable_new_prepared_statement_functions` | **LOW** | Useful for a future `query_prepare` or `describe` RPC method |
-| `unstable_new_query_execution_functions` | **LOW** | `duckdb_result_get_arrow_options` for timezone/large-string encoding fidelity |
-| `unstable_new_scalar_function_state_functions` | **LOW** | Per-thread init state; not needed today |
-| `unstable_new_value_functions` | **LOW** | MAP/UNION/TIME_NS construction; not part of current payload surface |
+| `unstable_new_prepared_statement_functions` | **DONE** | `query_prepare` RPC method; `ducknng_prepared_schema_to_ipc` in `ducknng_ipc_out.c` |
+| `unstable_new_query_execution_functions` | **DONE** | `duckdb_result_get_arrow_options` in result path; `duckdb_connection_get_arrow_options` in prepared-schema path |
+| `unstable_new_scalar_function_state_functions` | **DONE** | Per-thread scratch buffer for `ducknng_http_headers_build` in `ducknng_sql_http.c` |
+| `unstable_new_value_functions` | NOT applicable | MAP/UNION/TIME_NS not part of current payload surface |
 | `unstable_new_vector_functions` | PARTIAL | `duckdb_unsafe_vector_assign_string_element_len` adopted; remaining vector manipulation functions not needed |
 | `unstable_new_geo_functions` | NOT applicable | GEOMETRY CRS metadata; `ducknng` does not handle geometry columns |
 | `unstable_new_table_description_functions` | NOT applicable | Named-table schema introspection not used |

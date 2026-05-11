@@ -130,6 +130,7 @@ close	false
 fetch	false
 manifest	false
 query_open	false
+query_prepare	false
 
 query I
 SELECT ducknng_set_method_auth('manifest', true)
@@ -233,6 +234,7 @@ close
 fetch
 manifest
 query_open
+query_prepare
 
 query I
 SELECT CASE WHEN ducknng_stop_server('sql0') THEN 1 ELSE 0 END

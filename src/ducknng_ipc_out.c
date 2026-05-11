@@ -365,8 +365,77 @@ done:
 }
 
 /* -------------------------------------------------------------------------
- * Public API: result → IPC stream (single next chunk)
+ * Public API: prepared statement schema → IPC stream (0 data batches)
+ * Uses unstable_new_prepared_statement_functions to read column metadata
+ * before execution, and unstable_new_open_connect_functions Arrow options
+ * for encoding fidelity.
  * ---------------------------------------------------------------------- */
+
+int ducknng_prepared_schema_to_ipc(duckdb_connection con, duckdb_prepared_statement stmt,
+    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    idx_t ncols;
+    idx_t col;
+    duckdb_logical_type *types = NULL;
+    const char **names = NULL;
+    duckdb_arrow_options opts = NULL;
+    duckdb_error_data err = NULL;
+    struct ArrowSchema schema;
+    int rc = -1;
+
+    memset(&schema, 0, sizeof(schema));
+
+    if (!con || !stmt || !out_bytes || !out_len) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid arguments to ducknng_prepared_schema_to_ipc");
+        return -1;
+    }
+
+    ncols = duckdb_prepared_statement_column_count(stmt);
+    if (ncols > 0) {
+        types = (duckdb_logical_type *)malloc(sizeof(*types) * (size_t)ncols);
+        names = (const char **)malloc(sizeof(*names) * (size_t)ncols);
+        if (!types || !names) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building prepared schema arrays");
+            goto cleanup;
+        }
+        memset(types, 0, sizeof(*types) * (size_t)ncols);
+        for (col = 0; col < ncols; col++) {
+            types[col] = duckdb_prepared_statement_column_logical_type(stmt, col);
+            names[col] = duckdb_prepared_statement_column_name(stmt, col);
+        }
+    }
+
+    duckdb_connection_get_arrow_options(con, &opts);
+    if (!opts) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to get Arrow options for prepared schema");
+        goto cleanup;
+    }
+
+    err = duckdb_to_arrow_schema(opts, types, names, ncols, &schema);
+    if (duckdb_error_data_has_error(err)) {
+        if (errmsg) *errmsg = ducknng_strdup(duckdb_error_data_message(err));
+        goto cleanup;
+    }
+
+    /* Serialize schema with 0 data batches. */
+    rc = ducknng_ipc_arrays_to_bytes(&schema, NULL, 0, out_bytes, out_len, errmsg);
+    memset(&schema, 0, sizeof(schema)); /* consumed on success */
+    goto done;
+
+cleanup:
+    rc = -1;
+done:
+    if (err) duckdb_destroy_error_data(&err);
+    if (opts) duckdb_destroy_arrow_options(&opts);
+    if (types) {
+        for (col = 0; col < ncols; col++)
+            if (types[col]) duckdb_destroy_logical_type(&types[col]);
+        free(types);
+    }
+    if (names) free(names);
+    if (schema.release) ArrowSchemaRelease(&schema);
+    return rc;
+}
+
 
 int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {

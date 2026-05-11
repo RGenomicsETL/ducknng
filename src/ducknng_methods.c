@@ -500,6 +500,130 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
         session_id, "cancelled");
 }
 
+static int ducknng_method_query_prepare_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    ducknng_query_open_request open_req;
+    ducknng_service_sql_scope scope;
+    duckdb_extracted_statements extracted = NULL;
+    duckdb_prepared_statement stmt = NULL;
+    uint8_t *payload = NULL;
+    size_t payload_len = 0;
+    char *errmsg = NULL;
+    idx_t n_stmts = 0;
+    idx_t i;
+    (void)method;
+
+    memset(&open_req, 0, sizeof(open_req));
+    memset(&scope, 0, sizeof(scope));
+
+    if (!svc || !svc->rt || !req || !req->frame || !reply) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: missing query_prepare execution context");
+        return -1;
+    }
+    if (ducknng_decode_query_open_payload(req->frame->payload, (size_t)req->frame->payload_len,
+            &open_req, &errmsg) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            errmsg ? errmsg : "ducknng: invalid query_prepare payload");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            errmsg ? errmsg : "ducknng: no connection available for query_prepare");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, svc);
+
+    n_stmts = duckdb_extract_statements(scope.con, open_req.sql, &extracted);
+    if (n_stmts == 0) {
+        const char *ext_err = extracted ? duckdb_extract_statements_error(extracted) : NULL;
+        char *detail = ducknng_strdup(ext_err ? ext_err : "ducknng: query_prepare: empty or invalid SQL");
+        if (extracted) duckdb_destroy_extracted(&extracted);
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_service_leave_request_sql(&scope);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+            detail && detail[0] ? detail : "ducknng: query_prepare: empty or invalid SQL");
+        if (detail) duckdb_free(detail);
+        return -1;
+    }
+    /* Execute leading statements eagerly (same pattern as query_open). */
+    for (i = 0; i + 1 < n_stmts; i++) {
+        duckdb_prepared_statement lead_stmt = NULL;
+        duckdb_result lead_result;
+        memset(&lead_result, 0, sizeof(lead_result));
+        if (duckdb_prepare_extracted_statement(scope.con, extracted, i, &lead_stmt) == DuckDBError) {
+            char *detail = ducknng_strdup(lead_stmt ? duckdb_prepare_error(lead_stmt) : NULL);
+            if (lead_stmt) duckdb_destroy_prepare(&lead_stmt);
+            duckdb_destroy_extracted(&extracted);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_service_leave_request_sql(&scope);
+            ducknng_query_open_request_destroy(&open_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                detail && detail[0] ? detail : "ducknng: query_prepare: failed to prepare leading statement");
+            if (detail) duckdb_free(detail);
+            return -1;
+        }
+        if (duckdb_execute_prepared(lead_stmt, &lead_result) == DuckDBError) {
+            char *detail = ducknng_strdup(duckdb_result_error(&lead_result));
+            duckdb_destroy_result(&lead_result);
+            duckdb_destroy_prepare(&lead_stmt);
+            duckdb_destroy_extracted(&extracted);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_service_leave_request_sql(&scope);
+            ducknng_query_open_request_destroy(&open_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                detail && detail[0] ? detail : "ducknng: query_prepare: failed to execute leading statement");
+            if (detail) duckdb_free(detail);
+            return -1;
+        }
+        duckdb_destroy_result(&lead_result);
+        duckdb_destroy_prepare(&lead_stmt);
+    }
+    /* Prepare the final statement. */
+    if (duckdb_prepare_extracted_statement(scope.con, extracted, n_stmts - 1, &stmt) == DuckDBError) {
+        char *detail = ducknng_strdup(stmt ? duckdb_prepare_error(stmt) : NULL);
+        if (stmt) duckdb_destroy_prepare(&stmt);
+        stmt = NULL;
+        duckdb_destroy_extracted(&extracted);
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_service_leave_request_sql(&scope);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+            detail && detail[0] ? detail : "ducknng: query_prepare: prepare failed");
+        if (detail) duckdb_free(detail);
+        return -1;
+    }
+    duckdb_destroy_extracted(&extracted);
+    extracted = NULL;
+
+    if (ducknng_prepared_schema_to_ipc(scope.con, stmt, &payload, &payload_len, &errmsg) != 0) {
+        duckdb_destroy_prepare(&stmt);
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_service_leave_request_sql(&scope);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
+            errmsg ? errmsg : "ducknng: query_prepare: failed to encode schema as Arrow IPC");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    duckdb_destroy_prepare(&stmt);
+    if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+    ducknng_service_leave_request_sql(&scope);
+    ducknng_query_open_request_destroy(&open_req);
+    ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
+        DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM |
+            DUCKNNG_RPC_FLAG_END_OF_STREAM,
+        payload, payload_len);
+    return 0;
+}
+
+
 static int ducknng_method_exec_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
@@ -600,6 +724,33 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     ducknng_exec_request_destroy(&exec_req);
     return reply->type == DUCKNNG_RPC_ERROR ? -1 : 0;
 }
+
+const ducknng_method_descriptor ducknng_method_query_prepare = {
+    "query_prepare",
+    "query",
+    "Prepare a SQL statement and return the output schema without executing",
+    DUCKNNG_TRANSPORT_REQREP,
+    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
+    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
+    DUCKNNG_RESPONSE_ROWS,
+    DUCKNNG_SESSION_STATELESS,
+    0,
+    DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM | DUCKNNG_RPC_FLAG_END_OF_STREAM,
+    16 * 1024 * 1024,
+    16 * 1024 * 1024,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true}]}",
+    "{\"mode\":\"schema_only\",\"note\":\"Arrow IPC stream with schema and 0 data batches\"}",
+    ducknng_method_query_prepare_handler
+};
 
 const ducknng_method_descriptor ducknng_method_exec = {
     "exec",
@@ -769,7 +920,8 @@ int ducknng_register_builtin_methods(ducknng_runtime *rt, char **errmsg) {
         &ducknng_method_query_open,
         &ducknng_method_fetch,
         &ducknng_method_close,
-        &ducknng_method_cancel
+        &ducknng_method_cancel,
+        &ducknng_method_query_prepare
     };
     if (!rt) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for method registration");
