@@ -12,11 +12,21 @@ SELECT * FROM ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, t
 
 `ducknng_parse_body(...)` parses an existing `BLOB` using the supplied content type. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx response status, extracts the response `Content-Type`, and parses the response body into a DuckDB table. Use `ducknng_ncurl(...)` instead when you need to inspect non-2xx responses, response headers, or raw bytes.
 
+Format-specific functions are also available for formats where DuckDB's own readers provide better type inference and dialect detection than the built-in codec:
+
+```sql
+SELECT * FROM ducknng_parse_csv(body);       -- DuckDB read_csv_auto via tempfile
+SELECT * FROM ducknng_parse_tsv(body);       -- DuckDB read_csv_auto(delim='\t') via tempfile
+SELECT * FROM ducknng_parse_parquet(body);   -- DuckDB read_parquet via tempfile
+```
+
+These write the body bytes to a cross-platform temporary file and delegate to DuckDB's standard CSV and Parquet SQL readers, then decode the result through the Arrow IPC path. They exist alongside the content-type dispatch in `ducknng_parse_body` as an explicit opt-in for callers who want DuckDB's full reader capabilities.
+
 The initial built-in providers are deliberately conservative. Unknown or missing content types fall back to raw `BLOB` output. `text/*` bodies are exposed as `VARCHAR` only when the bytes are valid UTF-8 text. `application/vnd.ducknng.frame` is decoded with the same envelope shape as `ducknng_decode_frame(...)`. Arrow IPC stream bytes are decoded through nanoarrow and the same stable manual DuckDB vector mapping used by `ducknng_query_rpc(...)`.
 
 JSON bodies are parsed in memory through DuckDB's JSON scalar functions (`json_structure(...)` and `from_json(...)`) and then serialized through the existing Arrow IPC row mapping before returning rows to the caller. This avoids temporary files while still letting DuckDB own JSON type inference and conversion.
 
-CSV, TSV, and Parquet are recognized media types but do not have parsing providers enabled yet. DuckDB's standard CSV and Parquet readers are path/file-system oriented; using them efficiently for BLOB bodies needs a scalarfs-style memory filesystem or a stable C extension hook that can expose an in-memory file to DuckDB readers. Until that lands, these media types use the generic `body BLOB` fallback instead of spilling to temporary files.
+CSV, TSV, and Parquet body parsing is provided through two independent paths. The content-type dispatch in `ducknng_parse_body` uses a direct C parser for CSV/TSV (type inference: INT64, DOUBLE, VARCHAR with nanoarrow encoding) and a tempfile-backed DuckDB `read_parquet()` call for Parquet. The standalone `ducknng_parse_csv(body)`, `ducknng_parse_tsv(body)`, and `ducknng_parse_parquet(body)` functions always write to a temporary file and delegate to DuckDB's standard readers (`read_csv_auto`, `read_parquet`), which provide better dialect detection and type inference at the cost of a tempfile round-trip.
 
 JSON parsing currently fails fast inside service-owned SQL, such as SQL executed through remote `exec` / `ducknng_query_rpc(...)`, because that path already owns the same runtime init-connection execution gate on the current request thread. Raw, text, CSV/TSV/Parquet fallback, frame, and direct Arrow IPC decoding do not need a nested DuckDB query. Lifting the JSON limitation requires a broader per-session/per-request connection model rather than re-entering the shared init connection from inside an active request.
 

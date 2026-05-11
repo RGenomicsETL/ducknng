@@ -34,6 +34,16 @@ The following features are intentionally outside the current contract. They are 
 
 **Timezone semantics for TIMESTAMP WITH TIME ZONE.** The server emits `TIMESTAMP_TZ` as a timezone-free `timestamp[us]` with no UTC adjustment. Proper timezone-aware handling is deferred.
 
+## Scan-phase Arrow conversion
+
+The scan callbacks for `ducknng_fetch_query_table` and `ducknng_parse_body` use a hand-rolled nanoarrow-to-DuckDB-vector conversion (739-line `ducknng_sql_arrow_assign_column_at` switch statement) instead of DuckDB's unstable C API functions `duckdb_schema_from_arrow` and `duckdb_data_chunk_from_arrow`. Both of those functions require a `duckdb_connection` handle that is not available in scan callbacks.
+
+Two approaches exist to remove the hand-rolled path:
+
+1. **Bind/init-phase conversion** — convert Arrow data to DuckDB data chunks in the bind or init callback (where a `duckdb_client_context` is available via `duckdb_table_function_get_client_context`, from which a connection can be opened), cache the chunks in bind_data, and serve them from the cache in scan. Simple, synchronous, adequate for single-batch results. This is the planned path.
+
+2. **Dedicated decode thread** — a background thread owns a connection, converts Arrow chunks as they arrive, and pushes to a bounded queue consumed by the scan callback. Adds pipeline parallelism and streaming memory but requires thread lifecycle, queue synchronization, backpressure, and error forwarding. Noted here for future investigation.
+
 ## Expansion tier
 
 These are reasonable next additions once the core contract is stable, but they are not blocked on: large UTF-8 / large binary, fixed-size binary, duration, timezone-aware timestamps, and accepting dictionary-encoded inputs by decoding to plain values. None of these require implementation before 0.1.0 is sealed.

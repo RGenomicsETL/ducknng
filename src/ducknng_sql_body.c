@@ -1576,6 +1576,8 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
     }
     switch (codec_kind) {
         case DUCKNNG_BODY_CODEC_PARQUET: query_template = "SELECT * FROM read_parquet(%s)"; break;
+        case DUCKNNG_BODY_CODEC_CSV: query_template = "SELECT * FROM read_csv_auto(%s)"; break;
+        case DUCKNNG_BODY_CODEC_TSV: query_template = "SELECT * FROM read_csv_auto(%s, delim='\t')"; break;
         default:
             if (errmsg) *errmsg = ducknng_strdup("ducknng: unsupported codec for tempfile reader");
             return -1;
@@ -2110,9 +2112,9 @@ static const ducknng_codec_static_row DUCKNNG_BUILTIN_CODECS[] = {
     {"raw", "application/octet-stream, */* fallback", "body BLOB", "No decoding; bytes are returned unchanged."},
     {"text", "text/*", "body_text VARCHAR", "Valid UTF-8 text bodies are exposed as VARCHAR."},
     {"json", "application/json, application/*+json", "dynamic table", "Parsed in memory through DuckDB JSON functions."},
-    {"csv", "text/csv, application/csv, text/x-csv", "dynamic table", "Parsed via direct C parser; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding."},
-    {"tsv", "text/tab-separated-values, application/x-tsv, text/tsv", "dynamic table", "Parsed via direct C parser with tab delimiter; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding."},
-    {"parquet", "application/vnd.apache.parquet, application/parquet, application/x-parquet", "dynamic table", "Parsed via DuckDB read_parquet() through a temporary file."},
+    {"csv", "text/csv, application/csv, text/x-csv", "dynamic table", "Parsed via direct C parser; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding. Separate ducknng_parse_csv(body) uses DuckDB read_csv_auto via tempfile."},
+    {"tsv", "text/tab-separated-values, application/x-tsv, text/tsv", "dynamic table", "Parsed via direct C parser with tab delimiter; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding. Separate ducknng_parse_tsv(body) uses DuckDB read_csv_auto(delim='\t') via tempfile."},
+    {"parquet", "application/vnd.apache.parquet, application/parquet, application/x-parquet", "dynamic table", "Parsed via DuckDB read_parquet() through a temporary file. Separate ducknng_parse_parquet(body) provides the same path."},
     {"arrow_ipc", "application/vnd.apache.arrow.stream, application/vnd.apache.arrow.ipc, application/arrow", "dynamic table", "Decoded as Arrow IPC stream bytes with nanoarrow and mapped to DuckDB vectors."},
     {"ducknng_frame", "application/vnd.ducknng.frame", "decoded frame columns", "Decoded as one ducknng protocol frame, matching ducknng_decode_frame()."},
     {"ndjson", "application/x-ndjson, application/ndjson, application/x-jsonlines, application/jsonlines", "dynamic table", "Newline-delimited JSON lines wrapped into a JSON array and parsed in memory through DuckDB JSON functions."},
@@ -2272,6 +2274,77 @@ static int register_frame_decode_table_named(duckdb_connection con, const char *
         ducknng_single_row_init, ducknng_decode_frame_scan);
 }
 
+static void ducknng_body_parse_tempfile_bind(duckdb_bind_info info, ducknng_sql_context *ctx, int codec_kind) {
+    duckdb_value body_val = duckdb_bind_get_parameter(info, 0);
+    duckdb_blob body_blob;
+    duckdb_client_context client_ctx = NULL;
+    duckdb_file_system fs = NULL;
+    ducknng_body_parse_bind_data *bind;
+    char *errmsg = NULL;
+    int rc;
+    idx_t col;
+    memset(&body_blob, 0, sizeof(body_blob));
+    if (!duckdb_is_null_value(body_val)) body_blob = duckdb_get_blob(body_val);
+    duckdb_destroy_value(&body_val);
+    if (!body_blob.data || body_blob.size == 0) {
+        duckdb_bind_set_error(info, "ducknng: body must not be null or empty");
+        if (body_blob.data) duckdb_free(body_blob.data);
+        return;
+    }
+    bind = (ducknng_body_parse_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        duckdb_free(body_blob.data);
+        return;
+    }
+    memset(bind, 0, sizeof(*bind));
+    bind->codec_kind = codec_kind;
+    duckdb_table_function_get_client_context(info, &client_ctx);
+    if (client_ctx) fs = duckdb_client_context_get_file_system(client_ctx);
+    rc = ducknng_body_parse_run_tempfile_reader(ctx, bind, (const uint8_t *)body_blob.data, (size_t)body_blob.size, codec_kind, fs, &errmsg);
+    if (fs) duckdb_destroy_file_system(&fs);
+    if (client_ctx) duckdb_destroy_client_context(&client_ctx);
+    duckdb_free(body_blob.data);
+    if (rc != 0) {
+        destroy_body_parse_bind_data(bind);
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body");
+        if (errmsg) duckdb_free(errmsg);
+        return;
+    }
+    for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
+        duckdb_logical_type col_type;
+        const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
+        if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
+            destroy_body_parse_bind_data(bind);
+            duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported parsed body type");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        duckdb_bind_add_result_column(info, name, col_type);
+        duckdb_destroy_logical_type(&col_type);
+    }
+    duckdb_bind_set_cardinality(info, bind->row_count, true);
+    duckdb_bind_set_bind_data(info, bind, destroy_body_parse_bind_data);
+}
+
+static void ducknng_parse_csv_bind(duckdb_bind_info info) {
+    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_CSV);
+}
+
+static void ducknng_parse_tsv_bind(duckdb_bind_info info) {
+    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_TSV);
+}
+
+static void ducknng_parse_parquet_bind(duckdb_bind_info info) {
+    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_PARQUET);
+}
+
+static int register_body_parse_format_table(duckdb_connection con, ducknng_sql_context *ctx, const char *name, duckdb_table_function_bind_t bind_fn) {
+    duckdb_type param_types[1] = {DUCKDB_TYPE_BLOB};
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 1, param_types, bind_fn,
+        ducknng_body_parse_init, ducknng_body_parse_scan);
+}
 
 static void ducknng_register_codec_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
@@ -2358,5 +2431,8 @@ int ducknng_register_sql_body(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_register_codec_scalar, ctx, register_codec_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_codec", 1,
             ducknng_unregister_codec_scalar, ctx, unregister_codec_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!register_body_parse_format_table(con, ctx, "ducknng_parse_csv", ducknng_parse_csv_bind)) return 0;
+    if (!register_body_parse_format_table(con, ctx, "ducknng_parse_tsv", ducknng_parse_tsv_bind)) return 0;
+    if (!register_body_parse_format_table(con, ctx, "ducknng_parse_parquet", ducknng_parse_parquet_bind)) return 0;
     return 1;
 }
