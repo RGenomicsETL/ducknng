@@ -1,18 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Generate description.yml for DuckDB community-extension submission.
+# Run from the repo root: bash scripts/generate_description_yml.sh > description.yml
+
+EXTENSION_NAME="ducknng"
+GIT_REF=$(git rev-parse HEAD)
+DESCRIPTION="Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, and a body codec layer"
+VERSION="0.1.0"
+LANGUAGE="C"
+BUILD="cmake"
+LICENSE="MIT"
+MAINTAINER="sounkou-bioinfo"
+
+cat <<YAML
 extension:
-  name: ducknng
-  description: Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, and a body codec layer
-  version: 0.1.0
-  language: C
-  build: cmake
-  license: MIT
+  name: ${EXTENSION_NAME}
+  description: ${DESCRIPTION}
+  version: ${VERSION}
+  language: ${LANGUAGE}
+  build: ${BUILD}
+  license: ${LICENSE}
   requires_toolchains: "python3"
   excluded_platforms: wasm_mvp;wasm_eh;wasm_threads
   maintainers:
-    - "sounkou-bioinfo"
+    - "${MAINTAINER}"
 
 repo:
-  github: sounkou-bioinfo/ducknng
-  ref: 5c064a244fda21111203847865532045095300e3
+  github: ${MAINTAINER}/${EXTENSION_NAME}
+  ref: ${GIT_REF}
 
 docs:
   hello_world: |
@@ -75,3 +90,4 @@ docs:
     Project details and examples: https://github.com/sounkou-bioinfo/ducknng
 
     Community package excludes WASM targets (NNG threading requirement).
+YAML
