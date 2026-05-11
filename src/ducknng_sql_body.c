@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <inttypes.h>
 #ifdef _WIN32
 #  include <windows.h>
 #else
@@ -1304,6 +1306,7 @@ static int ducknng_csv_try_double(const char *s, double *v) {
  * call ArrowSchemaRelease / ArrowArrayRelease.
  * Returns 0 on success, -1 on error (sets *errmsg). */
 static int ducknng_csv_parse_body(const uint8_t *body, size_t body_len, char delimiter,
+    idx_t max_cols,
     struct ArrowSchema *out_schema, struct ArrowArray *out_array, char **errmsg) {
     const char *src = (const char *)body;
     const char *end = src + body_len;
@@ -1324,10 +1327,10 @@ static int ducknng_csv_parse_body(const uint8_t *body, size_t body_len, char del
 
     /* --- Parse header row --- */
     col_count = ducknng_csv_count_fields(p, end, delimiter);
-    if (col_count == 0 || col_count > DUCKNNG_CSV_MAX_COLS) {
+    if (col_count == 0 || col_count > max_cols) {
         if (errmsg) *errmsg = ducknng_strdup(col_count == 0
             ? "ducknng: CSV body has no header row"
-            : "ducknng: CSV body has too many columns (max 1024)");
+            : "ducknng: CSV body exceeds ducknng.csv_max_columns limit");
         return -1;
     }
     headers = (char **)duckdb_malloc(sizeof(char *) * col_count);
@@ -1500,39 +1503,45 @@ cleanup:
  * --------------------------------------------------------------------------- */
 /* Generate a unique temporary file path and set *out_path.
  * Returns 0 on success, -1 on failure.
- * On non-Windows: uses mkstemp to atomically create the file and obtain a unique
- * name, then closes the OS fd — the caller will open it again via DuckDB FS.
- * On Windows: uses _tempnam for path generation. */
+ * Uses an atomic counter to build a unique name without creating the file on
+ * the OS side; DuckDB FS will create it via duckdb_file_system_open with
+ * DUCKDB_FILE_FLAG_CREATE. This avoids mkstemp()/close() on POSIX and
+ * _tempnam() on Windows while keeping the path unique across threads.
+ * On POSIX the path lives under /tmp; on Windows under the system temp dir. */
+static atomic_uint_fast64_t ducknng_body_tmp_seq = 0;
+
 static int ducknng_body_make_tempfile_path(char **out_path, char **errmsg) {
+    char buf[64];
+    uint64_t seq = (uint64_t)atomic_fetch_add_explicit(
+        &ducknng_body_tmp_seq, 1, memory_order_relaxed);
 #ifdef _WIN32
-    char *tmp = _tempnam(NULL, "ducknng_body_");
-    if (!tmp) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: _tempnam failed");
+    char tmp_dir[MAX_PATH];
+    DWORD len = GetTempPathA(MAX_PATH, tmp_dir);
+    if (len == 0 || len >= MAX_PATH) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: GetTempPathA failed");
         return -1;
     }
-    *out_path = ducknng_strdup(tmp);
-    free(tmp);
-    if (!*out_path) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
-        return -1;
+    snprintf(buf, sizeof(buf), "ducknng_body_%016" PRIx64 ".tmp", seq);
+    {
+        size_t dir_len = strlen(tmp_dir);
+        char *path = (char *)duckdb_malloc(dir_len + strlen(buf) + 1);
+        if (!path) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for temp path");
+            return -1;
+        }
+        memcpy(path, tmp_dir, dir_len);
+        memcpy(path + dir_len, buf, strlen(buf) + 1);
+        *out_path = path;
     }
-    return 0;
 #else
-    char tmpl[] = "/tmp/ducknng_body_XXXXXX";
-    int fd = mkstemp(tmpl);
-    if (fd < 0) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: mkstemp failed for body reader");
-        return -1;
-    }
-    close(fd); /* DuckDB FS will reopen via the path */
-    *out_path = ducknng_strdup(tmpl);
+    snprintf(buf, sizeof(buf), "/tmp/ducknng_body_%016" PRIx64 ".tmp", seq);
+    *out_path = ducknng_strdup(buf);
     if (!*out_path) {
-        unlink(tmpl);
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying temp path");
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for temp path");
         return -1;
     }
-    return 0;
 #endif
+    return 0;
 }
 
 static void ducknng_body_delete_tempfile(const char *path) {
@@ -1801,12 +1810,19 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
         case DUCKNNG_BODY_CODEC_CSV:
         case DUCKNNG_BODY_CODEC_TSV: {
             char csv_delim = (bind->codec_kind == DUCKNNG_BODY_CODEC_TSV) ? '\t' : ',';
+            duckdb_client_context csv_client_ctx = NULL;
+            idx_t csv_max_cols;
             if (!body || body_len == 0) {
                 destroy_body_parse_bind_data(bind);
                 duckdb_bind_set_error(info, "ducknng: CSV/TSV body must not be empty");
                 return -1;
             }
+            duckdb_table_function_get_client_context(info, &csv_client_ctx);
+            csv_max_cols = (idx_t)ducknng_sql_get_config_ubigint(
+                csv_client_ctx, "ducknng.csv_max_columns", DUCKNNG_CSV_MAX_COLS);
+            if (csv_client_ctx) duckdb_destroy_client_context(&csv_client_ctx);
             if (ducknng_csv_parse_body(body, body_len, csv_delim,
+                    csv_max_cols,
                     &bind->schema, &bind->array, &errmsg) != 0) {
                 destroy_body_parse_bind_data(bind);
                 duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse CSV/TSV body");

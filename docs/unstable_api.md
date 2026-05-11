@@ -184,13 +184,17 @@ DuckDB dispatches to would require constructing a C++ vtable with the correct la
 ABI — platform- and version-specific, and not viable from pure C.
 
 **What the API is good for.** The consumer-side functions — `duckdb_file_system_open` and
-`duckdb_file_handle_write` — can replace the raw `mkstemp`/`write`/`close` calls in the
-Parquet temp-file path (`ducknng_body_parse_run_tempfile_reader`), routing through
-DuckDB's FS abstraction for better portability.
+`duckdb_file_handle_write` — replace OS-level file I/O in the Parquet temp-file path
+(`ducknng_body_parse_run_tempfile_reader`), routing through DuckDB's FS abstraction for
+portability. The write path was migrated in an earlier pass. The remaining POSIX dependency
+was `mkstemp`+`close` in `ducknng_body_make_tempfile_path`, used only to generate a unique
+file name before DuckDB FS opens it. That is now replaced by an atomic counter that
+constructs `/tmp/ducknng_body_<hex16>.tmp` (POSIX) or `%TEMP%\ducknng_body_<hex16>.tmp`
+(Windows) without touching the OS file system at all.
 
-**Recommendation: LOW priority.** Replace OS-level tempfile I/O with
-`duckdb_file_system_open` + `duckdb_file_handle_write` in the Parquet branch. Keep for
-its own follow-up change.
+**Status: ADOPTED.** The write path uses `duckdb_file_system_open`, `duckdb_file_handle_write`,
+and `duckdb_destroy_file_handle`. The path-generation helper no longer calls `mkstemp` or
+`_tempnam`; it uses `atomic_fetch_add_explicit` over a module-static counter.
 
 ---
 
@@ -245,8 +249,17 @@ internal log entries. `duckdb_log_storage_set_write_log_entry` installs the writ
 callback. `duckdb_log_storage_set_extra_data` attaches extension state with a destroy
 callback. `duckdb_log_storage_set_name` labels the sink for diagnostics.
 
-**Recommendation: LOW priority.** Could expose DuckDB-level log lines through the
-`ducknng` observability surface. Not urgent.
+**Status: ADOPTED (deferred registration).** The log ring buffer (`ducknng_log_ring`,
+capacity 512) is in place and `ducknng_log_write_entry` (`src/ducknng_runtime.c`) is the
+registered callback. However, calling `duckdb_register_log_storage` from the extension
+entry point triggers a DuckDB v1.5.2 internal assertion failure ("Attempted to
+dereference unique_ptr that is NULL"). The fix is to defer registration to query time
+via `ducknng_enable_log_capture()`, a volatile scalar that calls
+`duckdb_create_log_storage` + `duckdb_log_storage_set_*` + `duckdb_register_log_storage`
+from a normal SQL execution context where the DuckDB logger subsystem is fully
+initialized. The function is idempotent and sets `rt->log_capture_enabled` on success.
+Ownership of the log storage object transfers to DuckDB after `duckdb_register_log_storage`
+succeeds; `duckdb_destroy_log_storage` is called only on failure.
 
 ---
 
@@ -256,11 +269,16 @@ callback. `duckdb_log_storage_set_name` labels the sink for diagnostics.
 `duckdb_client_context_get_config_option`
 
 **What it does.** Lets extensions declare named configuration options visible through
-`SET ducknng.option = value` and readable in SQL.
+`SET ducknng.option = value` and readable in SQL via `duckdb_client_context_get_config_option`.
 
-**Recommendation: LOW priority.** Worth adopting when `ducknng` wants user-tunable
-runtime knobs (e.g. default batch size, max frame size) to be settable through
-`SET`/`RESET` rather than through a separate function call.
+**Status: ADOPTED.** `ducknng.csv_max_columns` (UBIGINT, default 1024, SESSION scope) is
+registered at extension load time via `ducknng_register_config_options` in
+`src/ducknng_sql_api.c` using `duckdb_create_config_option` / `duckdb_config_option_set_*`
+/ `duckdb_register_config_option`. It is read in the CSV/TSV body-parse bind callback
+(`src/ducknng_sql_body.c`) via `ducknng_sql_get_config_ubigint(client_ctx, ...)`, which
+calls `duckdb_client_context_get_config_option` and falls back to 1024 when no override
+is set. Users can raise the limit for wide CSV inputs with
+`SET ducknng.csv_max_columns = 4096`.
 
 ---
 
@@ -425,10 +443,10 @@ results from bind-phase constant folding or from new RPC methods.
 | `unstable_new_scalar_function_functions` | **DONE** | Bind phase adopted for the four HTTP lookup scalar functions; bind data pre-folds constant name argument |
 | `unstable_new_expression_functions` | **DONE** | Used inside scalar bind callbacks (`duckdb_expression_is_foldable`, `duckdb_expression_fold`) |
 | `unstable_new_table_function_functions` | NOT applicable | `duckdb_table_function_get_client_context` returns a DuckDB context, not `ducknng_sql_context`; `extra_info` pattern must remain |
-| `unstable_new_file_system_api` | **LOW** | Replace OS tempfile I/O in the Parquet branch |
+| `unstable_new_file_system_api` | **DONE** | Write path uses `duckdb_file_system_open` + `duckdb_file_handle_write`; path generation uses atomic counter (no mkstemp) |
 | `unstable_new_open_connect_functions` | NOT applicable | `duckdb_client_context_get_connection_id` would change the public wire session_id; counter is correct |
-| `unstable_new_logger_functions` | **LOW** | Expose DuckDB log lines if needed |
-| `unstable_new_config_options_functions` | **LOW** | Adopt when tunable knobs are wanted |
+| `unstable_new_logger_functions` | **DONE** | `ducknng_enable_log_capture()` scalar defers `duckdb_register_log_storage` to query time to avoid v1.5.2 load-time crash |
+| `unstable_new_config_options_functions` | **DONE** | `ducknng.csv_max_columns` registered at load time; read in CSV/TSV body-parse bind callback |
 | `unstable_new_prepared_statement_functions` | **LOW** | Useful for a future `query_prepare` or `describe` RPC method |
 | `unstable_new_query_execution_functions` | **LOW** | `duckdb_result_get_arrow_options` for timezone/large-string encoding fidelity |
 | `unstable_new_scalar_function_state_functions` | **LOW** | Per-thread init state; not needed today |

@@ -876,3 +876,13 @@ size_t ducknng_log_ring_snapshot(ducknng_log_ring *ring,
     ducknng_mutex_unlock(&ring->mu);
     return n;
 }
+
+/* DuckDB log storage write callback — wires the DuckDB logger into the ring.
+ * Signature matches duckdb_logger_write_log_entry_t.
+ * extra_data is a ducknng_runtime *. */
+void ducknng_log_write_entry(void *extra_data, duckdb_timestamp *timestamp,
+    const char *level, const char *log_type, const char *log_message) {
+    ducknng_runtime *rt = (ducknng_runtime *)extra_data;
+    if (!rt) return;
+    ducknng_log_ring_append(&rt->log_ring, timestamp, level, log_type, log_message);
+}

@@ -307,10 +307,62 @@ int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_s
     return 1;
 }
 
+/* ---------------------------------------------------------------------------
+ * Config option registration — called once at extension load time.
+ * Options are registered with SESSION scope so callers can override per
+ * connection with SET ducknng.option = value while the extension-wide
+ * default applies when no per-session override is set.
+ * --------------------------------------------------------------------------- */
+static int ducknng_register_one_config_option(duckdb_connection con,
+    const char *name, const char *description, uint64_t default_ubigint) {
+    duckdb_config_option opt;
+    duckdb_logical_type type;
+    duckdb_value val;
+    int ok;
+    opt = duckdb_create_config_option();
+    if (!opt) return 0;
+    duckdb_config_option_set_name(opt, name);
+    duckdb_config_option_set_description(opt, description);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_config_option_set_type(opt, type);
+    duckdb_destroy_logical_type(&type);
+    val = duckdb_create_uint64(default_ubigint);
+    duckdb_config_option_set_default_value(opt, val);
+    duckdb_destroy_value(&val);
+    duckdb_config_option_set_default_scope(opt, DUCKDB_CONFIG_OPTION_SCOPE_SESSION);
+    ok = (duckdb_register_config_option(con, opt) == DuckDBSuccess);
+    duckdb_destroy_config_option(&opt);
+    return ok;
+}
+
+static int ducknng_register_config_options(duckdb_connection con) {
+    if (!ducknng_register_one_config_option(con, "ducknng.csv_max_columns",
+            "Maximum number of columns allowed when parsing CSV or TSV body payloads "
+            "via ducknng_parse_body. Increase for wide CSV inputs.", 1024))
+        return 0;
+    return 1;
+}
+
+/* Helper: read a UBIGINT config option from a client context.
+ * Returns fallback when the context is NULL or the option is absent. */
+uint64_t ducknng_sql_get_config_ubigint(duckdb_client_context ctx,
+    const char *name, uint64_t fallback) {
+    duckdb_config_option_scope scope;
+    duckdb_value val;
+    uint64_t result;
+    if (!ctx) return fallback;
+    val = duckdb_client_context_get_config_option(ctx, name, &scope);
+    if (!val) return fallback;
+    result = duckdb_get_uint64(val);
+    duckdb_destroy_value(&val);
+    return result;
+}
+
 int ducknng_register_sql_api(duckdb_connection connection, ducknng_runtime *rt) {
     ducknng_sql_context ctx;
     ctx.rt = rt;
     ctx.is_init_connection = rt && connection == ducknng_runtime_execution_connection(rt);
+    if (!ducknng_register_config_options(connection)) return 0;
     if (!ducknng_register_sql_service(connection, &ctx)) return 0;
     if (!ducknng_register_sql_http(connection, &ctx)) return 0;
     if (!ducknng_register_sql_auth(connection, &ctx)) return 0;

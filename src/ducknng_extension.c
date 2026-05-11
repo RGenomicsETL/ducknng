@@ -2,13 +2,6 @@
 #include "ducknng_runtime.h"
 #include "ducknng_sql_api.h"
 
-static void ducknng_log_write_entry(void *extra_data, duckdb_timestamp *timestamp,
-    const char *level, const char *log_type, const char *log_message) {
-    ducknng_runtime *rt = (ducknng_runtime *)extra_data;
-    if (!rt) return;
-    ducknng_log_ring_append(&rt->log_ring, timestamp, level, log_type, log_message);
-}
-
 DUCKDB_EXTENSION_ENTRYPOINT_CUSTOM(duckdb_extension_info info, struct duckdb_extension_access *access) {
     duckdb_connection connection = NULL;
     ducknng_runtime *rt = NULL;
@@ -39,12 +32,9 @@ DUCKDB_EXTENSION_ENTRYPOINT_CUSTOM(duckdb_extension_info info, struct duckdb_ext
         }
         return false;
     }
-    /* NOTE: duckdb_register_log_storage is present in the v1.5.2 extension vtable
-     * but triggers a DuckDB internal assertion failure ("Attempted to dereference
-     * unique_ptr that is NULL") when called during extension load. The log ring
-     * infrastructure in ducknng_runtime is in place; re-enable this block once a
-     * DuckDB build where duckdb_register_log_storage is safe to call at extension
-     * load time is confirmed. */
+    /* Log capture is enabled at runtime via SELECT ducknng_enable_log_capture()
+     * rather than here. Calling duckdb_register_log_storage during extension
+     * load triggers a DuckDB v1.5.2 internal assertion failure. */
     if (!created) {
         duckdb_disconnect(&connection);
     }

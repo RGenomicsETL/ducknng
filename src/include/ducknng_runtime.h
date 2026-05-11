@@ -156,6 +156,7 @@ typedef struct ducknng_runtime {
     uint64_t next_client_aio_id;
     uint64_t next_tls_config_id;
     int shutting_down;
+    int log_capture_enabled; /* 1 after ducknng_enable_log_capture() succeeds */
     atomic_uintptr_t current_request_service_ptr;
     ducknng_method_registry registry;
     ducknng_log_ring log_ring;
@@ -213,6 +214,10 @@ void ducknng_log_ring_init(ducknng_log_ring *ring);
 void ducknng_log_ring_destroy(ducknng_log_ring *ring);
 void ducknng_log_ring_append(ducknng_log_ring *ring, const duckdb_timestamp *ts,
     const char *level, const char *log_type, const char *message);
+/* DuckDB log storage write callback (duckdb_logger_write_log_entry_t-compatible).
+ * extra_data must be a ducknng_runtime *. */
+void ducknng_log_write_entry(void *extra_data, duckdb_timestamp *timestamp,
+    const char *level, const char *log_type, const char *log_message);
 /* Snapshot: caller provides arrays of at least DUCKNNG_LOG_RING_CAP entries.
  * Returns the number of entries written. Caller must free each non-NULL
  * level/log_type/message string with duckdb_free. */
