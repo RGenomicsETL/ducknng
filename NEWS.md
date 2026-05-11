@@ -4,6 +4,9 @@
 
 Community-extension submission to duckdb/community-extensions (#1904).
 
+- Vendored NNG 1.11.0 transport layer: inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://.
+- HTTP carrier over http:// and https:// via NNG HTTP framework.
+
 - 110 SQL functions across 16 categories: Server, NNG Sockets, Framed RPC, HTTP Client,
   HTTP Routes, HTTP Workers, HTTP Helpers, Body Codecs, TLS, Service, Admission,
   Monitoring, Async I/O, Method Registry, Frame Helpers, SQL Macros.
