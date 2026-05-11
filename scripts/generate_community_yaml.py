@@ -28,7 +28,7 @@ EXTENSION = {
     "build": "cmake",
     "license": "MIT",
     "requires_toolchains": "python3",
-    "excluded_platforms": "wasm_mvp;wasm_eh;wasm_threads",
+    "excluded_platforms": "wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_arm64",
     "maintainers": ["sounkou-bioinfo"],
 }
 
@@ -1114,7 +1114,7 @@ def build_description_yml():
 
                 Project details and examples: https://github.com/sounkou-bioinfo/ducknng
 
-                Community package excludes WASM targets (NNG threading requirement).""").strip(),
+                Community package excludes WASM targets (NNG threading requirement) and Windows MSVC (use MinGW/Rtools).""").strip(),
         },
     }
     return dump_yaml(desc) + "\n"
@@ -1145,7 +1145,7 @@ def build_functions_json():
                     "All features shown in this README are implemented, tested, and runnable.",
                 ],
                 "feature_notes": [
-                    "Only linux_amd64, osx_amd64, osx_arm64, windows_amd64, and windows_arm64 are supported; WASM targets cannot use NNG threading.",
+                    "Only linux_amd64, osx_amd64, and osx_arm64 are currently tested and supported; WASM targets cannot use NNG threading; Windows MSVC builds fail on the MbedTLS dependency (use MinGW/Rtools on Windows).",
                     "The extension uses both stable and unstable DuckDB C extension APIs for Arrow conversion.",
                     "TLS configs accept PEM text in-memory (no file I/O) or file paths.",
                     "HTTP transport does not yet support http/2.",

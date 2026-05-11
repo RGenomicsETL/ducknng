@@ -14,14 +14,14 @@ extension:
   requires_toolchains:
     python3
   excluded_platforms:
-    wasm_mvp;wasm_eh;wasm_threads
+    wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_arm64
   maintainers:
     - "sounkou-bioinfo"
 repo:
   github:
     sounkou-bioinfo/ducknng
   ref:
-    3cab10cfcf5b76ebf3067c496c6d22a0d674429c
+    edd904f35925203f0d289a6d3813d3ddbe5384b2
 docs:
   hello_world:
     |
@@ -79,4 +79,4 @@ docs:
     
     Project details and examples: https://github.com/sounkou-bioinfo/ducknng
     
-    Community package excludes WASM targets (NNG threading requirement).
+    Community package excludes WASM targets (NNG threading requirement) and Windows MSVC (use MinGW/Rtools).

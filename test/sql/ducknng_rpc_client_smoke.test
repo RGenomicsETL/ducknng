@@ -721,7 +721,7 @@ FROM aio_launch
 
 query III
 SELECT aio_id IN (SELECT aio1 FROM aio_launch) OR aio_id IN (SELECT aio2 FROM aio_launch), ok, octet_length(frame) > 0
-FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_launch), 1000)
+FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM aio_launch), 5000)
 ORDER BY aio_id
 ----
 1	1	1
