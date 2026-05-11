@@ -134,18 +134,22 @@ WHERE name = 'mtls_http'
 ----
 true	2	true
 
-query IIIII
-SELECT ok, type_name, name,
-       position('"session_token"' IN payload_text) > 0,
-       position('"peer_identity_required":true' IN payload_text) > 0
-FROM ducknng_decode_frame(
-  ducknng_request_raw(
+statement ok
+SET VARIABLE mtls_http_reply = (
+  SELECT body FROM ducknng_ncurl(
     getvariable('mtls_http_url')::VARCHAR,
+    'POST', '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
     from_hex('01000000000000000000000000000000000000000000'),
     5000,
     getvariable('mtls_tls_config_id')::UBIGINT
   )
 )
+
+query IIIII
+SELECT ok, type_name, name,
+       position('"session_token"' IN payload_text) > 0,
+       position('"peer_identity_required":true' IN payload_text) > 0
+FROM ducknng_decode_frame(getvariable('mtls_http_reply')::BLOB)
 ----
 1	result	manifest	1	1
 
