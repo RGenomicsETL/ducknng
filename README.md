@@ -67,7 +67,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:37465 |
+| tls+tcp://127.0.0.1:43747 |
 +---------------------------+
 
 +--------+
@@ -141,7 +141,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 2      | true | true      |
+| 1      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -1949,11 +1949,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1727498674 | 1778525591456 | 127.0.0.1:36910 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 379993953 | 1778525678458 | 127.0.0.1:46416 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql
@@ -1976,22 +1976,6 @@ SELECT ducknng_stop_server('monitor_demo');
 Version 0.1.0. All features shown in this README are implemented,
 tested, and runnable. The extension builds against DuckDB v1.5.2 using
 the C API only.
-
-Intentionally deferred:
-
-- CSV/TSV/Parquet body parsing via DuckDB filesystem unstable API
-  (in-memory buffer filesystem) to avoid the tempfile round-trip.
-  Current implementations use a direct C parser for CSV/TSV and a
-  tempfile-backed DuckDB reader for Parquet; standalone
-  `ducknng_parse_csv`, `ducknng_parse_tsv`, `ducknng_parse_parquet`
-  functions provide the DuckDB reader path explicitly.
-- Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
-  table-function path. The current scan-phase conversion uses a
-  hand-rolled nanoarrow-to-DuckDB-vector switch statement. The planned
-  path is bind/init-phase conversion using `duckdb_schema_from_arrow` /
-  `duckdb_data_chunk_from_arrow` (unstable API); a dedicated
-  decode-thread approach is noted in `docs/types.md` as a future
-  alternative for multi-batch streaming results.
 
 ## References
 

@@ -692,7 +692,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37465</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:43747</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -757,7 +757,7 @@ ready.</p>
 <span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
 <span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a>| aio_id |  ok  | has_frame |</span>
 <span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
-<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">2</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
+<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">1</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
 <span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span></code></pre></div>
 <p><strong><code>ducknng_ncurl</code> — HTTP client primitive.</strong>
 The framed RPC mount accepts POST only. Mount a server on an
@@ -3408,11 +3408,11 @@ and active-pipe counters.</p>
 for a service.</p>
 <div class="sourceCode" id="cb42"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
 <span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
-<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
-<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>| <span class="dv">1727498674</span> | <span class="dv">1778525591456</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:36910</span> | <span class="kw">NULL</span>          |</span>
-<span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
+<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
+<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>| <span class="dv">379993953</span> | <span class="dv">1778525678458</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:46416</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb43"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
 <span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------------------------------------------------------------------------------------------+</span></span>
@@ -3429,23 +3429,6 @@ for a service.</p>
 <p>Version 0.1.0. All features shown in this README are implemented,
 tested, and runnable. The extension builds against DuckDB v1.5.2 using
 the C API only.</p>
-<p>Intentionally deferred:</p>
-<ul>
-<li>CSV/TSV/Parquet body parsing via DuckDB filesystem unstable API
-(in-memory buffer filesystem) to avoid the tempfile round-trip. Current
-implementations use a direct C parser for CSV/TSV and a tempfile-backed
-DuckDB reader for Parquet; standalone <code>ducknng_parse_csv</code>,
-<code>ducknng_parse_tsv</code>, <code>ducknng_parse_parquet</code>
-functions provide the DuckDB reader path explicitly.</li>
-<li>Full SQL-side decoding of session <code>fetch</code> Arrow batch
-BLOBs into a table-function path. The current scan-phase conversion uses
-a hand-rolled nanoarrow-to-DuckDB-vector switch statement. The planned
-path is bind/init-phase conversion using
-<code>duckdb_schema_from_arrow</code> /
-<code>duckdb_data_chunk_from_arrow</code> (unstable API); a dedicated
-decode-thread approach is noted in <code>docs/types.md</code> as a
-future alternative for multi-batch streaming results.</li>
-</ul>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://nng.nanomsg.org/">NNG</a> — underlying messaging
