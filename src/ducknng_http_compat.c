@@ -971,6 +971,121 @@ fail:
     return rv;
 }
 
+/* ---- Chunked streaming helpers ---- */
+
+typedef struct {
+    nng_http_conn *conn;
+    nng_aio *write_aio;
+    int error;
+} ducknng_stream_write_ctx;
+
+static int ducknng_http_stream_write_headers(nng_http_conn *conn, nng_aio *write_aio,
+    uint16_t status, const char *content_type) {
+    nng_http_res *res = NULL;
+    int rv;
+    rv = nng_http_res_alloc(&res);
+    if (rv != 0) return rv;
+    rv = nng_http_res_set_status(res, status);
+    if (rv != 0) goto fail;
+    rv = nng_http_res_set_header(res, "Transfer-Encoding", "chunked");
+    if (rv != 0) goto fail;
+    if (content_type && content_type[0]) {
+        rv = nng_http_res_set_header(res, "Content-Type", content_type);
+        if (rv != 0) goto fail;
+    }
+    rv = nng_http_res_set_header(res, "Cache-Control", "no-cache");
+    if (rv != 0) goto fail;
+    nng_http_conn_write_res(conn, res, write_aio);
+    nng_aio_wait(write_aio);
+    rv = nng_aio_result(write_aio);
+fail:
+    nng_http_res_free(res);
+    return rv;
+}
+
+static int ducknng_http_stream_write_chunk(nng_http_conn *conn, nng_aio *write_aio,
+    const void *data, size_t len) {
+    char header[24];
+    int header_len;
+    size_t chunk_len;
+    uint8_t *buf;
+    nng_iov iov;
+    int rv;
+    if (len == 0) return 0;
+    header_len = snprintf(header, sizeof(header), "%zx\r\n", len);
+    if (header_len <= 0) return NNG_EINVAL;
+    chunk_len = (size_t)header_len + len + 2;
+    buf = (uint8_t *)duckdb_malloc(chunk_len);
+    if (!buf) return NNG_ENOMEM;
+    memcpy(buf, header, (size_t)header_len);
+    memcpy(buf + header_len, data, len);
+    memcpy(buf + header_len + len, "\r\n", 2);
+    iov.iov_buf = buf;
+    iov.iov_len = chunk_len;
+    rv = nng_aio_set_iov(write_aio, 1, &iov);
+    if (rv == 0) {
+        nng_http_conn_write_all(conn, write_aio);
+        nng_aio_wait(write_aio);
+        rv = nng_aio_result(write_aio);
+    }
+    duckdb_free(buf);
+    return rv;
+}
+
+static int ducknng_http_stream_write_terminator(nng_http_conn *conn, nng_aio *write_aio) {
+    static const char term[] = "0\r\n\r\n";
+    nng_iov iov;
+    int rv;
+    iov.iov_buf = (void *)term;
+    iov.iov_len = 5;
+    rv = nng_aio_set_iov(write_aio, 1, &iov);
+    if (rv == 0) {
+        nng_http_conn_write_all(conn, write_aio);
+        nng_aio_wait(write_aio);
+        rv = nng_aio_result(write_aio);
+    }
+    return rv;
+}
+
+static int ducknng_stream_on_chunk(const void *data, size_t len, void *user_data) {
+    ducknng_stream_write_ctx *wctx = (ducknng_stream_write_ctx *)user_data;
+    int rv = ducknng_http_stream_write_chunk(wctx->conn, wctx->write_aio, data, len);
+    if (rv != 0) wctx->error = rv;
+    return rv;
+}
+
+static void ducknng_http_serve_stream_route(nng_http_conn *conn, nng_aio *handler_aio,
+    ducknng_http_server_state *state,
+    const ducknng_http_request_context *request_ctx,
+    const char *caller_identity) {
+    nng_aio *write_aio = NULL;
+    ducknng_stream_write_ctx wctx;
+    char *stream_err = NULL;
+    const char *ct;
+    int rv;
+    /* Hijack: NNG hands connection ownership to us; handler_aio must be finished */
+    nng_http_hijack(conn);
+    nng_aio_finish(handler_aio, 0);
+    ct = request_ctx->route.stream_content_type;
+    if (!ct || !ct[0]) ct = "text/event-stream; charset=utf-8";
+    rv = nng_aio_alloc(&write_aio, NULL, NULL);
+    if (rv != 0) { nng_http_conn_close(conn); return; }
+    nng_aio_set_timeout(write_aio, 30000); /* 30 s per write */
+    rv = ducknng_http_stream_write_headers(conn, write_aio, 200, ct);
+    if (rv != 0) goto done;
+    memset(&wctx, 0, sizeof(wctx));
+    wctx.conn = conn;
+    wctx.write_aio = write_aio;
+    ducknng_service_execute_stream_route(state->svc, request_ctx,
+        ducknng_stream_on_chunk, &wctx, &stream_err);
+    if (stream_err) duckdb_free(stream_err);
+    ducknng_http_stream_write_terminator(conn, write_aio);
+done:
+    nng_aio_free(write_aio);
+    nng_http_conn_close(conn);
+    (void)caller_identity;
+}
+
 static void ducknng_http_split_uri(const char *uri, char **out_path, const char **out_query) {
     const char *path_end;
     const char *query = NULL;
@@ -1175,6 +1290,22 @@ static void ducknng_http_route_handler(nng_aio *aio) {
                 rv = ducknng_http_alloc_text_response(&res, 403, "ducknng: caller identity not allowed for this route");
                 goto done;
             }
+        }
+        /* streaming route: hijack connection and stream chunked response */
+        if (route.response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM) {
+            ducknng_authorizer_decision_reset(&decision);
+            ducknng_service_end_request(state->svc, caller_identity, 0);
+            /* clean up locals that goto done would handle */
+            if (request_path) duckdb_free(request_path);
+            if (headers_json) duckdb_free(headers_json);
+            if (path_params_json) duckdb_free(path_params_json);
+            if (caller_identity) duckdb_free(caller_identity);
+            ducknng_http_route_reset(&route);
+            ducknng_http_route_reply_reset(&route_reply);
+            /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
+            ducknng_http_serve_stream_route(conn, aio, state, &request_ctx, NULL);
+            ducknng_http_route_reset(&request_ctx.route);
+            return;
         }
         if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
             rv = ducknng_http_alloc_text_response(&res, 500,

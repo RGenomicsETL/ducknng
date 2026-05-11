@@ -67,7 +67,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:34281 |
+| tls+tcp://127.0.0.1:43593 |
 +---------------------------+
 
 +--------+
@@ -141,7 +141,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 2      | true | true      |
+| 1      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -158,7 +158,7 @@ SELECT ducknng_start_server(
 SET VARIABLE tour_http_reply = (
   SELECT body FROM ducknng_ncurl(
     'http://127.0.0.1:18440/_ducknng',
-    'POST', '{"Content-Type":"application/octet-stream"}',
+    'POST', '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
     from_hex('01000000000000000000000000000000000000000000'),
     2000, 0::UBIGINT
   )
@@ -172,11 +172,11 @@ FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 | true                                                                                                             |
 +------------------------------------------------------------------------------------------------------------------+
 
-+-------+-----------+------+--------------+
-|  ok   | type_name | name | method_count |
-+-------+-----------+------+--------------+
-| false | NULL      | NULL | NULL         |
-+-------+-----------+------+--------------+
++------+-----------+----------+--------------+
+|  ok  | type_name |   name   | method_count |
++------+-----------+----------+--------------+
+| true | result    | manifest | 6            |
++------+-----------+----------+--------------+
 ```
 
 **Query session: open, fetch Arrow IPC, parse the batch.**
@@ -1568,6 +1568,69 @@ before traffic arrives. The subscriber gateway walkthrough in
 shows all three services sharing one DuckDB runtime without deadlocking
 because each uses `service_serialized_connection`.
 
+### Chunked streaming routes (SSE)
+
+`ducknng_add_stream_route` registers a route that responds with HTTP
+chunked transfer encoding. The SQL query must return a `chunk` column;
+each non-null row is written to the client as a separate chunk before
+the terminator. `ducknng_format_sse(data, event, id, retry)` formats a
+single Server-Sent Events event string.
+
+``` sql
+SELECT ducknng_start_server(
+  'http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, 0::UBIGINT
+);
+SELECT ducknng_add_stream_route(
+  'http_sse', 'GET', '/events',
+  'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
+   FROM generate_series(1, 3) t(i)'
+);
+SELECT is_stream, stream_content_type
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_sse' AND path = '/events';
++-----------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
++-----------------------------------------------------------------------------------------------------------------+
+| true                                                                                                            |
++-----------------------------------------------------------------------------------------------------------------+
++--------------------------------------+
+| ducknng_add_stream_route('http_sse', 'GET', '/events', 'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
+   FROM generate_series(1, 3) t(i)') |
++--------------------------------------+
+| true                                 |
++--------------------------------------+
++-----------+----------------------------------+
+| is_stream |       stream_content_type        |
++-----------+----------------------------------+
+| true      | text/event-stream; charset=utf-8 |
++-----------+----------------------------------+
+```
+
+`ducknng_ncurl` transparently reassembles the chunked response. The body
+is the concatenation of all SSE events written by the server.
+
+``` sql
+SELECT ok, status, headers_json, body_text
+FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
+SELECT ducknng_stop_server('http_sse');
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
+|  ok  | status |                                                                          headers_json                                                                           | body_text |
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
+| true | 200    | [{"name":"Transfer-Encoding","value":"chunked"},{"name":"Content-Type","value":"text/event-stream; charset=utf-8"},{"name":"Cache-Control","value":"no-cache"}] | data: row 1
+
+data: row 2
+
+data: row 3
+
+          |
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
++---------------------------------+
+| ducknng_stop_server('http_sse') |
++---------------------------------+
+| true                            |
++---------------------------------+
+```
+
 ## Client interop: nanonext REQ/REP
 
 This example shows a `nanonext` R client talking to a `ducknng` server
@@ -1817,11 +1880,24 @@ counters.
 
 ``` sql
 SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
+SET VARIABLE monitor_url = (SELECT listen FROM ducknng_list_servers() WHERE name = 'monitor_demo');
 +------------------------------------------------------------------------------------------------------+
 | ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS "UBIGINT")) |
 +------------------------------------------------------------------------------------------------------+
 | true                                                                                                 |
 +------------------------------------------------------------------------------------------------------+
+```
+
+``` sql
+-- Dial a REQ socket to generate pipe-connect events.
+SET VARIABLE monitor_req = (ducknng_open_socket('req')).socket_id;
+SELECT (ducknng_dial_socket(getvariable('monitor_req')::UBIGINT, getvariable('monitor_url'), 0, 0::UBIGINT)).ok AS dialed;
+
++--------+
+| dialed |
++--------+
+| true   |
++--------+
 ```
 
 ``` sql
@@ -1831,7 +1907,7 @@ FROM ducknng_monitor_status('monitor_demo');
 +----------------+-------------+------------+------------+----------------+--------------+------------------+
 | event_capacity | event_count | oldest_seq | newest_seq | dropped_events | active_pipes | max_active_pipes |
 +----------------+-------------+------------+------------+----------------+--------------+------------------+
-| 0              | 0           | 0          | 0          | 0              | 0            | 0                |
+| 1024           | 2           | 1          | 2          | 0              | 1            | 0                |
 +----------------+-------------+------------+------------+----------------+--------------+------------------+
 ```
 
@@ -1840,14 +1916,21 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+---------+-----------+-------------+---------------+
-| pipe_id | opened_ms | remote_addr | peer_identity |
-+---------+-----------+-------------+---------------+
-+---------+-----------+-------------+---------------+
++------------+---------------+-----------------+---------------+
+|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
++------------+---------------+-----------------+---------------+
+| 1140650898 | 1778522619682 | 127.0.0.1:56060 | NULL          |
++------------+---------------+-----------------+---------------+
 ```
 
 ``` sql
+SELECT ducknng_close_socket(getvariable('monitor_req')::UBIGINT);
 SELECT ducknng_stop_server('monitor_demo');
++-------------------------------------------------------------------------------------------------------------------------+
+|                           ducknng_close_socket(CAST(getvariable('monitor_req') AS "UBIGINT"))                           |
++-------------------------------------------------------------------------------------------------------------------------+
+| {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 5, 'payload': NULL, 'url': NULL} |
++-------------------------------------------------------------------------------------------------------------------------+
 +-------------------------------------+
 | ducknng_stop_server('monitor_demo') |
 +-------------------------------------+
@@ -1863,13 +1946,18 @@ RPC; framed RPC (`manifest`, opt-in `exec`, raw unary, query sessions);
 low-level HTTP routes with exact, prefix, or template matching, SQL
 response rows, request-context/body helpers, named request accessors,
 one-row response builders, route-local auth policies, static asset
-serving, background workers, and streaming helpers
-(`ducknng_http_ndjson`, `ducknng_http_sse`); fast C admission (mTLS,
-exact peer-identity allowlists, IP/CIDR allowlists, per-service and
-per-principal resource limits); SQL authorizer callbacks; bounded
-per-service pipe-event monitor and active-pipe snapshot; DuckDB log ring
-captured via the logger API (`ducknng_log_entries()`); body codec layer
-with built-in providers and user-registered codec hooks.
+serving, background workers, and content-type shortcuts for NDJSON and
+SSE responses (`ducknng_http_ndjson`, `ducknng_format_sse`,
+`ducknng_add_stream_route` — `ducknng_http_ndjson` is a one-shot NDJSON
+response builder; `ducknng_format_sse` formats a Server-Sent Events
+event string; `ducknng_add_stream_route` registers a chunked-streaming
+route that writes each result row as a separate HTTP chunk); fast C
+admission (mTLS, exact peer-identity allowlists, IP/CIDR allowlists,
+per-service and per-principal resource limits); SQL authorizer
+callbacks; bounded per-service pipe-event monitor and active-pipe
+snapshot; DuckDB log ring captured via the logger API
+(`ducknng_log_entries()`); body codec layer with built-in providers and
+user-registered codec hooks.
 
 Intentionally deferred:
 

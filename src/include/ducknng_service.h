@@ -82,6 +82,11 @@ enum {
 };
 
 enum {
+    DUCKNNG_HTTP_ROUTE_RESPONSE_ONESHOT = 0,  /* buffer full body then send (default) */
+    DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM = 1    /* hijack conn, write chunked rows */
+};
+
+enum {
     DUCKNNG_EXECUTION_SHARED_SERIALIZED_CONNECTION = 1,
     DUCKNNG_EXECUTION_SERVICE_SERIALIZED_CONNECTION = 2,
     DUCKNNG_EXECUTION_REQUEST_CONNECTION = 3
@@ -90,11 +95,13 @@ enum {
 typedef struct ducknng_http_route {
     uint64_t route_id;
     uint8_t match_kind;
+    uint8_t response_mode;           /* DUCKNNG_HTTP_ROUTE_RESPONSE_* */
     char *method;
     char *path;
     char *handler_sql;
     uint64_t request_max_bytes;
     char *static_dir_path;           /* non-NULL: serve files from this directory */
+    char *stream_content_type;       /* non-NULL when response_mode==STREAM */
     int auth_require_identity;       /* 1: require non-empty caller_identity */
     char *auth_allow_identities_json; /* JSON array of allowed identities; NULL = any */
 } ducknng_http_route;
@@ -359,3 +366,10 @@ void ducknng_service_http_workers_free(ducknng_http_worker *workers, size_t coun
 int ducknng_service_check_and_record_session_open_locked(ducknng_service *svc,
     const char *identity, uint64_t now_ms, char **errmsg);
 const char *ducknng_service_resolved_listen(const ducknng_service *svc);
+int ducknng_service_register_http_stream_route(ducknng_service *svc, const char *method,
+    const char *path, const char *handler_sql, const char *content_type,
+    uint64_t request_max_bytes, char **errmsg);
+int ducknng_service_execute_stream_route(ducknng_service *svc,
+    const ducknng_http_request_context *request_ctx,
+    int (*on_chunk)(const void *data, size_t len, void *user_data),
+    void *user_data, char **errmsg);
