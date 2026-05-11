@@ -378,7 +378,7 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
     if (!append_text(&buf, &len, &cap, "{\"server\":{\"name\":")) goto oom;
     if (!append_json_string(&buf, &len, &cap, server_name ? server_name : "ducknng")) goto oom;
     if (!append_text(&buf, &len, &cap, ",\"version\":")) goto oom;
-    if (!append_json_string(&buf, &len, &cap, server_version ? server_version : "0.1.0.9000")) goto oom;
+    if (!append_json_string(&buf, &len, &cap, server_version ? server_version : "0.1.1")) goto oom;
     if (!append_text(&buf, &len, &cap, ",\"protocol_version\":")) goto oom;
     snprintf(numbuf, sizeof(numbuf), "%d", protocol_version);
     if (!append_text(&buf, &len, &cap, numbuf)) goto oom;

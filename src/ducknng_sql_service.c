@@ -1,6 +1,7 @@
 #include "ducknng_sql_shared.h"
 #include "ducknng_service.h"
 #include "ducknng_util.h"
+#include <nng/nng.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -420,6 +421,15 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
     duckdb_data_chunk_set_size(output, chunk_size);
 }
 
+static void ducknng_nng_version_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    (void)info;
+    idx_t count = duckdb_data_chunk_get_size(input);
+    const char *ver = nng_version();
+    for (idx_t row = 0; row < count; row++) {
+        duckdb_vector_assign_string_element(output, row, ver);
+    }
+}
+
 int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx) {
     duckdb_type service_limits_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     duckdb_type service_limits_extended_types[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
@@ -430,6 +440,7 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     duckdb_type service_limits_principal8_types[8] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     duckdb_type execution_model_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_nng_version", 0, ducknng_nng_version_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 2, ducknng_set_service_limits_scalar, ctx, service_limits_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 3, ducknng_set_service_limits_scalar, ctx, service_limits_extended_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 4, ducknng_set_service_limits_scalar, ctx, service_limits_full_types, DUCKDB_TYPE_BOOLEAN)) return 0;

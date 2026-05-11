@@ -1,6 +1,6 @@
 # News
 
-## ducknng 0.1.0.9000 — community submission release
+## ducknng 0.1.1 — community submission release
 
 Community-extension submission to duckdb/community-extensions (#1904).
 

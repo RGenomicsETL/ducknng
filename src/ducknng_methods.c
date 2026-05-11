@@ -34,7 +34,7 @@ static int ducknng_method_manifest_handler(ducknng_service *svc,
         ducknng_manifest_security security;
         ducknng_service_manifest_security(svc, &security);
         ducknng_mutex_lock(&svc->rt->mu);
-        json = ducknng_method_registry_manifest_json(&svc->rt->registry, "ducknng", "0.1.0.9000",
+        json = ducknng_method_registry_manifest_json(&svc->rt->registry, "ducknng", "0.1.1",
             DUCKNNG_WIRE_VERSION, &security, &errmsg);
         ducknng_mutex_unlock(&svc->rt->mu);
     }

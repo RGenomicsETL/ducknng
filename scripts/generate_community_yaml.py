@@ -23,7 +23,7 @@ GIT_REF = subprocess.run(
 EXTENSION = {
     "name": "ducknng",
     "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-    "version": "0.1.0.9000",
+    "version": "0.1.1",
     "language": "C",
     "build": "cmake",
     "license": "MIT",

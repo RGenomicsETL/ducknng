@@ -4,7 +4,7 @@ extension:
   description:
     "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls"
   version:
-    0.1.0.9000
+    0.1.1
   language:
     C
   build:
@@ -21,7 +21,7 @@ repo:
   github:
     sounkou-bioinfo/ducknng
   ref:
-    90e64f05e56593266bf0a81fa95b0d92937dfb23
+    5185cf58c8cc621579af6114900cc68aebab2676
 docs:
   hello_world:
     |
