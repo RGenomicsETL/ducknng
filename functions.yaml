@@ -69,6 +69,15 @@
       "examples": []
     },
     {
+      "name": "ducknng_nng_version",
+      "kind": "scalar",
+      "category": "Server",
+      "signature": "nng_version()",
+      "returns": "VARCHAR",
+      "description": "Return the vendored NNG library version string.",
+      "examples": []
+    },
+    {
       "name": "ducknng_open_socket",
       "kind": "scalar",
       "category": "NNG Sockets",

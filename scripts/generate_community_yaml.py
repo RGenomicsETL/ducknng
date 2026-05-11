@@ -89,6 +89,14 @@ FUNCTIONS = [
         "table",
         "List all running servers with listen URL, TLS mode/peering mode, pipe count.",
     ),
+    af(
+        "ducknng_nng_version",
+        "scalar",
+        SRV,
+        "nng_version()",
+        "VARCHAR",
+        "Return the vendored NNG library version string.",
+    ),
     # ---- NNG Sockets ----
     af(
         "ducknng_open_socket",

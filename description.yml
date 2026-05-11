@@ -21,7 +21,7 @@ repo:
   github:
     sounkou-bioinfo/ducknng
   ref:
-    da40831e8d5863a63b3ade9e3b98aab1cbdf9e79
+    90e64f05e56593266bf0a81fa95b0d92937dfb23
 docs:
   hello_world:
     |
