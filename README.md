@@ -67,7 +67,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:46385 |
+| tls+tcp://127.0.0.1:40277 |
 +---------------------------+
 
 +--------+
@@ -1952,7 +1952,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1851322868 | 1778523416539 | 127.0.0.1:49202 | NULL          |
+| 2112217503 | 1778523716665 | 127.0.0.1:51070 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 
@@ -1979,7 +1979,6 @@ the C API only.
 
 Intentionally deferred:
 
-- CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a
   table-function path.
 

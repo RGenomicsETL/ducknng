@@ -1240,7 +1240,6 @@ Version 0.1.0. All features shown in this README are implemented, tested, and ru
 
 Intentionally deferred:
 
-- CSV/TSV/Parquet body parsers beyond the safe BLOB fallback.
 - Full SQL-side decoding of session `fetch` Arrow batch BLOBs into a table-function path.
 
 ## References
