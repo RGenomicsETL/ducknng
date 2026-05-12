@@ -302,6 +302,7 @@
       ]
     },
     {
+      "name": "ducknng_open_socket",
       "kind": "scalar",
       "category": "Primitive Transport",
       "signature": "ducknng_open_socket(protocol)",
@@ -581,6 +582,24 @@
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT, 4::UBIGINT, 1048576::UBIGINT, 10::UBIGINT);"
       ],
       "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]]"
+    },
+    {
+      "name": "ducknng_service_inflight",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_service_inflight(name)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs.",
+      "notes": [
+        "Returns 0 if the service is not found or no requests are currently in flight.",
+        "Unlike ducknng_list_servers(), this scalar is re-evaluated per row and per CTE iteration, so it reflects live state rather than a query-start snapshot."
+      ],
+      "examples": [
+        "SELECT ducknng_service_inflight('my_svc');",
+        "WITH RECURSIVE poll(i, c) AS (SELECT 1, ducknng_service_inflight('my_svc') UNION ALL SELECT i + 1, (COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 + ducknng_service_inflight('my_svc')) FROM poll WHERE c < 1 AND i < 500) SELECT c FROM poll ORDER BY i DESC LIMIT 1;"
+      ]
     },
     {
       "name": "ducknng_set_service_execution_model",

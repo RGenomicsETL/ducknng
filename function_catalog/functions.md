@@ -8,6 +8,7 @@ This file is generated from `function_catalog/functions.yaml`.
 |---|---|---|---|---|
 | `ducknng_start_server` | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng service and choose the carrier from the listen URL scheme. |
 | `ducknng_stop_server` | scalar | `name` | `BOOLEAN` | Stop a named ducknng service. |
+| `ducknng_service_inflight` | scalar | `name` | `UBIGINT` | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
 | `ducknng_set_service_execution_model` | scalar | `name, model` | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL. |
 
 ## Introspection
@@ -18,6 +19,8 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_read_monitor` | table | `name, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)` | Read the bounded per-service NNG pipe monitor event stream. |
 | `ducknng_monitor_status` | table | `name` | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)` | Return pipe monitor ring status and active-pipe counters for a running service. |
 | `ducknng_list_pipes` | table | `name` | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)` | List currently active NNG pipes for a running service. |
+| `ducknng_log_entries` | table |  | `TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)` | Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring. |
+| `ducknng_enable_log_capture` | scalar |  | `BOOLEAN` | Wire the ducknng log ring into DuckDB's internal logger so that DuckDB log entries are captured and visible through ducknng_log_entries(). Returns TRUE if capture is active after the call, FALSE if registration failed. Safe to call multiple times. |
 
 ## Method Registry
 

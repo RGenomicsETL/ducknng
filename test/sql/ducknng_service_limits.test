@@ -184,13 +184,27 @@ SELECT max_inflight_requests FROM ducknng_list_servers() WHERE name = 'inflight_
 1
 
 query I
-SELECT CASE WHEN ducknng_set_service_authorizer('inflight_rpc', 'SELECT true AS allow, sleep_ms(500) AS slept') THEN 1 ELSE 0 END
+SELECT CASE WHEN ducknng_set_service_authorizer('inflight_rpc', 'SELECT true AS allow, sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
 ----
 1
 
 statement ok
 CREATE TEMP TABLE inflight_aio AS
-SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('inflight_rpc_url')::VARCHAR, 2000, 0::UBIGINT) AS aio
+SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('inflight_rpc_url')::VARCHAR, 4000, 0::UBIGINT) AS aio
+
+query I
+WITH RECURSIVE poll(i, c) AS (
+  SELECT 1, ducknng_service_inflight('inflight_rpc')
+  UNION ALL
+  SELECT i + 1, (
+      COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+      ducknng_service_inflight('inflight_rpc')
+  )
+  FROM poll
+  WHERE c < 1 AND i < 500
+) SELECT c FROM poll ORDER BY i DESC LIMIT 1;
+----
+1
 
 query IT
 SELECT ok, error
@@ -200,7 +214,7 @@ FROM ducknng_get_rpc_manifest(getvariable('inflight_rpc_url')::VARCHAR, 0::UBIGI
 
 query III
 SELECT aio_id = (SELECT aio FROM inflight_aio), ok, octet_length(frame) > 0
-FROM ducknng_aio_collect((SELECT list_value(aio) FROM inflight_aio), 2000)
+FROM ducknng_aio_collect((SELECT list_value(aio) FROM inflight_aio), 5000)
 ----
 1	1	1
 
@@ -244,13 +258,27 @@ SELECT max_inflight_per_principal FROM ducknng_list_servers() WHERE name = 'infl
 1
 
 query I
-SELECT CASE WHEN ducknng_set_service_authorizer('inflight_principal_rpc', 'SELECT true AS allow, sleep_ms(500) AS slept') THEN 1 ELSE 0 END
+SELECT CASE WHEN ducknng_set_service_authorizer('inflight_principal_rpc', 'SELECT true AS allow, sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
 ----
 1
 
 statement ok
 CREATE TEMP TABLE inflight_principal_aio AS
-SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('inflight_principal_url')::VARCHAR, 2000, getvariable('limit_peer_tls_config_id')::UBIGINT) AS aio
+SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('inflight_principal_url')::VARCHAR, 4000, getvariable('limit_peer_tls_config_id')::UBIGINT) AS aio
+
+query I
+WITH RECURSIVE poll(i, c) AS (
+  SELECT 1, ducknng_service_inflight('inflight_principal_rpc')
+  UNION ALL
+  SELECT i + 1, (
+      COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+      ducknng_service_inflight('inflight_principal_rpc')
+  )
+  FROM poll
+  WHERE c < 1 AND i < 500
+) SELECT c FROM poll ORDER BY i DESC LIMIT 1;
+----
+1
 
 query IT
 SELECT ok, error

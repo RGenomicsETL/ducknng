@@ -37,6 +37,7 @@ typedef struct {
 typedef struct {
     ducknng_server_row *rows;
     idx_t row_count;
+    ducknng_runtime *rt;
 } ducknng_servers_bind_data;
 
 typedef struct {
@@ -177,6 +178,7 @@ static void ducknng_servers_bind(duckdb_bind_info info) {
         return;
     }
     memset(bind, 0, sizeof(*bind));
+    bind->rt = ctx->rt;
 
     ducknng_mutex_lock(&ctx->rt->mu);
     bind->row_count = (idx_t)ctx->rt->service_count;
@@ -389,6 +391,18 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
 
     for (i = 0; i < chunk_size; i++) {
         ducknng_server_row *row = &bind->rows[init->offset + i];
+        uint64_t live_inflight = row->inflight_requests;
+        if (bind->rt && row->service_id > 0) {
+            size_t si;
+            ducknng_mutex_lock(&bind->rt->mu);
+            for (si = 0; si < bind->rt->service_count; si++) {
+                if (bind->rt->services[si] && bind->rt->services[si]->service_id == row->service_id) {
+                    live_inflight = (uint64_t)ducknng_service_inflight_request_count(bind->rt->services[si]);
+                    break;
+                }
+            }
+            ducknng_mutex_unlock(&bind->rt->mu);
+        }
         service_ids[i] = row->service_id;
         contexts[i] = row->contexts;
         running[i] = row->running;
@@ -396,7 +410,7 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
         active_pipes[i] = row->active_pipes;
         max_open_sessions[i] = row->max_open_sessions;
         max_active_pipes[i] = row->max_active_pipes;
-        inflight_requests[i] = row->inflight_requests;
+        inflight_requests[i] = live_inflight;
         max_inflight_requests[i] = row->max_inflight_requests;
         max_sessions_per_peer_identity[i] = row->max_sessions_per_peer_identity;
         max_inflight_per_principal[i] = row->max_inflight_per_principal;
@@ -421,6 +435,26 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
     duckdb_data_chunk_set_size(output, chunk_size);
 }
 
+static void ducknng_service_inflight_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
+    for (row = 0; row < count; row++) {
+        char *name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        uint64_t inflight = 0;
+        if (ctx && ctx->rt && name && name[0]) {
+            ducknng_service *svc;
+            ducknng_mutex_lock(&ctx->rt->mu);
+            svc = ducknng_sql_find_service_by_name(ctx->rt, name);
+            if (svc) inflight = (uint64_t)ducknng_service_inflight_request_count(svc);
+            ducknng_mutex_unlock(&ctx->rt->mu);
+        }
+        if (name) duckdb_free(name);
+        out[row] = inflight;
+    }
+}
+
 static void ducknng_nng_version_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     (void)info;
     idx_t count = duckdb_data_chunk_get_size(input);
@@ -441,6 +475,10 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     duckdb_type execution_model_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_nng_version", 0, ducknng_nng_version_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
+    {
+        duckdb_type inflight_types[1] = {DUCKDB_TYPE_VARCHAR};
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_service_inflight", 1, ducknng_service_inflight_scalar, ctx, inflight_types, DUCKDB_TYPE_UBIGINT)) return 0;
+    }
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 2, ducknng_set_service_limits_scalar, ctx, service_limits_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 3, ducknng_set_service_limits_scalar, ctx, service_limits_extended_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 4, ducknng_set_service_limits_scalar, ctx, service_limits_full_types, DUCKDB_TYPE_BOOLEAN)) return 0;

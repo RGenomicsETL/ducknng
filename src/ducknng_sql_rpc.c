@@ -355,11 +355,37 @@ static void ducknng_server_stop_scalar(duckdb_function_info info, duckdb_data_ch
             duckdb_scalar_function_set_error(info, "ducknng: service not found");
             return;
         }
-        if (ducknng_runtime_current_thread_request_service_get(ctx->rt) == svc ||
-            ducknng_runtime_current_request_service_get(ctx->rt) == svc) {
+        /* Programming error: stop called from within this service's own
+         * request handler thread (e.g. an authorizer calling stop on
+         * itself).  This is always a thrown error. */
+        if (ducknng_runtime_current_thread_request_service_get(ctx->rt) == svc) {
             duckdb_free(name);
             duckdb_scalar_function_set_error(info, "ducknng: cannot stop a service from its own request handler");
             return;
+        }
+        /* Transient condition: some other thread has an inflight request or
+         * is currently authorizing one (current_request_service_ptr is set
+         * for the full duration of enter_request_sql, which covers both the
+         * authorizer SQL and the method SQL).  Return false so the caller
+         * can drain and retry rather than throwing an unrecoverable error. */
+        if (ducknng_runtime_current_request_service_get(ctx->rt) == svc) {
+            duckdb_free(name);
+            out[row] = false;
+            continue;
+        }
+        /* Belt-and-suspenders: also catch the window between begin_request
+         * and the first enter_request_sql call (TLS handshake / NNG
+         * dispatch latency before the authorizer acquires the DuckDB lane). */
+        {
+            int has_inflight = 0;
+            if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+            has_inflight = (svc->inflight_request_count > 0);
+            if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+            if (has_inflight) {
+                duckdb_free(name);
+                out[row] = false;
+                continue;
+            }
         }
         svc = ducknng_runtime_remove_service(ctx->rt, name);
         duckdb_free(name);
