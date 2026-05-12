@@ -67,7 +67,7 @@ SET VARIABLE stop_auth_active_url = (
 
 query I
 SELECT CASE
-  WHEN ducknng_set_service_authorizer('stop_auth_active', 'SELECT true AS allow, sleep_ms(500) AS slept')
+  WHEN ducknng_set_service_authorizer('stop_auth_active', 'SELECT true AS allow, sleep_ms(1000) AS slept')
   THEN 1 ELSE 0 END
 ----
 1
@@ -76,6 +76,9 @@ statement ok
 SET VARIABLE stop_auth_active_aio = (
   SELECT ducknng_get_rpc_manifest_raw_aio(getvariable('stop_auth_active_url')::VARCHAR, 2000, 0::UBIGINT)
 )
+
+statement ok
+SELECT sleep_ms(100)
 
 statement error
 SELECT ducknng_stop_server('stop_auth_active')
