@@ -57,25 +57,78 @@ static void destroy_methods_init_data(void *ptr) {
     if (data) duckdb_free(data);
 }
 
+static int ducknng_strdup_field(char **out, const char *value) {
+    if (!out) return 0;
+    *out = NULL;
+    if (!value) return 1;
+    *out = ducknng_strdup(value);
+    return *out != NULL;
+}
 
-static void ducknng_register_exec_method_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
-    idx_t count = duckdb_data_chunk_get_size(input);
-    idx_t ncols = duckdb_data_chunk_get_column_count(input);
-    idx_t row;
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
-    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
-    bool *out = (bool *)duckdb_vector_get_data(output);
+static int ducknng_method_row_copy(ducknng_method_row *row,
+    const ducknng_method_projection *view) {
+    if (!row || !view) return 0;
+
+    if (!ducknng_strdup_field(&row->name, view->name)) return 0;
+    if (!ducknng_strdup_field(&row->family, view->family)) return 0;
+    if (!ducknng_strdup_field(&row->summary, view->summary)) return 0;
+    if (!ducknng_strdup_field(&row->transport_pattern, view->transport_pattern)) return 0;
+    if (!ducknng_strdup_field(&row->request_payload_format, view->request_payload_format)) return 0;
+    if (!ducknng_strdup_field(&row->response_payload_format, view->response_payload_format)) return 0;
+    if (!ducknng_strdup_field(&row->response_mode, view->response_mode)) return 0;
+    if (!ducknng_strdup_field(&row->request_schema_json, view->request_schema_json)) return 0;
+    if (!ducknng_strdup_field(&row->response_schema_json, view->response_schema_json)) return 0;
+
+    row->requires_auth = view->requires_auth ? true : false;
+    row->disabled = view->disabled ? true : false;
+    return 1;
+}
+
+static void ducknng_methods_assign_string(duckdb_vector vec, idx_t row,
+    const char *value) {
+    if (value) {
+        duckdb_unsafe_vector_assign_string_element_len(vec, row, value,
+            (idx_t)strlen(value));
+    } else {
+        set_null(vec, row);
+    }
+}
+
+static void ducknng_register_exec_method_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    ducknng_sql_context *ctx;
+    bool *out;
     char *errmsg = NULL;
+    idx_t count;
+    idx_t ncols;
+    idx_t row;
+
+    ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+
     if (!ctx || !ctx->rt) {
         duckdb_scalar_function_set_error(info, "ducknng: missing runtime");
         return;
     }
+
+    out = (bool *)duckdb_vector_get_data(output);
+    count = duckdb_data_chunk_get_size(input);
+    ncols = duckdb_data_chunk_get_column_count(input);
+
     for (row = 0; row < count; row++) {
-        int requires_auth = ncols > 0 ? (arg_bool(duckdb_data_chunk_get_vector(input, 0), row, false) ? 1 : 0) : 0;
+        int requires_auth = 0;
+
+        if (ncols > 0) {
+            requires_auth = arg_bool(duckdb_data_chunk_get_vector(input, 0),
+                row, false) ? 1 : 0;
+        }
+
         ducknng_mutex_lock(&ctx->rt->mu);
-        if (!ducknng_register_exec_method_with_auth(ctx->rt, requires_auth, &errmsg)) {
+        if (!ducknng_register_exec_method_with_auth(ctx->rt, requires_auth,
+                &errmsg)) {
             ducknng_mutex_unlock(&ctx->rt->mu);
-            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to register exec method");
+            duckdb_scalar_function_set_error(info,
+                errmsg ? errmsg : "ducknng: failed to register exec method");
             if (errmsg) duckdb_free(errmsg);
             return;
         }
@@ -256,18 +309,15 @@ static void ducknng_methods_bind(duckdb_bind_info info) {
         for (i = 0; i < (size_t)bind->row_count; i++) {
             const ducknng_method_descriptor *m = ctx->rt->registry.methods[i];
             ducknng_method_projection view;
+
             ducknng_method_descriptor_project(m, &view);
-            bind->rows[i].name = ducknng_strdup(view.name);
-            bind->rows[i].family = ducknng_strdup(view.family);
-            bind->rows[i].summary = ducknng_strdup(view.summary);
-            bind->rows[i].transport_pattern = ducknng_strdup(view.transport_pattern);
-            bind->rows[i].request_payload_format = ducknng_strdup(view.request_payload_format);
-            bind->rows[i].response_payload_format = ducknng_strdup(view.response_payload_format);
-            bind->rows[i].response_mode = ducknng_strdup(view.response_mode);
-            bind->rows[i].requires_auth = view.requires_auth ? true : false;
-            bind->rows[i].disabled = view.disabled ? true : false;
-            bind->rows[i].request_schema_json = view.request_schema_json ? ducknng_strdup(view.request_schema_json) : NULL;
-            bind->rows[i].response_schema_json = view.response_schema_json ? ducknng_strdup(view.response_schema_json) : NULL;
+            if (!ducknng_method_row_copy(&bind->rows[i], &view)) {
+                ducknng_mutex_unlock(&ctx->rt->mu);
+                destroy_methods_bind_data(bind);
+                duckdb_bind_set_error(info,
+                    "ducknng: out of memory copying method descriptor");
+                return;
+            }
         }
     }
     ducknng_mutex_unlock(&ctx->rt->mu);
@@ -306,34 +356,62 @@ static void ducknng_methods_init(duckdb_init_info info) {
 static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_methods_init_data *init = (ducknng_methods_init_data *)duckdb_function_get_init_data(info);
     ducknng_methods_bind_data *bind;
+    duckdb_vector name_col;
+    duckdb_vector family_col;
+    duckdb_vector summary_col;
+    duckdb_vector transport_pattern_col;
+    duckdb_vector request_payload_format_col;
+    duckdb_vector response_payload_format_col;
+    duckdb_vector response_mode_col;
+    duckdb_vector request_schema_json_col;
+    duckdb_vector response_schema_json_col;
+    bool *requires_auth;
+    bool *disabled;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
-    bool *requires_auth;
-    bool *disabled;
+
     if (!init || !init->bind || init->offset >= init->bind->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
+
     bind = init->bind;
     remaining = bind->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
+
+    name_col = duckdb_data_chunk_get_vector(output, 0);
+    family_col = duckdb_data_chunk_get_vector(output, 1);
+    summary_col = duckdb_data_chunk_get_vector(output, 2);
+    transport_pattern_col = duckdb_data_chunk_get_vector(output, 3);
+    request_payload_format_col = duckdb_data_chunk_get_vector(output, 4);
+    response_payload_format_col = duckdb_data_chunk_get_vector(output, 5);
+    response_mode_col = duckdb_data_chunk_get_vector(output, 6);
+    request_schema_json_col = duckdb_data_chunk_get_vector(output, 7);
+    response_schema_json_col = duckdb_data_chunk_get_vector(output, 8);
     requires_auth = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 9));
     disabled = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
+
     for (i = 0; i < chunk_size; i++) {
         ducknng_method_row *row = &bind->rows[init->offset + i];
-        if (row->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), i, row->name, (idx_t)strlen(row->name)); else set_null(duckdb_data_chunk_get_vector(output, 0), i);
-        if (row->family) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->family, (idx_t)strlen(row->family)); else set_null(duckdb_data_chunk_get_vector(output, 1), i);
-        if (row->summary) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), i, row->summary, (idx_t)strlen(row->summary)); else set_null(duckdb_data_chunk_get_vector(output, 2), i);
-        if (row->transport_pattern) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, row->transport_pattern, (idx_t)strlen(row->transport_pattern)); else set_null(duckdb_data_chunk_get_vector(output, 3), i);
-        if (row->request_payload_format) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 4), i, row->request_payload_format, (idx_t)strlen(row->request_payload_format)); else set_null(duckdb_data_chunk_get_vector(output, 4), i);
-        if (row->response_payload_format) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), i, row->response_payload_format, (idx_t)strlen(row->response_payload_format)); else set_null(duckdb_data_chunk_get_vector(output, 5), i);
-        if (row->response_mode) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), i, row->response_mode, (idx_t)strlen(row->response_mode)); else set_null(duckdb_data_chunk_get_vector(output, 6), i);
-        if (row->request_schema_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), i, row->request_schema_json, (idx_t)strlen(row->request_schema_json)); else set_null(duckdb_data_chunk_get_vector(output, 7), i);
-        if (row->response_schema_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), i, row->response_schema_json, (idx_t)strlen(row->response_schema_json)); else set_null(duckdb_data_chunk_get_vector(output, 8), i);
+
+        ducknng_methods_assign_string(name_col, i, row->name);
+        ducknng_methods_assign_string(family_col, i, row->family);
+        ducknng_methods_assign_string(summary_col, i, row->summary);
+        ducknng_methods_assign_string(transport_pattern_col, i, row->transport_pattern);
+        ducknng_methods_assign_string(request_payload_format_col, i,
+            row->request_payload_format);
+        ducknng_methods_assign_string(response_payload_format_col, i,
+            row->response_payload_format);
+        ducknng_methods_assign_string(response_mode_col, i, row->response_mode);
+        ducknng_methods_assign_string(request_schema_json_col, i,
+            row->request_schema_json);
+        ducknng_methods_assign_string(response_schema_json_col, i,
+            row->response_schema_json);
         requires_auth[i] = row->requires_auth;
         disabled[i] = row->disabled;
     }
+
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
 }
@@ -351,11 +429,34 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
     duckdb_type method_auth_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN};
     duckdb_type method_family_types[1] = {DUCKDB_TYPE_VARCHAR};
     duckdb_type register_exec_auth_types[1] = {DUCKDB_TYPE_BOOLEAN};
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 0, ducknng_register_exec_method_scalar, ctx, NULL, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 1, ducknng_register_exec_method_scalar, ctx, register_exec_auth_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_method_auth", 2, ducknng_set_method_auth_scalar, ctx, method_auth_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_method", 1, ducknng_unregister_method_scalar, ctx, method_name_types, DUCKDB_TYPE_BOOLEAN)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_family", 1, ducknng_unregister_family_scalar, ctx, method_family_types, DUCKDB_TYPE_UBIGINT)) return 0;
-    if (!register_named_methods_table(con, ctx, "ducknng_list_methods")) return 0;
+
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 0,
+            ducknng_register_exec_method_scalar, ctx, NULL, DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 1,
+            ducknng_register_exec_method_scalar, ctx, register_exec_auth_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_method_auth", 2,
+            ducknng_set_method_auth_scalar, ctx, method_auth_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_method", 1,
+            ducknng_unregister_method_scalar, ctx, method_name_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_family", 1,
+            ducknng_unregister_family_scalar, ctx, method_family_types,
+            DUCKDB_TYPE_UBIGINT)) {
+        return 0;
+    }
+    if (!register_named_methods_table(con, ctx, "ducknng_list_methods")) {
+        return 0;
+    }
+
     return 1;
 }
