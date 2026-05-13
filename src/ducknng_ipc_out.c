@@ -25,13 +25,17 @@ static int ducknng_build_exec_request_schema(struct ArrowSchema *schema, struct 
 
 static int ducknng_build_query_open_request_schema(struct ArrowSchema *schema, struct ArrowError *error) {
     ArrowSchemaInit(schema);
-    if (ArrowSchemaSetTypeStruct(schema, 3) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetTypeStruct(schema, 5) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[0], "sql") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[1], "batch_rows") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_UINT64) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[2], "batch_bytes") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[2], NANOARROW_TYPE_UINT64) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetName(schema->children[3], "correlation_id") != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetType(schema->children[3], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetName(schema->children[4], "serialization_mode") != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetType(schema->children[4], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
     (void)error;
     return 0;
 }
@@ -47,6 +51,47 @@ static int ducknng_build_metadata_schema(struct ArrowSchema *schema, struct Arro
     if (ArrowSchemaSetType(schema->children[2], NANOARROW_TYPE_INT32) != NANOARROW_OK) return -1;
     (void)error;
     return 0;
+}
+
+static size_t ducknng_json_escaped_len(const char *s) {
+    size_t n = 0;
+    if (!s) return 0;
+    while (*s) {
+        unsigned char c = (unsigned char)*s++;
+        if (c == '\\' || c == '"') n += 2;
+        else if (c < 0x20) n += 6;
+        else n += 1;
+    }
+    return n;
+}
+
+static char *ducknng_json_escape_dup(const char *s) {
+    static const char hex[] = "0123456789abcdef";
+    char *out;
+    size_t out_len;
+    size_t i = 0;
+    if (!s) return ducknng_strdup("");
+    out_len = ducknng_json_escaped_len(s);
+    out = (char *)duckdb_malloc(out_len + 1);
+    if (!out) return NULL;
+    while (*s) {
+        unsigned char c = (unsigned char)*s++;
+        if (c == '\\' || c == '"') {
+            out[i++] = '\\';
+            out[i++] = (char)c;
+        } else if (c < 0x20) {
+            out[i++] = '\\';
+            out[i++] = 'u';
+            out[i++] = '0';
+            out[i++] = '0';
+            out[i++] = hex[(c >> 4) & 0x0f];
+            out[i++] = hex[c & 0x0f];
+        } else {
+            out[i++] = (char)c;
+        }
+    }
+    out[i] = '\0';
+    return out;
 }
 
 /* -------------------------------------------------------------------------
@@ -619,8 +664,9 @@ cleanup:
  * Public API: query_open request → IPC
  * ---------------------------------------------------------------------- */
 
-int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
-    uint64_t batch_bytes, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+int ducknng_query_open_request_to_ipc_ex(const char *sql, uint64_t batch_rows,
+    uint64_t batch_bytes, const char *correlation_id, const char *serialization_mode,
+    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
     struct ArrowSchema schema;
     struct ArrowArray array;
     struct ArrowArrayStream stream;
@@ -629,6 +675,8 @@ int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
     struct ArrowBuffer output_buf;
     struct ArrowError error;
     struct ArrowStringView sql_view;
+    struct ArrowStringView correlation_view;
+    struct ArrowStringView mode_view;
     uint8_t *copy = NULL;
     int rc = -1;
     memset(&schema, 0, sizeof(schema));
@@ -656,9 +704,15 @@ int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
     }
     sql_view.data = sql;
     sql_view.size_bytes = (int64_t)strlen(sql);
+    correlation_view.data = correlation_id ? correlation_id : "";
+    correlation_view.size_bytes = correlation_id ? (int64_t)strlen(correlation_id) : 0;
+    mode_view.data = serialization_mode ? serialization_mode : "";
+    mode_view.size_bytes = serialization_mode ? (int64_t)strlen(serialization_mode) : 0;
     if (ArrowArrayAppendString(array.children[0], sql_view) != NANOARROW_OK ||
         (batch_rows > 0 ? ArrowArrayAppendUInt(array.children[1], batch_rows) : ArrowArrayAppendNull(array.children[1], 1)) != NANOARROW_OK ||
         (batch_bytes > 0 ? ArrowArrayAppendUInt(array.children[2], batch_bytes) : ArrowArrayAppendNull(array.children[2], 1)) != NANOARROW_OK ||
+        (correlation_id && correlation_id[0] ? ArrowArrayAppendString(array.children[3], correlation_view) : ArrowArrayAppendNull(array.children[3], 1)) != NANOARROW_OK ||
+        (serialization_mode && serialization_mode[0] ? ArrowArrayAppendString(array.children[4], mode_view) : ArrowArrayAppendNull(array.children[4], 1)) != NANOARROW_OK ||
         ArrowArrayFinishElement(&array) != NANOARROW_OK ||
         ArrowArrayFinishBuildingDefault(&array, &error) != NANOARROW_OK) {
         if (errmsg) *errmsg = ducknng_strdup(error.message[0] ? error.message :
@@ -701,31 +755,65 @@ cleanup:
     return rc;
 }
 
+int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
+    uint64_t batch_bytes, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    return ducknng_query_open_request_to_ipc_ex(sql, batch_rows, batch_bytes,
+        NULL, NULL, out_bytes, out_len, errmsg);
+}
+
 /* -------------------------------------------------------------------------
  * Public API: session request JSON
  * ---------------------------------------------------------------------- */
 
-char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
-    uint64_t batch_rows, uint64_t batch_bytes) {
-    char buf[320];
+char *ducknng_session_request_json_ex(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes, const char *correlation_id) {
+    char buf[512];
+    char *escaped_token = NULL;
+    char *escaped_correlation = NULL;
     int n;
     if (session_id == 0 || !session_token || !session_token[0]) return NULL;
+    escaped_token = ducknng_json_escape_dup(session_token);
+    if (!escaped_token) return NULL;
+    if (correlation_id && correlation_id[0]) {
+        escaped_correlation = ducknng_json_escape_dup(correlation_id);
+        if (!escaped_correlation) {
+            duckdb_free(escaped_token);
+            return NULL;
+        }
+    }
     n = snprintf(buf, sizeof(buf), "{\"session_id\":%llu,\"session_token\":\"%s\"",
-        (unsigned long long)session_id, session_token);
-    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+        (unsigned long long)session_id, escaped_token);
+    if (n < 0 || (size_t)n >= sizeof(buf)) goto fail;
     if (batch_rows > 0) {
         n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_rows\":%llu",
             (unsigned long long)batch_rows);
-        if ((size_t)n >= sizeof(buf)) return NULL;
+        if ((size_t)n >= sizeof(buf)) goto fail;
     }
     if (batch_bytes > 0) {
         n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_bytes\":%llu",
             (unsigned long long)batch_bytes);
-        if ((size_t)n >= sizeof(buf)) return NULL;
+        if ((size_t)n >= sizeof(buf)) goto fail;
+    }
+    if (escaped_correlation) {
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"correlation_id\":\"%s\"",
+            escaped_correlation);
+        if ((size_t)n >= sizeof(buf)) goto fail;
     }
     n += snprintf(buf + n, sizeof(buf) - (size_t)n, "}");
-    if ((size_t)n >= sizeof(buf)) return NULL;
+    if ((size_t)n >= sizeof(buf)) goto fail;
+    duckdb_free(escaped_token);
+    if (escaped_correlation) duckdb_free(escaped_correlation);
     return ducknng_strdup(buf);
+fail:
+    duckdb_free(escaped_token);
+    if (escaped_correlation) duckdb_free(escaped_correlation);
+    return NULL;
+}
+
+char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes) {
+    return ducknng_session_request_json_ex(session_id, session_token,
+        batch_rows, batch_bytes, NULL);
 }
 
 /* -------------------------------------------------------------------------

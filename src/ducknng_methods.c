@@ -124,23 +124,160 @@ static int ducknng_json_reply(ducknng_method_reply *reply, const char *method_na
         flags | DUCKNNG_RPC_FLAG_PAYLOAD_JSON, payload, payload_len) ? 0 : -1;
 }
 
+static int ducknng_json_append_text(char **buf, size_t *len, size_t *cap, const char *text) {
+    size_t add = text ? strlen(text) : 0;
+    char *next;
+    size_t want;
+    if (!text || add == 0) return 1;
+    want = *len + add + 1;
+    if (*cap >= want) {
+        memcpy(*buf + *len, text, add + 1);
+        *len += add;
+        return 1;
+    }
+    *cap = *cap ? *cap * 2 : 256;
+    while (*cap < want) *cap *= 2;
+    next = (char *)duckdb_malloc(*cap);
+    if (!next) return 0;
+    if (*buf && *len) memcpy(next, *buf, *len);
+    if (*buf) duckdb_free(*buf);
+    *buf = next;
+    memcpy(*buf + *len, text, add + 1);
+    *len += add;
+    return 1;
+}
+
+static int ducknng_json_append_string(char **buf, size_t *len, size_t *cap, const char *text) {
+    const char *p = text ? text : "";
+    if (!ducknng_json_append_text(buf, len, cap, "\"")) return 0;
+    while (*p) {
+        char esc[3] = {0, 0, 0};
+        if (*p == '\\' || *p == '"') {
+            esc[0] = '\\';
+            esc[1] = *p;
+            if (!ducknng_json_append_text(buf, len, cap, esc)) return 0;
+        } else if ((unsigned char)*p < 0x20) {
+            char hex[7];
+            snprintf(hex, sizeof(hex), "\\u%04x", (unsigned int)(unsigned char)*p);
+            if (!ducknng_json_append_text(buf, len, cap, hex)) return 0;
+        } else {
+            char one[2] = {*p, 0};
+            if (!ducknng_json_append_text(buf, len, cap, one)) return 0;
+        }
+        p++;
+    }
+    return ducknng_json_append_text(buf, len, cap, "\"");
+}
+
+typedef struct ducknng_session_reply_view {
+    uint64_t session_id;
+    const char *session_token;
+    const char *state;
+    const char *next_method;
+    int has_idle_timeout_ms;
+    uint64_t idle_timeout_ms;
+    const char *result_handle;
+    int has_batch_index;
+    uint64_t batch_index;
+    const char *serialization_mode;
+    const char *correlation_id;
+} ducknng_session_reply_view;
+
+static const char *ducknng_session_row_payload_format_name(int value) {
+    (void)value;
+    return "arrow_ipc_stream";
+}
+
+static int ducknng_parse_row_payload_format(const char *value, int *out) {
+    if (out) *out = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
+    if (!value || !value[0] || strcmp(value, "arrow_ipc_stream") == 0) return 0;
+    return -1;
+}
+
+static const char *ducknng_server_platform_name(void) {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
+
+static char *ducknng_build_session_reply_json(const ducknng_session_reply_view *view) {
+    char *buf = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    char numbuf[64];
+    if (!view) return NULL;
+    if (!ducknng_json_append_text(&buf, &len, &cap, "{\"session_id\":")) goto oom;
+    snprintf(numbuf, sizeof(numbuf), "%llu", (unsigned long long)view->session_id);
+    if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    if (view->session_token) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"session_token\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->session_token)) goto oom;
+    }
+    if (view->state) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"state\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->state)) goto oom;
+    }
+    if (view->next_method) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"next_method\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->next_method)) goto oom;
+    }
+    if (view->has_idle_timeout_ms) {
+        snprintf(numbuf, sizeof(numbuf), ",\"idle_timeout_ms\":%llu",
+            (unsigned long long)view->idle_timeout_ms);
+        if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    }
+    if (view->result_handle) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"result_handle\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->result_handle)) goto oom;
+    }
+    if (view->has_batch_index) {
+        snprintf(numbuf, sizeof(numbuf), ",\"batch_index\":%llu",
+            (unsigned long long)view->batch_index);
+        if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    }
+    if (view->serialization_mode) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"serialization_mode\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->serialization_mode)) goto oom;
+    }
+    if (view->correlation_id) {
+        if (!ducknng_json_append_text(&buf, &len, &cap, ",\"correlation_id\":")) goto oom;
+        if (!ducknng_json_append_string(&buf, &len, &cap, view->correlation_id)) goto oom;
+    }
+    if (!ducknng_json_append_text(&buf, &len, &cap, "}")) goto oom;
+    return buf;
+oom:
+    if (buf) duckdb_free(buf);
+    return NULL;
+}
+
 static int ducknng_session_state_reply(ducknng_method_reply *reply, const char *method_name,
-    uint32_t flags, uint64_t session_id, const char *state) {
-    char control[256];
-    if (!reply || !method_name || !state) return -1;
-    snprintf(control, sizeof(control), "{\"session_id\":%llu,\"state\":\"%s\"}",
-        (unsigned long long)session_id, state);
-    return ducknng_json_reply(reply, method_name, flags, control);
+    uint32_t flags, const ducknng_session_reply_view *view) {
+    char *control;
+    int rc;
+    if (!reply || !method_name || !view) return -1;
+    control = ducknng_build_session_reply_json(view);
+    if (!control) return -1;
+    rc = ducknng_json_reply(reply, method_name, flags, control);
+    duckdb_free(control);
+    return rc;
 }
 
 typedef struct ducknng_session_control_request {
     uint64_t session_id;
     char *session_token;
+    char *correlation_id;
 } ducknng_session_control_request;
 
 static void ducknng_session_control_request_reset(ducknng_session_control_request *request) {
     if (!request) return;
     if (request->session_token) duckdb_free(request->session_token);
+    if (request->correlation_id) duckdb_free(request->correlation_id);
     memset(request, 0, sizeof(*request));
 }
 
@@ -161,6 +298,7 @@ static int ducknng_parse_session_control_request(const ducknng_request_context *
         return -1;
     }
     request->session_token = ducknng_json_extract_string_dup(json, "session_token");
+    request->correlation_id = ducknng_json_extract_string_dup(json, "correlation_id");
     duckdb_free(json);
     if (!request->session_token || !request->session_token[0]) {
         snprintf(errmsg, sizeof(errmsg),
@@ -178,6 +316,97 @@ static const char *ducknng_session_auth_error_message(int auth) {
         "ducknng: session owner token mismatch";
 }
 
+static int ducknng_method_handshake_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    char *json = NULL;
+    char *correlation_id = NULL;
+    char *preferred_mode = NULL;
+    char *response = NULL;
+    uint64_t min_protocol_version = DUCKNNG_WIRE_VERSION;
+    uint64_t max_protocol_version = DUCKNNG_WIRE_VERSION;
+    int row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
+    char *duckdb_version = NULL;
+    char *errmsg = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    char numbuf[64];
+    (void)method;
+    (void)svc;
+    if (!reply) return -1;
+    if (req && req->frame && req->frame->payload_len > 0) {
+        json = ducknng_copy_payload_json(req);
+        if (!json) {
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: out of memory copying handshake payload");
+            return -1;
+        }
+        if (ducknng_json_extract_u64(json, "min_protocol_version", &min_protocol_version) != 0) {
+            min_protocol_version = DUCKNNG_WIRE_VERSION;
+        }
+        if (ducknng_json_extract_u64(json, "max_protocol_version", &max_protocol_version) != 0) {
+            max_protocol_version = DUCKNNG_WIRE_VERSION;
+        }
+        correlation_id = ducknng_json_extract_string_dup(json, "correlation_id");
+        preferred_mode = ducknng_json_extract_string_dup(json, "preferred_serialization_mode");
+    }
+    if (min_protocol_version > DUCKNNG_WIRE_VERSION || max_protocol_version < DUCKNNG_WIRE_VERSION) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: handshake protocol version range does not include the current wire version");
+        goto done;
+    }
+    if (preferred_mode && ducknng_parse_row_payload_format(preferred_mode, &row_payload_format) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: unsupported preferred_serialization_mode");
+        goto done;
+    }
+    duckdb_version = ducknng_strdup(duckdb_library_version());
+    if (!duckdb_version) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: out of memory preparing handshake reply");
+        goto done;
+    }
+    if (!ducknng_json_append_text(&response, &len, &cap, "{")) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap, "\"server_name\":")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap, "ducknng")) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap, ",\"server_version\":")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap, "0.1.1")) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap, ",\"duckdb_version\":")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap, duckdb_version)) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap, ",\"server_platform\":")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap, ducknng_server_platform_name())) goto oom;
+    snprintf(numbuf, sizeof(numbuf), ",\"protocol_version\":%u,\"selected_protocol_version\":%u",
+        (unsigned int)DUCKNNG_WIRE_VERSION, (unsigned int)DUCKNNG_WIRE_VERSION);
+    if (!ducknng_json_append_text(&response, &len, &cap, numbuf)) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap, ",\"selected_serialization_mode\":")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap,
+            ducknng_session_row_payload_format_name(row_payload_format))) goto oom;
+    if (!ducknng_json_append_text(&response, &len, &cap,
+            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}}")) goto oom;
+    if (correlation_id) {
+        if (!ducknng_json_append_text(&response, &len, &cap, ",\"correlation_id\":")) goto oom;
+        if (!ducknng_json_append_string(&response, &len, &cap, correlation_id)) goto oom;
+    }
+    if (!ducknng_json_append_text(&response, &len, &cap, "}")) goto oom;
+    if (ducknng_json_reply(reply, "handshake", 0, response) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: failed to build handshake reply");
+    }
+    goto done;
+oom:
+    errmsg = ducknng_strdup("ducknng: out of memory preparing handshake reply");
+    ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, errmsg ? errmsg : "ducknng: out of memory preparing handshake reply");
+done:
+    if (errmsg) duckdb_free(errmsg);
+    if (response) duckdb_free(response);
+    if (json) duckdb_free(json);
+    if (correlation_id) duckdb_free(correlation_id);
+    if (preferred_mode) duckdb_free(preferred_mode);
+    if (duckdb_version) duckdb_free(duckdb_version);
+    return reply->type == DUCKNNG_RPC_ERROR ? -1 : 0;
+}
+
 static int ducknng_method_query_open_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
@@ -188,8 +417,9 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     duckdb_prepared_statement stmt = NULL;
     duckdb_pending_result pending = NULL;
     uint64_t session_id = 0;
+    int row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     char *owner_token = NULL;
-    char json[384];
+    char *result_handle = NULL;
     char *errmsg = NULL;
     (void)method;
     memset(&open_req, 0, sizeof(open_req));
@@ -200,6 +430,12 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     if (ducknng_decode_query_open_payload(req->frame->payload, (size_t)req->frame->payload_len, &open_req, &errmsg) != 0) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, errmsg ? errmsg : "ducknng: invalid query_open payload");
         if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    if (ducknng_parse_row_payload_format(open_req.serialization_mode, &row_payload_format) != 0) {
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: unsupported serialization_mode in query_open request");
         return -1;
     }
     if (ducknng_service_acquire_session_connection(svc, &session_con, &session_pool_index, &errmsg) != 0) {
@@ -297,7 +533,8 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     {
         int add_rc = ducknng_service_add_session_streaming(svc, session_con, session_pool_index,
-            stmt, pending, req->caller_identity, &session_id, &owner_token, &errmsg);
+            stmt, pending, req->caller_identity, row_payload_format,
+            &session_id, &owner_token, &result_handle, &errmsg);
         if (add_rc != 0) {
             /* session was not created; release resources here */
             duckdb_destroy_pending(&pending);
@@ -311,19 +548,32 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
             return -1;
         }
     }
-    ducknng_query_open_request_destroy(&open_req);
-    snprintf(json, sizeof(json), "{\"session_id\":%llu,\"session_token\":\"%s\",\"state\":\"open\",\"next_method\":\"fetch\",\"idle_timeout_ms\":%llu}",
-        (unsigned long long)session_id, owner_token ? owner_token : "",
-        (unsigned long long)svc->session_idle_ms);
-    if (ducknng_json_reply(reply, "query_open", DUCKNNG_RPC_FLAG_SESSION_OPEN, json) != 0) {
-        ducknng_session *session = ducknng_service_remove_session(svc, session_id, owner_token,
-            req->caller_identity, NULL);
-        if (session) ducknng_session_destroy(session);
-        if (owner_token) duckdb_free(owner_token);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: failed to build query_open reply");
-        return -1;
+    {
+        ducknng_session_reply_view view;
+        memset(&view, 0, sizeof(view));
+        view.session_id = session_id;
+        view.session_token = owner_token;
+        view.state = "open";
+        view.next_method = "fetch";
+        view.has_idle_timeout_ms = 1;
+        view.idle_timeout_ms = svc->session_idle_ms;
+        view.result_handle = result_handle;
+        view.serialization_mode = ducknng_session_row_payload_format_name(row_payload_format);
+        view.correlation_id = open_req.correlation_id;
+        if (ducknng_session_state_reply(reply, "query_open", DUCKNNG_RPC_FLAG_SESSION_OPEN, &view) != 0) {
+            ducknng_session *session = ducknng_service_remove_session(svc, session_id, owner_token,
+                req->caller_identity, NULL);
+            if (session) ducknng_session_destroy(session);
+            ducknng_query_open_request_destroy(&open_req);
+            if (owner_token) duckdb_free(owner_token);
+            if (result_handle) duckdb_free(result_handle);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: failed to build query_open reply");
+            return -1;
+        }
     }
+    ducknng_query_open_request_destroy(&open_req);
     if (owner_token) duckdb_free(owner_token);
+    if (result_handle) duckdb_free(result_handle);
     return 0;
 }
 
@@ -332,12 +582,16 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
     ducknng_session_control_request control_req;
+    ducknng_session_reply_view view;
     uint64_t session_id = 0;
+    uint64_t batch_index = 0;
+    int row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     int unauthorized = 0;
     ducknng_session *session;
     uint8_t *payload = NULL;
     size_t payload_len = 0;
     int has_batch = 0;
+    char *result_handle = NULL;
     char *errmsg = NULL;
     (void)method;
     if (!svc || !req || !reply) {
@@ -345,14 +599,15 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         return -1;
     }
     memset(&control_req, 0, sizeof(control_req));
+    memset(&view, 0, sizeof(view));
     if (ducknng_parse_session_control_request(req, "fetch", &control_req, reply) != 0) {
         return -1;
     }
     session_id = control_req.session_id;
     session = ducknng_service_acquire_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    ducknng_session_control_request_reset(&control_req);
     if (!session) {
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
         return -1;
@@ -362,6 +617,7 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     if (session->cancelled) {
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_CANCELLED, "ducknng: session was cancelled");
         return -1;
     }
@@ -376,6 +632,7 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
             if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
             ducknng_mutex_unlock(&session->mu);
             ducknng_session_release(session);
+            ducknng_session_control_request_reset(&control_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, "ducknng: fetch execution failed");
             return -1;
         }
@@ -385,6 +642,7 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
             if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
             ducknng_mutex_unlock(&session->mu);
             ducknng_session_release(session);
+            ducknng_session_control_request_reset(&control_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
                 detail && detail[0] ? detail : "ducknng: fetch failed to obtain streaming result");
             if (detail) duckdb_free(detail);
@@ -399,14 +657,30 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     if (!session->result_open || ducknng_result_next_chunk_to_ipc(session->result, &payload, &payload_len, &has_batch, &errmsg) != 0) {
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR, errmsg ? errmsg : "ducknng: fetch failed to encode Arrow batch");
         if (errmsg) duckdb_free(errmsg);
         return -1;
     }
+    row_payload_format = session->row_payload_format;
+    if (!has_batch && session->result_handle) {
+        result_handle = ducknng_strdup(session->result_handle);
+        if (!result_handle) {
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_release(session);
+            ducknng_session_control_request_reset(&control_req);
+            if (payload) duckdb_free(payload);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: out of memory copying result handle");
+            return -1;
+        }
+    }
     if (has_batch) {
         session->batch_no++;
+        batch_index = session->batch_no;
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
             payload, payload_len);
@@ -416,6 +690,8 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         if (ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg) != 0) {
             ducknng_mutex_unlock(&session->mu);
             ducknng_session_release(session);
+            ducknng_session_control_request_reset(&control_req);
+            if (result_handle) duckdb_free(result_handle);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
                 errmsg ? errmsg : "ducknng: fetch failed to encode empty Arrow batch");
             if (errmsg) duckdb_free(errmsg);
@@ -424,6 +700,8 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         session->eos = 1;
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
+        ducknng_session_control_request_reset(&control_req);
+        if (result_handle) duckdb_free(result_handle);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM |
                 DUCKNNG_RPC_FLAG_END_OF_STREAM,
@@ -431,10 +709,25 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         return 0;
     }
     session->eos = 1;
+    batch_index = session->batch_no;
     ducknng_mutex_unlock(&session->mu);
     ducknng_session_release(session);
-    return ducknng_session_state_reply(reply, "fetch", DUCKNNG_RPC_FLAG_END_OF_STREAM,
-        session_id, "exhausted");
+    view.session_id = session_id;
+    view.state = "exhausted";
+    view.result_handle = result_handle;
+    view.has_batch_index = 1;
+    view.batch_index = batch_index;
+    view.correlation_id = control_req.correlation_id;
+    if (ducknng_session_state_reply(reply, "fetch", DUCKNNG_RPC_FLAG_END_OF_STREAM, &view) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        if (result_handle) duckdb_free(result_handle);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: failed to build fetch control reply");
+        return -1;
+    }
+    ducknng_session_control_request_reset(&control_req);
+    if (result_handle) duckdb_free(result_handle);
+    return 0;
 }
 
 static int ducknng_method_close_handler(ducknng_service *svc,
@@ -442,26 +735,46 @@ static int ducknng_method_close_handler(ducknng_service *svc,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
     ducknng_session_control_request control_req;
+    ducknng_session_reply_view view;
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
+    char *result_handle = NULL;
+    uint64_t batch_index = 0;
     (void)method;
     memset(&control_req, 0, sizeof(control_req));
+    memset(&view, 0, sizeof(view));
     if (ducknng_parse_session_control_request(req, "close", &control_req, reply) != 0) {
         return -1;
     }
     session_id = control_req.session_id;
     session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    ducknng_session_control_request_reset(&control_req);
     if (!session) {
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
         return -1;
     }
+    batch_index = session->batch_no;
+    if (session->result_handle) result_handle = ducknng_strdup(session->result_handle);
     ducknng_session_destroy(session);
-    return ducknng_session_state_reply(reply, "close", DUCKNNG_RPC_FLAG_SESSION_CLOSED,
-        session_id, "closed");
+    view.session_id = session_id;
+    view.state = "closed";
+    view.result_handle = result_handle;
+    view.has_batch_index = 1;
+    view.batch_index = batch_index;
+    view.correlation_id = control_req.correlation_id;
+    if (ducknng_session_state_reply(reply, "close", DUCKNNG_RPC_FLAG_SESSION_CLOSED, &view) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        if (result_handle) duckdb_free(result_handle);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: failed to build close control reply");
+        return -1;
+    }
+    ducknng_session_control_request_reset(&control_req);
+    if (result_handle) duckdb_free(result_handle);
+    return 0;
 }
 
 static int ducknng_method_cancel_handler(ducknng_service *svc,
@@ -469,23 +782,29 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
     const ducknng_request_context *req,
     ducknng_method_reply *reply) {
     ducknng_session_control_request control_req;
+    ducknng_session_reply_view view;
     uint64_t session_id = 0;
     int unauthorized = 0;
     ducknng_session *session;
+    char *result_handle = NULL;
+    uint64_t batch_index = 0;
     (void)method;
     memset(&control_req, 0, sizeof(control_req));
+    memset(&view, 0, sizeof(view));
     if (ducknng_parse_session_control_request(req, "cancel", &control_req, reply) != 0) {
         return -1;
     }
     session_id = control_req.session_id;
     session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
-    ducknng_session_control_request_reset(&control_req);
     if (!session) {
+        ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
         return -1;
     }
+    batch_index = session->batch_no;
+    if (session->result_handle) result_handle = ducknng_strdup(session->result_handle);
     if (session->mu_initialized) {
         ducknng_mutex_lock(&session->mu);
         session->cancelled = 1;
@@ -495,9 +814,23 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
         duckdb_interrupt(session->session_con);
     }
     ducknng_session_destroy(session);
-    return ducknng_session_state_reply(reply, "cancel",
-        DUCKNNG_RPC_FLAG_CANCELLED | DUCKNNG_RPC_FLAG_SESSION_CLOSED,
-        session_id, "cancelled");
+    view.session_id = session_id;
+    view.state = "cancelled";
+    view.result_handle = result_handle;
+    view.has_batch_index = 1;
+    view.batch_index = batch_index;
+    view.correlation_id = control_req.correlation_id;
+    if (ducknng_session_state_reply(reply, "cancel",
+            DUCKNNG_RPC_FLAG_CANCELLED | DUCKNNG_RPC_FLAG_SESSION_CLOSED, &view) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        if (result_handle) duckdb_free(result_handle);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: failed to build cancel control reply");
+        return -1;
+    }
+    ducknng_session_control_request_reset(&control_req);
+    if (result_handle) duckdb_free(result_handle);
+    return 0;
 }
 
 static int ducknng_method_query_prepare_handler(ducknng_service *svc,
@@ -801,8 +1134,8 @@ const ducknng_method_descriptor ducknng_method_query_open = {
     0,
     0,
     1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true}]}",
-    "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"}]}",
+    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
     ducknng_method_query_open_handler
 };
 
@@ -828,8 +1161,8 @@ const ducknng_method_descriptor ducknng_method_fetch = {
     0,
     0,
     1,
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false}]}",
-    "{\"mode\":\"rows_or_control\",\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false}]}}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"mode\":\"rows_or_control\",\"rows\":{\"default\":\"arrow_ipc_stream\"},\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}}",
     ducknng_method_fetch_handler
 };
 
@@ -855,8 +1188,8 @@ const ducknng_method_descriptor ducknng_method_close = {
     0,
     0,
     1,
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false}]}",
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
     ducknng_method_close_handler
 };
 
@@ -882,9 +1215,36 @@ const ducknng_method_descriptor ducknng_method_cancel = {
     0,
     0,
     1,
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false}]}",
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
     ducknng_method_cancel_handler
+};
+
+const ducknng_method_descriptor ducknng_method_handshake = {
+    "handshake",
+    "control",
+    "Negotiate protocol capabilities and preferred row serialization mode",
+    DUCKNNG_TRANSPORT_REQREP,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_RESPONSE_METADATA_ONLY,
+    DUCKNNG_SESSION_STATELESS,
+    0,
+    DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
+    1024 * 1024,
+    1024 * 1024,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    1,
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"min_protocol_version\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"max_protocol_version\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"preferred_serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"server_name\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"duckdb_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_platform\",\"type\":\"string\",\"nullable\":false},{\"name\":\"protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_serialization_mode\",\"type\":\"string\",\"nullable\":false},{\"name\":\"supported_serialization_modes\",\"type\":\"array<string>\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}},\"note\":\"future reply metadata should be negotiated as a generic capability rather than a fake row serializer\"}",
+    ducknng_method_handshake_handler
 };
 
 const ducknng_method_descriptor ducknng_method_manifest = {
@@ -917,6 +1277,7 @@ const ducknng_method_descriptor ducknng_method_manifest = {
 int ducknng_register_builtin_methods(ducknng_runtime *rt, char **errmsg) {
     const ducknng_method_descriptor *methods[] = {
         &ducknng_method_manifest,
+        &ducknng_method_handshake,
         &ducknng_method_query_open,
         &ducknng_method_fetch,
         &ducknng_method_close,

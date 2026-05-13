@@ -28,6 +28,15 @@ for the thin versioned RPC envelope design.
 | **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                              |
 | **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw fallback. User-registered codec hooks extend the set. |
 
+Raw protocol clients now also have a built-in `handshake` control method
+for capability negotiation. It advertises
+`supported_serialization_modes` plus a `fetch_metadata` capability
+object covering control-plane `correlation_id` echo, stable
+query-session `result_handle` values, and terminal `batch_index`
+metadata. Today the only advertised row payload mode is direct Arrow
+IPC; the runnable wire-level example lives in `test/rpc_smoke.R`, and
+the contract is pinned in `docs/protocol.md`.
+
 ## Quick tour
 
 Build the extension first (see **Development** below), then load it:
@@ -67,7 +76,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:36221 |
+| tls+tcp://127.0.0.1:41729 |
 +---------------------------+
 
 +--------+
@@ -94,7 +103,7 @@ FROM ducknng_decode_frame(
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
-| true | result    | manifest | 6            |
+| true | result    | manifest | 7            |
 +------+-----------+----------+--------------+
 ```
 
@@ -141,7 +150,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 1      | true | true      |
+| 2      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -175,7 +184,7 @@ FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
-| true | result    | manifest | 6            |
+| true | result    | manifest | 7            |
 +------+-----------+----------+--------------+
 ```
 
@@ -352,6 +361,13 @@ make release
 # Run the SQL test suite against the release build.
 make test_release
 
+# Run the ducknng-only RPC microbench harness.
+make rpc_bench
+
+# Compare ducknng HTTP vs Quack over 100K / 1M / 10M TPC-H lineitem rows.
+# Requires network access to INSTALL quack FROM core_nightly.
+make rpc_bulk_compare
+
 # Render README.md and demo/subscriber_gateway.md from their Rmd sources.
 make docs
 ```
@@ -361,8 +377,13 @@ pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The
 extension targets `TARGET_DUCKDB_VERSION`. It builds with
 `USE_UNSTABLE_C_API=1` to access DuckDB’s native Arrow conversion API
 (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
-result-to-IPC emit path. Deprecated entrypoints are avoided. The
-unstable functions in use are tracked by
+result-to-IPC emit path. Deprecated entrypoints are avoided.
+`make rpc_bench` keeps the existing raw-RPC microbench path.
+`make rpc_bulk_compare` runs a direct ducknng-vs-Quack bulk-transfer
+comparison over DuckDB’s HTTP-facing client helpers using
+`SELECT * FROM lineitem LIMIT n` at 100K, 1M, and 10M rows, generating a
+local TPC-H dataset if needed and installing `quack` from
+`core_nightly`. The unstable functions in use are tracked by
 `tools/used_duckdb_unstable_api.R`; the table below is generated fresh
 on every README render:
 
@@ -848,6 +869,7 @@ FROM m;
 | cancel        | query   | metadata_only | false         | false    |
 | close         | query   | metadata_only | false         | false    |
 | fetch         | query   | rows          | false         | false    |
+| handshake     | control | metadata_only | false         | false    |
 | manifest      | control | metadata_only | false         | false    |
 | query_open    | query   | session_open  | false         | false    |
 | query_prepare | query   | rows          | false         | false    |
@@ -860,7 +882,7 @@ FROM m;
 +-------------+--------------+----------+
 | server_name | method_count | has_exec |
 +-------------+--------------+----------+
-| ducknng     | 7            | true     |
+| ducknng     | 8            | true     |
 +-------------+--------------+----------+
 ```
 
@@ -1469,7 +1491,7 @@ SELECT ducknng_stop_server('http_rpc');
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
-| ducknng     | 7            |
+| ducknng     | 8            |
 +-------------+--------------+
 
 +------+-----------+----------+
@@ -1955,7 +1977,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1630519678 | 1778607464857 | 127.0.0.1:56710 | NULL          |
+| 1802704515 | 1778670467987 | 127.0.0.1:37842 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 

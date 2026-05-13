@@ -18,6 +18,7 @@ static char *ducknng_copy_string_view(struct ArrowStringView view) {
     return out;
 }
 
+
 int ducknng_decode_exec_request_payload(const uint8_t *payload, size_t payload_len,
     ducknng_exec_request *out, char **errmsg) {
     struct ArrowBuffer input_buf;
@@ -315,6 +316,22 @@ int ducknng_decode_query_open_payload(const uint8_t *payload, size_t payload_len
     if (schema.n_children > 2 && schema.children[2] && schema.children[2]->name && strcmp(schema.children[2]->name, "batch_bytes") == 0 && !ArrowArrayViewIsNull(view.children[2], 0)) {
         out->batch_bytes = ArrowArrayViewGetUIntUnsafe(view.children[2], 0);
     }
+    if (schema.n_children > 3 && schema.children[3] && schema.children[3]->name && strcmp(schema.children[3]->name, "correlation_id") == 0 && !ArrowArrayViewIsNull(view.children[3], 0)) {
+        struct ArrowStringView correlation_view = ArrowArrayViewGetStringUnsafe(view.children[3], 0);
+        out->correlation_id = ducknng_copy_string_view(correlation_view);
+        if (!out->correlation_id) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to copy correlation_id from query_open payload");
+            goto cleanup;
+        }
+    }
+    if (schema.n_children > 4 && schema.children[4] && schema.children[4]->name && strcmp(schema.children[4]->name, "serialization_mode") == 0 && !ArrowArrayViewIsNull(view.children[4], 0)) {
+        struct ArrowStringView mode_view = ArrowArrayViewGetStringUnsafe(view.children[4], 0);
+        out->serialization_mode = ducknng_copy_string_view(mode_view);
+        if (!out->serialization_mode) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to copy serialization_mode from query_open payload");
+            goto cleanup;
+        }
+    }
     rc = 0;
 cleanup:
     if (rc != 0 && out) ducknng_query_open_request_destroy(out);
@@ -337,7 +354,11 @@ void ducknng_exec_request_destroy(ducknng_exec_request *req) {
 void ducknng_query_open_request_destroy(ducknng_query_open_request *req) {
     if (!req) return;
     if (req->sql) duckdb_free(req->sql);
+    if (req->correlation_id) duckdb_free(req->correlation_id);
+    if (req->serialization_mode) duckdb_free(req->serialization_mode);
     req->sql = NULL;
+    req->correlation_id = NULL;
+    req->serialization_mode = NULL;
     req->batch_rows = 0;
     req->batch_bytes = 0;
 }

@@ -13,6 +13,8 @@ typedef struct ducknng_query_open_request {
     char *sql;
     uint64_t batch_rows;
     uint64_t batch_bytes;
+    char *correlation_id;
+    char *serialization_mode;
 } ducknng_query_open_request;
 
 int ducknng_decode_exec_request_payload(const uint8_t *payload, size_t payload_len,

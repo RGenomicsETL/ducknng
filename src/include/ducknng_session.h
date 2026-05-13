@@ -13,6 +13,8 @@ typedef struct ducknng_session {
     uint64_t session_id;
     char *owner_token;
     char *owner_identity;
+    char *result_handle;
+    int row_payload_format;
     duckdb_result result;
     int result_open;
     int eos;
@@ -53,11 +55,13 @@ ducknng_session *ducknng_session_create_streaming(
 void ducknng_session_destroy(ducknng_session *session);
 void ducknng_session_release(ducknng_session *session);
 int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
-    const char *owner_identity, uint64_t *out_session_id, char **out_owner_token, char **errmsg);
+    const char *owner_identity, int row_payload_format,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
 int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    const char *owner_identity, uint64_t *out_session_id, char **out_owner_token, char **errmsg);
+    const char *owner_identity, int row_payload_format,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
 ducknng_session *ducknng_service_acquire_session(ducknng_service *svc, uint64_t session_id,
     const char *owner_token, const char *caller_identity, int *out_unauthorized);
 ducknng_session *ducknng_service_remove_session(ducknng_service *svc, uint64_t session_id,

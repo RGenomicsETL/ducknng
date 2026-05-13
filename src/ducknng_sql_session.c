@@ -356,7 +356,8 @@ static void ducknng_session_result_fill_from_response(ducknng_session_result_bin
         bind->ok = true;
         return;
     }
-    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) && (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
+    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) &&
+            (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
         bind->payload_len = (idx_t)frame.payload_len;
         bind->payload = (uint8_t *)duckdb_malloc((size_t)bind->payload_len);
         if (!bind->payload && bind->payload_len > 0) {

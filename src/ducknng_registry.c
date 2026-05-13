@@ -418,7 +418,8 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
             (unsigned long long)security->max_sessions_per_peer_identity);
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
     }
-    if (!append_text(&buf, &len, &cap, "},\"methods\":[")) goto oom;
+    if (!append_text(&buf, &len, &cap,
+            "},\"capabilities\":{\"handshake\":true,\"supported_serialization_modes\":[\"arrow_ipc_stream\"],\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}},\"methods\":[")) goto oom;
     for (i = 0; i < registry->method_count; i++) {
         const ducknng_method_descriptor *m = registry->methods[i];
         ducknng_method_projection view;

@@ -1,4 +1,4 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke subscriber_gateway_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r rpc_bench rpc_bulk_compare http_smoke subscriber_gateway_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -23,6 +23,20 @@ rpc_smoke_r:
 		Rscript test/rpc_smoke.R; \
 	else \
 		echo "Rscript not found; skipping optional rpc_smoke_r"; \
+	fi
+
+rpc_bench: release
+	@if command -v Rscript >/dev/null 2>&1; then \
+		Rscript bench/rpc_quack_bench.R; \
+	else \
+		echo "Rscript not found; skipping optional rpc_bench"; \
+	fi
+
+rpc_bulk_compare: release
+	@if command -v Rscript >/dev/null 2>&1; then \
+		Rscript bench/rpc_quack_bench.R bulk_compare; \
+	else \
+		echo "Rscript not found; skipping optional rpc_bulk_compare"; \
 	fi
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
