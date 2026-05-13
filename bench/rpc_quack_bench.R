@@ -225,265 +225,29 @@ run_micro_bench <- function(args) {
 }
 
 run_bulk_compare <- function(args) {
+  source("bench/rpc_bulk_compare_support.R", local = TRUE)
   repetitions <- if (length(args) >= 1L) as.integer(args[[1]]) else 5L
   rows <- if (length(args) >= 2L) {
     as.integer(strsplit(args[[2]], ",", fixed = TRUE)[[1]])
   } else {
-    c(100000L, 1000000L, 10000000L)
+    ducknng_bench_parse_int_csv(Sys.getenv("DUCKNNG_BULK_ROWS", unset = ""),
+      c(100000L, 1000000L, 10000000L))
   }
   db_path <- if (length(args) >= 3L) args[[3]] else file.path(tempdir(), "ducknng_quack_tpch.duckdb")
-  stopifnot(repetitions > 0L, length(rows) > 0L, all(rows > 0L))
-
-  ducknng_ext_path <- normalizePath("build/release/ducknng.duckdb_extension")
-  ducknng_url <- Sys.getenv("DUCKNNG_BENCH_HTTP_URL", unset = "http://127.0.0.1:18495/_ducknng")
-  quack_uri <- Sys.getenv("DUCKNNG_QUACK_URI", unset = "quack:localhost:19494")
-  quack_token <- Sys.getenv("DUCKNNG_QUACK_TOKEN", unset = "asdf")
-  max_rows <- max(rows)
-  required_sf <- max(1L, as.integer(ceiling(max_rows / 6000000)))
-
-  ensure_quack_available <- function() {
-    con <- open_duckdb(":memory:")
-    on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
-    try(DBI::dbExecute(con, "INSTALL quack FROM core_nightly"), silent = TRUE)
-    DBI::dbExecute(con, "LOAD quack")
-    invisible(TRUE)
-  }
-
-  ensure_tpch_db <- function(path, sf, target_rows) {
-    con <- open_duckdb(path, allow_unsigned_extensions = TRUE)
-    on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
-    count <- NA_real_
-    if (DBI::dbExistsTable(con, "lineitem")) {
-      count <- as.numeric(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM lineitem")$n[[1]])
-    }
-    if (!is.finite(count) || count < target_rows) {
-      try(DBI::dbExecute(con, "INSTALL tpch"), silent = TRUE)
-      DBI::dbExecute(con, "LOAD tpch")
-      for (tbl in c("lineitem", "orders", "customer", "partsupp", "supplier", "part", "nation", "region")) {
-        if (DBI::dbExistsTable(con, tbl)) {
-          DBI::dbExecute(con, sprintf("DROP TABLE %s", tbl))
-        }
-      }
-      DBI::dbExecute(con, sprintf("CALL dbgen(sf=%d)", sf))
-      count <- as.numeric(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM lineitem")$n[[1]])
-    }
-    stopifnot(is.finite(count), count >= target_rows)
-    invisible(count)
-  }
-
-  set_single_thread <- function(con) {
-    DBI::dbExecute(con, "PRAGMA threads=1")
-    DBI::dbExecute(con, "SET enable_progress_bar = false")
-    invisible(con)
-  }
-
-  safe_disconnect <- function(con) {
-    if (!is.null(con) && DBI::dbIsValid(con)) {
-      suppressWarnings(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE))
-    }
-    invisible(NULL)
-  }
-
-  safe_ducknng_stop <- function(con, service_name) {
-    if (!is.null(con) && DBI::dbIsValid(con)) {
-      suppressWarnings(try(
-        DBI::dbGetQuery(con, sprintf("SELECT ducknng_stop_server(%s) AS ok", sql_quote(service_name))),
-        silent = TRUE
-      ))
-    }
-    invisible(NULL)
-  }
-
-  open_ducknng_db <- function(dbdir = ":memory:") {
-    DBI::dbConnect(
-      duckdb::duckdb(config = list(allow_unsigned_extensions = "true")),
-      dbdir = dbdir
-    )
-  }
-
-  load_ducknng <- function(con, ext_path) {
-    DBI::dbExecute(con, sprintf("LOAD '%s'", ext_path))
-    invisible(con)
-  }
-
-  load_quack <- function(con) {
-    try(DBI::dbExecute(con, "INSTALL quack FROM core_nightly"), silent = TRUE)
-    DBI::dbExecute(con, "LOAD quack")
-    invisible(con)
-  }
-
-  aggregate_validation_sql <- function(source_sql) {
-    paste(
-      "SELECT",
-      "count(*) AS row_count,",
-      "sum(l_orderkey) AS sum_orderkey,",
-      "sum(l_partkey) AS sum_partkey,",
-      "sum(l_suppkey) AS sum_suppkey,",
-      "sum(l_linenumber) AS sum_linenumber,",
-      "sum(l_quantity) AS sum_quantity,",
-      "sum(l_extendedprice) AS sum_extendedprice,",
-      "sum(l_discount) AS sum_discount,",
-      "sum(l_tax) AS sum_tax,",
-      "min(l_returnflag) AS min_returnflag,",
-      "max(l_linestatus) AS max_linestatus,",
-      "min(l_shipdate) AS min_shipdate,",
-      "max(l_commitdate) AS max_commitdate,",
-      "max(l_receiptdate) AS max_receiptdate,",
-      "max(length(l_shipinstruct)) AS shipinstruct_len,",
-      "max(length(l_shipmode)) AS shipmode_len,",
-      "sum(length(l_comment)) AS comment_len",
-      "FROM", source_sql
-    )
-  }
-
-  normalize_result <- function(df) {
-    stopifnot(nrow(df) == 1L)
-    out <- vector("list", ncol(df))
-    names(out) <- names(df)
-    for (i in seq_along(df)) {
-      value <- df[[i]][[1]]
-      if (inherits(value, "Date")) {
-        out[[i]] <- as.character(value)
-      } else if (is.numeric(value)) {
-        out[[i]] <- sprintf("%.15g", as.numeric(value))
-      } else {
-        out[[i]] <- as.character(value)
-      }
-    }
-    out
-  }
-
-  check_result <- function(actual, expected, expected_rows) {
-    actual_row_count <- as.numeric(actual$row_count[[1]])
-    stopifnot(identical(actual_row_count, as.numeric(expected_rows)))
-    stopifnot(identical(normalize_result(actual), normalize_result(expected)))
-    invisible(TRUE)
-  }
-
-  local_baseline <- function(con, rows) {
-    sql <- aggregate_validation_sql(sprintf("(SELECT * FROM lineitem LIMIT %d) AS lineitem_subset", rows))
-    DBI::dbGetQuery(con, sql)
-  }
-
-  ducknng_sql <- function(url, rows) {
-    remote_sql <- sprintf("SELECT * FROM lineitem LIMIT %d", rows)
-    source_sql <- sprintf(
-      "ducknng_query_rpc(%s, %s, 0::UBIGINT)",
-      sql_quote(url), sql_quote(remote_sql)
-    )
-    aggregate_validation_sql(source_sql)
-  }
-
-  quack_sql <- function(uri, token, rows) {
-    remote_sql <- sprintf("SELECT * FROM lineitem LIMIT %d", rows)
-    source_sql <- sprintf(
-      "quack_query(%s, %s, token=%s)",
-      sql_quote(uri), sql_quote(remote_sql), sql_quote(token)
-    )
-    aggregate_validation_sql(source_sql)
-  }
-
-  time_query <- function(con, sql, expected, expected_rows) {
-    result <- NULL
-    elapsed <- system.time({
-      result <- DBI::dbGetQuery(con, sql)
-    })[["elapsed"]]
-    check_result(result, expected, expected_rows)
-    elapsed
-  }
-
-  bench_protocol <- function(protocol, client_con, sql_builder, rows, repetitions, baselines) {
-    results <- vector("list", length(rows))
-    for (i in seq_along(rows)) {
-      row_count <- rows[[i]]
-      sql <- sql_builder(row_count)
-      invisible(time_query(client_con, sql, baselines[[as.character(row_count)]], row_count))
-      timings <- vapply(seq_len(repetitions), function(rep_idx) {
-        time_query(client_con, sql, baselines[[as.character(row_count)]], row_count)
-      }, numeric(1))
-      results[[i]] <- data.frame(
-        benchmark = "bulk_transfer_lineitem_limit",
-        dataset = sprintf("tpch_sf%d.lineitem", required_sf),
-        protocol = protocol,
-        transport = if (protocol == "ducknng") "http" else "quack_http",
-        rows = row_count,
-        repetitions = repetitions,
-        median_seconds = round(stats::median(timings), 3),
-        min_seconds = round(min(timings), 3),
-        max_seconds = round(max(timings), 3),
-        timings_seconds = paste(sprintf("%.3f", timings), collapse = ","),
-        stringsAsFactors = FALSE
-      )
-    }
-    do.call(rbind, results)
-  }
-
-  ensure_quack_available()
-  total_lineitem_rows <- ensure_tpch_db(db_path, required_sf, max_rows)
-
-  baseline_con <- open_duckdb(db_path, allow_unsigned_extensions = TRUE)
-  on.exit(safe_disconnect(baseline_con), add = TRUE)
-  set_single_thread(baseline_con)
-  baselines <- setNames(lapply(rows, function(n) local_baseline(baseline_con, n)), as.character(rows))
-
-  ducknng_server <- open_ducknng_db(db_path)
-  on.exit(safe_ducknng_stop(ducknng_server, "bench_bulk_http"), add = TRUE)
-  on.exit(safe_disconnect(ducknng_server), add = TRUE)
-  set_single_thread(ducknng_server)
-  load_ducknng(ducknng_server, ducknng_ext_path)
-  stopifnot(isTRUE(DBI::dbGetQuery(
-    ducknng_server,
-    sprintf(
-      "SELECT ducknng_start_server('bench_bulk_http', %s, 1, 134217728, 300000, 0::UBIGINT) AS ok",
-      sql_quote(ducknng_url)
-    )
-  )$ok[[1]]))
-  Sys.sleep(1)
-
-  ducknng_client <- open_ducknng_db(":memory:")
-  on.exit(safe_disconnect(ducknng_client), add = TRUE)
-  set_single_thread(ducknng_client)
-  load_ducknng(ducknng_client, ducknng_ext_path)
-  ducknng_results <- bench_protocol(
-    "ducknng",
-    ducknng_client,
-    function(n) ducknng_sql(ducknng_url, n),
-    rows,
-    repetitions,
-    baselines
+  raw_payload_bytes <- ducknng_bench_parse_int_csv(
+    Sys.getenv("DUCKNNG_RAW_PAYLOAD_BYTES", unset = ""),
+    c(1048576L, 4194304L, 16777216L)
   )
-  safe_ducknng_stop(ducknng_server, "bench_bulk_http")
-  safe_disconnect(ducknng_client)
-  safe_disconnect(ducknng_server)
-
-  quack_server <- open_duckdb(db_path, allow_unsigned_extensions = TRUE)
-  on.exit(safe_disconnect(quack_server), add = TRUE)
-  set_single_thread(quack_server)
-  load_quack(quack_server)
-  DBI::dbExecute(
-    quack_server,
-    sprintf("CALL quack_serve(%s, token=%s)", sql_quote(quack_uri), sql_quote(quack_token))
+  results <- ducknng_bench_run_bulk_compare(
+    repetitions = repetitions,
+    rows = rows,
+    raw_payload_bytes = raw_payload_bytes,
+    db_path = db_path
   )
-  Sys.sleep(1)
-
-  quack_client <- open_duckdb(":memory:")
-  on.exit(safe_disconnect(quack_client), add = TRUE)
-  set_single_thread(quack_client)
-  load_quack(quack_client)
-  quack_results <- bench_protocol(
-    "quack",
-    quack_client,
-    function(n) quack_sql(quack_uri, quack_token, n),
-    rows,
-    repetitions,
-    baselines
-  )
-  safe_disconnect(quack_client)
-  safe_disconnect(quack_server)
-
-  results <- rbind(ducknng_results, quack_results)
-  attr(results, "lineitem_rows") <- total_lineitem_rows
-  print(results, row.names = FALSE)
+  print(results$metadata, row.names = FALSE)
+  print(results$rpc_results, row.names = FALSE)
+  print(results$http_vs_quack, row.names = FALSE)
+  print(results$raw_results, row.names = FALSE)
 }
 
 parsed <- parse_mode(commandArgs(trailingOnly = TRUE))

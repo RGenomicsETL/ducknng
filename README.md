@@ -76,7 +76,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:41729 |
+| tls+tcp://127.0.0.1:37107 |
 +---------------------------+
 
 +--------+
@@ -150,7 +150,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 2      | true | true      |
+| 1      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -364,7 +364,9 @@ make test_release
 # Run the ducknng-only RPC microbench harness.
 make rpc_bench
 
-# Compare ducknng HTTP vs Quack over 100K / 1M / 10M TPC-H lineitem rows.
+# Render the bulk benchmark report to bench/rpc_bulk_compare.md.
+# This compares ducknng RPC over http/tcp/ipc/ws, Quack over its public
+# client path, and ducknng raw pair-socket echo over ipc/tcp/ws.
 # Requires network access to INSTALL quack FROM core_nightly.
 make rpc_bulk_compare
 
@@ -379,11 +381,12 @@ extension targets `TARGET_DUCKDB_VERSION`. It builds with
 (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
 result-to-IPC emit path. Deprecated entrypoints are avoided.
 `make rpc_bench` keeps the existing raw-RPC microbench path.
-`make rpc_bulk_compare` runs a direct ducknng-vs-Quack bulk-transfer
-comparison over DuckDB’s HTTP-facing client helpers using
-`SELECT * FROM lineitem LIMIT n` at 100K, 1M, and 10M rows, generating a
-local TPC-H dataset if needed and installing `quack` from
-`core_nightly`. The unstable functions in use are tracked by
+`make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
+benchmark report that records machine details and compares ducknng RPC
+over `http`, `tcp`, `ipc`, and `ws`, Quack over its public client/server
+path, and ducknng raw pair-socket echo over `ipc`, `tcp`, and `ws`. The
+report generates a local TPC-H dataset if needed and installs `quack`
+from `core_nightly`. The unstable functions in use are tracked by
 `tools/used_duckdb_unstable_api.R`; the table below is generated fresh
 on every README render:
 
@@ -1977,7 +1980,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1802704515 | 1778670467987 | 127.0.0.1:37842 | NULL          |
+| 1996950582 | 1778676263523 | 127.0.0.1:33822 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 

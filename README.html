@@ -702,7 +702,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:41729</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37107</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -767,7 +767,7 @@ ready.</p>
 <span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
 <span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a>| aio_id |  ok  | has_frame |</span>
 <span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
-<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">2</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
+<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">1</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
 <span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span></code></pre></div>
 <p><strong><code>ducknng_ncurl</code> — HTTP client primitive.</strong>
 The framed RPC mount accepts POST only. Mount a server on an
@@ -960,12 +960,14 @@ packages.</p>
 <span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a><span class="co"># Run the ducknng-only RPC microbench harness.</span></span>
 <span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="fu">make</span> rpc_bench</span>
 <span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a></span>
-<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co"># Compare ducknng HTTP vs Quack over 100K / 1M / 10M TPC-H lineitem rows.</span></span>
-<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co"># Requires network access to INSTALL quack FROM core_nightly.</span></span>
-<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="fu">make</span> rpc_bulk_compare</span>
-<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a></span>
-<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="co"># Render README.md and demo/subscriber_gateway.md from their Rmd sources.</span></span>
-<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a><span class="fu">make</span> docs</span></code></pre></div>
+<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co"># Render the bulk benchmark report to bench/rpc_bulk_compare.md.</span></span>
+<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co"># This compares ducknng RPC over http/tcp/ipc/ws, Quack over its public</span></span>
+<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co"># client path, and ducknng raw pair-socket echo over ipc/tcp/ws.</span></span>
+<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co"># Requires network access to INSTALL quack FROM core_nightly.</span></span>
+<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="fu">make</span> rpc_bulk_compare</span>
+<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co"># Render README.md and demo/subscriber_gateway.md from their Rmd sources.</span></span>
+<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a><span class="fu">make</span> docs</span></code></pre></div>
 <p><code>make configure</code> downloads the DuckDB C API headers at the
 version pinned in the Makefile (<code>DUCKDB_HEADER_VERSION</code>) and
 sets up CMake. The extension targets <code>TARGET_DUCKDB_VERSION</code>.
@@ -974,12 +976,14 @@ native Arrow conversion API (<code>duckdb_to_arrow_schema</code>,
 <code>duckdb_data_chunk_to_arrow</code>) in the result-to-IPC emit path.
 Deprecated entrypoints are avoided. <code>make rpc_bench</code> keeps
 the existing raw-RPC microbench path. <code>make rpc_bulk_compare</code>
-runs a direct ducknng-vs-Quack bulk-transfer comparison over DuckDB’s
-HTTP-facing client helpers using
-<code>SELECT * FROM lineitem LIMIT n</code> at 100K, 1M, and 10M rows,
-generating a local TPC-H dataset if needed and installing
-<code>quack</code> from <code>core_nightly</code>. The unstable
-functions in use are tracked by
+now renders <code>bench/rpc_bulk_compare.md</code>, a benchmark report
+that records machine details and compares ducknng RPC over
+<code>http</code>, <code>tcp</code>, <code>ipc</code>, and
+<code>ws</code>, Quack over its public client/server path, and ducknng
+raw pair-socket echo over <code>ipc</code>, <code>tcp</code>, and
+<code>ws</code>. The report generates a local TPC-H dataset if needed
+and installs <code>quack</code> from <code>core_nightly</code>. The
+unstable functions in use are tracked by
 <code>tools/used_duckdb_unstable_api.R</code>; the table below is
 generated fresh on every README render:</p>
 <table>
@@ -3463,7 +3467,7 @@ for a service.</p>
 <span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
 <span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
 <span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>| <span class="dv">1802704515</span> | <span class="dv">1778670467987</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37842</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a>| <span class="dv">1996950582</span> | <span class="dv">1778676263523</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:33822</span> | <span class="kw">NULL</span>          |</span>
 <span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb43"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>

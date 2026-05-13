@@ -1,0 +1,90 @@
+---
+title: "ducknng bulk transport benchmark"
+output:
+  github_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "")
+source(normalizePath("rpc_bulk_compare_support.R"))
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+repetitions <- as.integer(Sys.getenv("DUCKNNG_BULK_REPETITIONS", unset = "5"))
+rows <- ducknng_bench_parse_int_csv(
+  Sys.getenv("DUCKNNG_BULK_ROWS", unset = ""),
+  c(100000L, 1000000L, 10000000L)
+)
+raw_payload_bytes <- ducknng_bench_parse_int_csv(
+  Sys.getenv("DUCKNNG_RAW_PAYLOAD_BYTES", unset = ""),
+  c(1048576L, 4194304L, 16777216L)
+)
+db_path <- Sys.getenv(
+  "DUCKNNG_BENCH_DB_PATH",
+  unset = file.path(tempdir(), "ducknng_quack_tpch.duckdb")
+)
+
+results <- ducknng_bench_run_bulk_compare(
+  repetitions = repetitions,
+  rows = rows,
+  raw_payload_bytes = raw_payload_bytes,
+  db_path = db_path
+)
+
+metadata_long <- data.frame(
+  field = names(results$metadata),
+  value = vapply(results$metadata[1, ], function(x) as.character(x[[1]]), character(1)),
+  stringsAsFactors = FALSE
+)
+
+rpc_results <- results$rpc_results[order(results$rpc_results$transport, results$rpc_results$system, results$rpc_results$rows), ]
+raw_results <- results$raw_results[order(results$raw_results$transport, results$raw_results$payload_bytes), ]
+ratio_results <- results$http_vs_quack[order(results$http_vs_quack$rows), ]
+```
+
+This report is rendered by `make rpc_bulk_compare`.
+
+It measures three things:
+
+1. `ducknng` bulk row transfer over its RPC/session surface on `http`, `tcp`, `ipc`, and `ws`.
+2. `quack` bulk row transfer over its published client/server surface.
+3. `ducknng` raw socket round-trip echo over `ipc`, `tcp`, and `ws`, using pair sockets without RPC, SQL session, or Arrow row framing in the transport measurement itself.
+
+`quack` is only compared on its own public client path. `ducknng` is compared across multiple transports because transport selection is part of its SQL-facing contract.
+
+## Machine and software details
+
+```{r machine-details}
+knitr::kable(metadata_long, col.names = c("Field", "Value"))
+```
+
+## RPC bulk transfer results
+
+These runs execute `SELECT * FROM lineitem LIMIT n` against the server side and validate the returned data by aggregate checksum.
+
+```{r rpc-results}
+knitr::kable(rpc_results)
+```
+
+## HTTP ducknng vs Quack ratio
+
+This is the apples-to-apples comparison on the common HTTP-facing path.
+
+```{r http-ratio}
+knitr::kable(ratio_results)
+```
+
+## Raw socket transport-only echo
+
+These runs use `ducknng` pair sockets directly. The client sends a payload, the server echoes it back, and the client verifies the returned byte count. This isolates transport-visible round-trip cost without the RPC envelope or Arrow row encoding.
+
+```{r raw-results}
+knitr::kable(raw_results)
+```
+
+## Notes
+
+- The row benchmark uses a local TPC-H `lineitem` table generated through DuckDB's `tpch` extension when needed.
+- The raw socket benchmark uses payload sizes in bytes, not rows, because it is intentionally outside the row/RPC contract.
+- `quack` is installed from `core_nightly` during the run if it is not already available.

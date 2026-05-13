@@ -33,10 +33,10 @@ rpc_bench: release
 	fi
 
 rpc_bulk_compare: release
-	@if command -v Rscript >/dev/null 2>&1; then \
-		Rscript bench/rpc_quack_bench.R bulk_compare; \
+	@if command -v R >/dev/null 2>&1; then \
+		R -e "rmarkdown::render('bench/rpc_bulk_compare.Rmd')"; \
 	else \
-		echo "Rscript not found; skipping optional rpc_bulk_compare"; \
+		echo "R not found; skipping optional rpc_bulk_compare"; \
 	fi
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
