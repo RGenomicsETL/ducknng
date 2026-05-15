@@ -229,6 +229,7 @@ ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_
   ducknng_bench_load_ducknng(con, ext_path)
   latencies <- numeric(iterations)
   rows_read <- 0
+  rows_written <- 0
   writes <- 0
   for (iter in seq_len(iterations)) {
     if (identical(kind, "reader")) {
@@ -244,10 +245,14 @@ ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_
       latencies[[iter]] <- elapsed
     } else {
       sql <- sprintf(
-        "INSERT INTO ducknng_bench_writes VALUES (%d, %d, %s)",
+        paste(
+          "INSERT INTO ducknng_bench_writes",
+          "SELECT %d, %d, i, %s FROM range(%d) AS t(i)"
+        ),
         as.integer(worker_id),
         as.integer(iter),
-        ducknng_bench_sql_quote(serialization_mode)
+        ducknng_bench_sql_quote(serialization_mode),
+        as.integer(rows)
       )
       elapsed <- system.time({
         DBI::dbGetQuery(con, sprintf(
@@ -256,6 +261,7 @@ ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_
           ducknng_bench_sql_quote(sql)
         ))
       })[["elapsed"]]
+      rows_written <- rows_written + rows
       writes <- writes + 1L
       latencies[[iter]] <- elapsed
     }
@@ -265,6 +271,7 @@ ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_
     worker_id = worker_id,
     operations = iterations,
     rows_read = rows_read,
+    rows_written = rows_written,
     write_ops = writes,
     total_worker_seconds = sum(latencies),
     median_latency_seconds = stats::median(latencies),
@@ -336,7 +343,9 @@ ducknng_bench_run_concurrent_scenario <- function(url, transport, serialization_
   elapsed <- proc.time()[["elapsed"]] - started
   worker_df <- do.call(rbind, worker_results)
   total_rows <- sum(worker_df$rows_read)
+  total_rows_written <- sum(worker_df$rows_written)
   total_writes <- sum(worker_df$write_ops)
+  operation_seconds <- max(worker_df$total_worker_seconds)
   data.frame(
     benchmark = "concurrent_read_write",
     system = "ducknng",
@@ -349,10 +358,13 @@ ducknng_bench_run_concurrent_scenario <- function(url, transport, serialization_
     rows_per_reader_operation = rows,
     iterations_per_worker = iterations,
     wall_seconds = round(elapsed, 3),
+    operation_seconds = round(operation_seconds, 3),
     rows_read = total_rows,
+    rows_written = total_rows_written,
     write_ops = total_writes,
-    rows_per_second = round(if (elapsed > 0) total_rows / elapsed else NA_real_, 1),
-    write_ops_per_second = round(if (elapsed > 0) total_writes / elapsed else NA_real_, 1),
+    rows_per_second = round(if (operation_seconds > 0) total_rows / operation_seconds else NA_real_, 1),
+    write_rows_per_second = round(if (operation_seconds > 0) total_rows_written / operation_seconds else NA_real_, 1),
+    write_ops_per_second = round(if (operation_seconds > 0) total_writes / operation_seconds else NA_real_, 1),
     median_latency_seconds = round(stats::median(worker_df$median_latency_seconds), 3),
     p95_latency_seconds = round(max(worker_df$p95_latency_seconds), 3),
     stringsAsFactors = FALSE
@@ -467,7 +479,7 @@ ducknng_bench_run_ducknng_rpc_transport <- function(transport, rows, repetitions
   concurrent_results <- NULL
   if (concurrent_rows > 0L && concurrent_iterations > 0L && concurrent_clients > 0L) {
     DBI::dbExecute(server, "DROP TABLE IF EXISTS ducknng_bench_writes")
-    DBI::dbExecute(server, "CREATE TABLE ducknng_bench_writes(worker INTEGER, iter INTEGER, mode VARCHAR)")
+    DBI::dbExecute(server, "CREATE TABLE ducknng_bench_writes(worker INTEGER, iter INTEGER, value BIGINT, mode VARCHAR)")
     concurrent_results <- ducknng_bench_run_concurrent_ducknng_transport(
       transport = transport,
       url = actual_url,

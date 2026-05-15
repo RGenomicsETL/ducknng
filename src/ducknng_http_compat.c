@@ -1669,6 +1669,72 @@ fail:
     return -1;
 }
 
+int ducknng_http_frame_client_transact_msg(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg) {
+    nng_http_req *req = NULL;
+    nng_http_res *res = NULL;
+    nng_aio *aio = NULL;
+    nng_msg *msg = NULL;
+    void *resp_body = NULL;
+    size_t resp_body_len = 0;
+    uint16_t status = 0;
+    int rv;
+    if (out_msg) *out_msg = NULL;
+    if (!out_msg) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame message output");
+        return -1;
+    }
+    if (!client || !client->client || !client->url) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    rv = nng_http_req_alloc(&req, client->url);
+    if (rv != 0) goto fail;
+    rv = nng_http_res_alloc(&res);
+    if (rv != 0) goto fail;
+    rv = nng_http_req_set_method(req, "POST");
+    if (rv != 0) goto fail;
+    if (ducknng_http_apply_headers_json(req, DUCKNNG_HTTP_FRAME_HEADERS_JSON, errmsg) != 0) {
+        rv = NNG_EINVAL;
+        goto fail;
+    }
+    if (frame && frame_len > 0) {
+        rv = nng_http_req_copy_data(req, frame, frame_len);
+        if (rv != 0) goto fail;
+    }
+    rv = ducknng_aio_alloc(&aio, NULL, NULL, timeout_ms);
+    if (rv != 0) goto fail;
+    nng_http_client_transact(client->client, req, res, aio);
+    ducknng_aio_wait(aio);
+    rv = ducknng_aio_result(aio);
+    if (rv != 0) goto fail;
+    status = nng_http_res_get_status(res);
+    nng_http_res_get_data(res, &resp_body, &resp_body_len);
+    if (status != 200) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_http_status_error_message(status,
+            (const uint8_t *)resp_body, resp_body_len);
+        rv = NNG_EPROTO;
+        goto fail;
+    }
+    rv = nng_msg_alloc(&msg, resp_body_len);
+    if (rv != 0) goto fail;
+    if (resp_body_len) memcpy(nng_msg_body(msg), resp_body, resp_body_len);
+    *out_msg = msg;
+    msg = NULL;
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return 0;
+fail:
+    if (msg) nng_msg_free(msg);
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return -1;
+}
+
 void ducknng_http_frame_client_close(ducknng_http_frame_client *client) {
     if (!client) return;
     if (client->client) nng_http_client_free(client->client);

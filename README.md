@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:39111 |
+| tls+tcp://127.0.0.1:40055 |
 +---------------------------+
 
 +--------+
@@ -394,13 +394,16 @@ extension targets `TARGET_DUCKDB_VERSION`. It builds with
 result-to-IPC emit path. Deprecated entrypoints are avoided.
 `make rpc_bench` keeps the existing raw-RPC microbench path.
 `make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
-benchmark report that records machine details and compares ducknng RPC
-over `http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
-`ducknng_quack_batch` modes, plus Quack over its public client/server
-path. The report generates a local TPC-H dataset if needed and installs
-`quack` from `core_nightly`. The unstable functions in use are tracked
-by `tools/used_duckdb_unstable_api.R`; the table below is generated
-fresh on every README render:
+benchmark report that records machine details, compares ducknng RPC over
+`http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
+`ducknng_quack_batch` modes, compares Quack over its public
+client/server path, and includes concurrent reader, writer, and mixed
+reader/writer RPC slices. The writer slice is a set-oriented remote SQL
+write dispatch benchmark, not a client-side bulk append protocol. The
+report generates a local TPC-H dataset if needed and installs `quack`
+from `core_nightly`. The unstable functions in use are tracked by
+`tools/used_duckdb_unstable_api.R`; the table below is generated fresh
+on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
@@ -2023,11 +2026,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1609472418 | 1778880106927 | 127.0.0.1:36882 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 213037617 | 1778882954309 | 127.0.0.1:47124 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

@@ -93,7 +93,7 @@ knitr::kable(rpc_results, row.names = FALSE)
 
 ## Concurrent reader/writer results
 
-These runs open multiple client connections against the same ducknng service. Reader workers fetch row batches through `ducknng_query_rpc(...)` / `ducknng_query_rpc_mode(...)`; writer workers issue `INSERT` statements through `ducknng_run_rpc(...)`. The mixed scenario runs the configured number of readers and writers at the same time.
+These runs open multiple client connections against the same ducknng service. Reader workers fetch row batches through `ducknng_query_rpc(...)` / `ducknng_query_rpc_mode(...)`; writer workers issue set-oriented `INSERT ... SELECT FROM range(...)` statements through `ducknng_run_rpc(...)`. The mixed scenario runs the configured number of readers and writers at the same time. `wall_seconds` includes benchmark orchestration around the worker calls; throughput columns use `operation_seconds`, the maximum measured in-worker operation time, so writer startup and extension-load overhead do not dominate the write-rate numbers.
 
 ```{r concurrent-results}
 knitr::kable(concurrent_results, row.names = FALSE)

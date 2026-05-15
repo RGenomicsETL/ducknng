@@ -32,6 +32,9 @@ int ducknng_http_frame_client_open(const char *url, const ducknng_tls_opts *tls_
 int ducknng_http_frame_client_transact(ducknng_http_frame_client *client,
     const uint8_t *frame, size_t frame_len, int timeout_ms,
     uint8_t **out_frame, size_t *out_frame_len, char **errmsg);
+int ducknng_http_frame_client_transact_msg(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg);
 void ducknng_http_frame_client_close(ducknng_http_frame_client *client);
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
     char **out_resolved_url, char **errmsg);

@@ -29,6 +29,12 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
     ducknng_quack_schema *out_schema, idx_t *out_row_count, char **errmsg);
 int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_len,
     const ducknng_quack_schema *schema, idx_t *out_row_count, char **errmsg);
+int ducknng_quack_payload_scan_begin(const uint8_t *payload, size_t payload_len,
+    const ducknng_quack_schema *schema, size_t *inout_offset, uint64_t *out_remaining,
+    char **errmsg);
+int ducknng_quack_payload_scan_next(duckdb_data_chunk output,
+    const uint8_t *payload, size_t payload_len, const ducknng_quack_schema *schema,
+    size_t *inout_offset, uint64_t *inout_remaining, char **errmsg);
 int ducknng_quack_payload_scan(duckdb_data_chunk output,
     const uint8_t *payload, size_t payload_len,
     const ducknng_quack_schema *schema, idx_t *inout_offset, char **errmsg);
