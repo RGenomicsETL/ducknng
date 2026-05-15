@@ -187,7 +187,7 @@ The HTTP adapter does not alter the session contract. It carries the same method
 
 `fetch` still accepts JSON control metadata keyed by `session_id` and `session_token`. Over HTTP, that JSON control payload remains the payload inside a `ducknng` request frame, and that frame becomes the HTTP request body.
 
-`fetch` still returns either Arrow IPC row data or JSON control metadata. When rows are returned, the Arrow IPC bytes remain inside the `ducknng` reply frame payload exactly as they do over NNG. The HTTP response body is therefore still one `ducknng` frame whose payload contains Arrow IPC record-batch bytes. When only control metadata is returned, the HTTP response body is one `ducknng` frame whose payload contains JSON.
+`fetch` still returns either negotiated row payload bytes or JSON control metadata. When rows are returned, Arrow IPC or `ducknng_quack_batch` bytes remain inside the `ducknng` reply frame payload exactly as they do over NNG. The HTTP response body is therefore still one `ducknng` frame whose payload contains the negotiated row serialization. When only control metadata is returned, the HTTP response body is one `ducknng` frame whose payload contains JSON.
 
 `close` and `cancel` retain the same JSON control request and response shapes. They do not become path-specialized HTTP endpoints and they do not gain alternate payload encodings just because the outer carrier is HTTP.
 

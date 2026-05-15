@@ -19,7 +19,7 @@ ORDER BY a
 query T
 SELECT output
 FROM ducknng_list_codecs()
-WHERE provider = 'quack_batch_v1'
+WHERE provider = 'ducknng_quack_batch'
 ----
 dynamic table
 

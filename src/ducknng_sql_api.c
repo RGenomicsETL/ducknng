@@ -1,5 +1,6 @@
 #include "ducknng_sql_api.h"
 #include "ducknng_runtime.h"
+#include "ducknng_session.h"
 #include "ducknng_sql_shared.h"
 #include "ducknng_util.h"
 #include <stdio.h>
@@ -339,6 +340,11 @@ static int ducknng_register_config_options(duckdb_connection con) {
     if (!ducknng_register_one_config_option(con, "ducknng.csv_max_columns",
             "Maximum number of columns allowed when parsing CSV or TSV body payloads "
             "via ducknng_parse_body. Increase for wide CSV inputs.", 1024))
+        return 0;
+    if (!ducknng_register_one_config_option(con, "ducknng.fetch_batch_chunks",
+            "Default number of DuckDB data chunks requested per query-session fetch. "
+            "Applies to all row serializers and transports unless a client sends an explicit batch_rows hint.",
+            DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS))
         return 0;
     return 1;
 }

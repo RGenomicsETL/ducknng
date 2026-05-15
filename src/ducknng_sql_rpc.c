@@ -32,14 +32,19 @@ typedef struct {
     char *url;
     uint64_t tls_config_id;
     char *requested_serialization_mode;
+    uint64_t fetch_batch_chunks;
     int row_payload_format;
+    int transport_parsed;
+    ducknng_transport_url transport;
+    nng_socket req_sock;
+    int req_sock_open;
+    ducknng_http_frame_client *http_client;
     uint64_t session_id;
     char *session_token;
     int session_open;
     int close_attempted;
     int end_of_stream;
-    struct ArrowSchema schema;
-    struct ArrowArray array;
+    ducknng_arrow_batches arrow_batches;
     ducknng_quack_schema quack_schema;
     uint8_t *payload;
     size_t payload_len;
@@ -49,6 +54,7 @@ typedef struct {
 typedef struct {
     ducknng_query_rpc_bind_data *bind;
     idx_t offset;
+    idx_t array_index;
 } ducknng_query_rpc_init_data;
 
 typedef struct {
@@ -169,8 +175,8 @@ static char *ducknng_json_extract_string_dup(const char *json, const char *key) 
 static int ducknng_query_rpc_parse_row_payload_format(const char *value, int *out) {
     if (out) *out = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     if (!value || !value[0] || strcmp(value, "arrow_ipc_stream") == 0) return 0;
-    if (strcmp(value, "quack_batch_v1") == 0) {
-        if (out) *out = DUCKNNG_PAYLOAD_QUACK_BATCH_V1;
+    if (strcmp(value, "ducknng_quack_batch") == 0) {
+        if (out) *out = DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH;
         return 0;
     }
     return -1;
@@ -188,6 +194,8 @@ static void destroy_query_rpc_bind_data(void *ptr) {
     if (data->url) duckdb_free(data->url);
     if (data->requested_serialization_mode) duckdb_free(data->requested_serialization_mode);
     if (data->session_token) duckdb_free(data->session_token);
+    if (data->http_client) ducknng_http_frame_client_close(data->http_client);
+    if (data->req_sock_open) ducknng_socket_close(data->req_sock);
     duckdb_free(data);
 }
 
@@ -747,13 +755,67 @@ static nng_msg *ducknng_client_method_roundtrip_tls(const char *url, const char 
     return ducknng_client_roundtrip_tls(url, req, timeout_ms, tls_opts, errmsg, NULL);
 }
 
+static nng_msg *ducknng_query_rpc_method_roundtrip(ducknng_query_rpc_bind_data *bind,
+    const char *method_name, const void *payload, size_t payload_len, int timeout_ms,
+    const ducknng_tls_opts *tls_opts, char **errmsg) {
+    nng_msg *req = NULL;
+    nng_msg *resp = NULL;
+    uint8_t *reply_frame = NULL;
+    size_t reply_frame_len = 0;
+    int rv;
+    if (!bind || !bind->url || !method_name) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing query_rpc transport state");
+        return NULL;
+    }
+    if (!bind->transport_parsed) {
+        if (ducknng_transport_url_parse(bind->url, &bind->transport, errmsg) != 0) return NULL;
+        bind->transport_parsed = 1;
+    }
+    req = ducknng_client_method_request(method_name, payload, payload_len, errmsg);
+    if (!req) return NULL;
+    if (ducknng_transport_url_is_http(&bind->transport)) {
+        if (!bind->http_client && ducknng_http_frame_client_open(bind->url, tls_opts,
+                &bind->http_client, errmsg) != 0) {
+            nng_msg_free(req);
+            return NULL;
+        }
+        if (ducknng_http_frame_client_transact(bind->http_client,
+                (const uint8_t *)nng_msg_body(req), nng_msg_len(req), timeout_ms,
+                &reply_frame, &reply_frame_len, errmsg) != 0) {
+            nng_msg_free(req);
+            return NULL;
+        }
+        nng_msg_free(req);
+        rv = nng_msg_alloc(&resp, reply_frame_len);
+        if (rv != 0) {
+            if (reply_frame) duckdb_free(reply_frame);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+            return NULL;
+        }
+        if (reply_frame_len) memcpy(nng_msg_body(resp), reply_frame, reply_frame_len);
+        if (reply_frame) duckdb_free(reply_frame);
+        return resp;
+    }
+    if (!bind->req_sock_open) {
+        if (ducknng_client_open_req_socket_tls(bind->url, timeout_ms, tls_opts,
+                &bind->req_sock, errmsg) != 0) {
+            nng_msg_free(req);
+            return NULL;
+        }
+        bind->req_sock_open = 1;
+    }
+    rv = ducknng_req_transact(bind->req_sock, req, &resp);
+    if (rv != 0) {
+        if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+        return NULL;
+    }
+    return resp;
+}
+
 static void ducknng_query_rpc_reset_result(ducknng_query_rpc_bind_data *bind) {
     if (!bind) return;
-    if (bind->array.release) ArrowArrayRelease(&bind->array);
-    if (bind->schema.release) ArrowSchemaRelease(&bind->schema);
+    ducknng_arrow_batches_reset(&bind->arrow_batches);
     if (bind->payload) duckdb_free(bind->payload);
-    memset(&bind->array, 0, sizeof(bind->array));
-    memset(&bind->schema, 0, sizeof(bind->schema));
     bind->payload = NULL;
     bind->payload_len = 0;
     bind->row_count = 0;
@@ -777,9 +839,13 @@ static int ducknng_query_rpc_open_session(ducknng_query_rpc_bind_data *bind, con
         return -1;
     }
     if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, errmsg) != 0) goto cleanup;
-    if (ducknng_query_open_request_to_ipc_ex(sql, 0, 0, NULL, bind->requested_serialization_mode,
-            &payload, &payload_len, errmsg) != 0) goto cleanup;
-    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "query_open", payload, payload_len,
+    {
+        uint64_t batch_rows = bind->fetch_batch_chunks ?
+            bind->fetch_batch_chunks * (uint64_t)duckdb_vector_size() : 0;
+        if (ducknng_query_open_request_to_ipc_ex(sql, batch_rows, 0, NULL, bind->requested_serialization_mode,
+                &payload, &payload_len, errmsg) != 0) goto cleanup;
+    }
+    resp_msg = ducknng_query_rpc_method_roundtrip(bind, "query_open", payload, payload_len,
         5000, tls_opts, errmsg);
     if (!resp_msg) goto cleanup;
     if (ducknng_decode_request(resp_msg, &frame) != 0) {
@@ -847,7 +913,7 @@ static int ducknng_query_rpc_fetch_batch(ducknng_query_rpc_bind_data *bind, char
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: failed to build fetch request payload");
         goto cleanup;
     }
-    resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "fetch", json, strlen(json),
+    resp_msg = ducknng_query_rpc_method_roundtrip(bind, "fetch", json, strlen(json),
         5000, tls_opts, errmsg);
     if (!resp_msg) goto cleanup;
     if (ducknng_decode_request(resp_msg, &frame) != 0) {
@@ -863,12 +929,12 @@ static int ducknng_query_rpc_fetch_batch(ducknng_query_rpc_bind_data *bind, char
     if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) &&
         (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
         bind->row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
-        if (ducknng_decode_ipc_table_payload(frame.payload, (size_t)frame.payload_len,
-                &bind->schema, &bind->array, errmsg) != 0) {
+        if (ducknng_decode_ipc_batches_payload(frame.payload, (size_t)frame.payload_len,
+                &bind->arrow_batches, errmsg) != 0) {
             goto cleanup;
         }
-        bind->row_count = (idx_t)bind->array.length;
-        if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+        bind->row_count = bind->arrow_batches.row_count;
+        if (bind->arrow_batches.schema.n_children < 0) {
             ducknng_query_rpc_reset_result(bind);
             if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid fetch Arrow row schema");
             goto cleanup;
@@ -878,7 +944,7 @@ static int ducknng_query_rpc_fetch_batch(ducknng_query_rpc_bind_data *bind, char
     }
     if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH) &&
         (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
-        bind->row_payload_format = DUCKNNG_PAYLOAD_QUACK_BATCH_V1;
+        bind->row_payload_format = DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH;
         bind->payload = (uint8_t *)duckdb_malloc((size_t)frame.payload_len);
         if (!bind->payload) {
             if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying quack row payload");
@@ -923,7 +989,7 @@ static int ducknng_query_rpc_close_session(ducknng_query_rpc_bind_data *bind) {
     if (ducknng_lookup_tls_opts(bind->ctx, bind->tls_config_id, &tls_opts, &errmsg) == 0) {
         json = ducknng_session_request_json(bind->session_id, bind->session_token, 0, 0);
         if (json) {
-            resp_msg = ducknng_client_method_roundtrip_tls(bind->url, "close", json, strlen(json),
+            resp_msg = ducknng_query_rpc_method_roundtrip(bind, "close", json, strlen(json),
                 5000, tls_opts, &errmsg);
         }
     }
@@ -1396,6 +1462,16 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
     sql = duckdb_get_varchar(sql_val);
     bind->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
     bind->requested_serialization_mode = (param_count == 4) ? duckdb_get_varchar(mode_val) : NULL;
+    {
+        duckdb_client_context client_ctx = NULL;
+        duckdb_table_function_get_client_context(info, &client_ctx);
+        bind->fetch_batch_chunks = ducknng_sql_get_config_ubigint(client_ctx,
+            "ducknng.fetch_batch_chunks", DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS);
+        if (client_ctx) duckdb_destroy_client_context(&client_ctx);
+        if (bind->fetch_batch_chunks == 0) bind->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
+        if (bind->fetch_batch_chunks > DUCKNNG_MAX_FETCH_BATCH_CHUNKS)
+            bind->fetch_batch_chunks = DUCKNNG_MAX_FETCH_BATCH_CHUNKS;
+    }
     duckdb_destroy_value(&url_val);
     duckdb_destroy_value(&sql_val);
     duckdb_destroy_value(&tls_val);
@@ -1423,7 +1499,7 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
         if (errmsg) duckdb_free(errmsg);
         return;
     }
-    if (bind->row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1) {
+    if (bind->row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH) {
         if (!bind->payload || bind->payload_len == 0 ||
             ducknng_quack_payload_bind_columns(info, bind->payload, bind->payload_len,
                 &bind->quack_schema, &bind->row_count, &errmsg) != 0) {
@@ -1433,12 +1509,12 @@ static void ducknng_query_rpc_bind(duckdb_bind_info info) {
             return;
         }
     } else {
-        if (!bind->schema.release || bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
+        if (!bind->arrow_batches.schema.release || bind->arrow_batches.schema.n_children < 0) {
             destroy_query_rpc_bind_data(bind);
             duckdb_bind_set_error(info, "ducknng: query_rpc could not infer result columns from the first fetch reply");
             return;
         }
-        if (ducknng_sql_arrow_bind_result_columns(info, &bind->schema, &errmsg) != 0) {
+        if (ducknng_sql_arrow_bind_result_columns(info, &bind->arrow_batches.schema, &errmsg) != 0) {
             destroy_query_rpc_bind_data(bind);
             duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported remote Arrow type");
             if (errmsg) duckdb_free(errmsg);
@@ -1458,6 +1534,7 @@ static void ducknng_query_rpc_init(duckdb_init_info info) {
     }
     init->bind = bind;
     init->offset = 0;
+    init->array_index = 0;
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_query_rpc_init_data);
 }
@@ -1484,13 +1561,14 @@ static void ducknng_query_rpc_scan(duckdb_function_info info, duckdb_data_chunk 
             return;
         }
         init->offset = 0;
+        init->array_index = 0;
         if (bind->row_count == 0 && bind->end_of_stream) {
             (void)ducknng_query_rpc_close_session(bind);
             duckdb_data_chunk_set_size(output, 0);
             return;
         }
     }
-    if (bind->row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1) {
+    if (bind->row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH) {
         if (ducknng_quack_payload_scan(output, bind->payload, bind->payload_len,
                 &bind->quack_schema, &init->offset, &errmsg) != 0) {
             duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode remote quack row payload");
@@ -1498,12 +1576,26 @@ static void ducknng_query_rpc_scan(duckdb_function_info info, duckdb_data_chunk 
             (void)ducknng_query_rpc_close_session(bind);
             return;
         }
-    } else if (ducknng_sql_arrow_scan_table(output, &bind->schema, &bind->array, bind->row_count,
-            &init->offset, &errmsg) != 0) {
-        duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode remote Arrow row payload");
-        if (errmsg) duckdb_free(errmsg);
-        (void)ducknng_query_rpc_close_session(bind);
-        return;
+    } else {
+        if (init->array_index >= bind->arrow_batches.array_count) {
+            duckdb_data_chunk_set_size(output, 0);
+            init->offset = bind->row_count;
+        } else {
+            struct ArrowArray *arr = &bind->arrow_batches.arrays[init->array_index];
+            idx_t arr_rows = (idx_t)arr->length;
+            if (ducknng_sql_arrow_scan_table(output, &bind->arrow_batches.schema, arr, arr_rows,
+                    &init->offset, &errmsg) != 0) {
+                duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode remote Arrow row payload");
+                if (errmsg) duckdb_free(errmsg);
+                (void)ducknng_query_rpc_close_session(bind);
+                return;
+            }
+            if (init->offset >= arr_rows) {
+                init->array_index++;
+                init->offset = 0;
+                if (init->array_index >= bind->arrow_batches.array_count) init->offset = bind->row_count;
+            }
+        }
     }
     if (init->offset >= bind->row_count && bind->end_of_stream) {
         (void)ducknng_query_rpc_close_session(bind);

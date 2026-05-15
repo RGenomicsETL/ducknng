@@ -619,7 +619,15 @@ HTTP/HTTPS carrier so DuckDB sessions can reach one another over
 servers, sockets, AIO futures, TLS configs, query sessions — are
 manually managed at the SQL surface.</p>
 <p>It also draws on <a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
-for the thin versioned RPC envelope design.</p>
+for the thin versioned RPC envelope design. The optional
+<code>ducknng_quack_batch</code> row serializer is informed by DuckDB’s
+experimental <a href="https://github.com/duckdb/duckdb-quack"><code>quack</code></a>
+extension and related Quack client work such as <a href="https://github.com/tobilg/quack-protocol"><code>@quack-protocol/sdk</code></a>
+and <a href="https://github.com/gizmodata/adbc-driver-quack"><code>adbc-driver-quack</code></a>.
+In ducknng today, that Quack-derived encoding is a row-payload mode
+inside the ducknng RPC/session protocol; it is not yet a full Quack
+<code>POST /quack</code> / <code>application/duckdb</code> server or
+client.</p>
 <h2 id="layer-map">Layer map</h2>
 <table>
 <thead>
@@ -652,24 +660,25 @@ authorizer at the request boundary.</td>
 <td><code>ducknng_parse_body(...)</code> and
 <code>ducknng_ncurl_table(...)</code> parse content-type-tagged BLOBs.
 Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng
-<code>quack_batch_v1</code> batch media type, and text/raw fallback.
-User-registered codec hooks extend the set.</td>
+<code>ducknng_quack_batch</code> batch media type, and text/raw
+fallback. User-registered codec hooks extend the set.</td>
 </tr>
 </tbody>
 </table>
 <p>Raw protocol clients now also have a built-in <code>handshake</code>
 control method for capability negotiation. It advertises
-<code>supported_serialization_modes</code> plus a
-<code>fetch_metadata</code> capability object covering control-plane
-<code>correlation_id</code> echo, stable query-session
-<code>result_handle</code> values, and terminal <code>batch_index</code>
-metadata. Today the advertised row payload modes are
-<code>arrow_ipc_stream</code> and <code>quack_batch_v1</code>: Arrow IPC
-remains the broad default, while <code>quack_batch_v1</code> is the
-Quack-derived DuckDB BinarySerializer batch path used for the new
-comparative benchmarks. The runnable wire-level example lives in
-<code>test/rpc_smoke.R</code>, and the contract is pinned in
-<code>docs/protocol.md</code>.</p>
+<code>supported_serialization_modes</code> plus
+<code>fetch_metadata</code> and <code>session_schema</code> capability
+objects covering control-plane <code>correlation_id</code> echo, stable
+query-session <code>result_handle</code> values, terminal
+<code>batch_index</code> metadata, negotiated protocol/schema versions,
+and effective fetch chunk counts. Today the advertised row payload modes
+are <code>arrow_ipc_stream</code> and <code>ducknng_quack_batch</code>:
+Arrow IPC remains the broad default, while
+<code>ducknng_quack_batch</code> is the Quack-derived DuckDB
+BinarySerializer batch path used for the new comparative benchmarks. The
+runnable wire-level example lives in <code>test/rpc_smoke.R</code>, and
+the contract is pinned in <code>docs/protocol.md</code>.</p>
 <h2 id="quick-tour">Quick tour</h2>
 <p>Build the extension first (see <strong>Development</strong> below),
 then load it:</p>
@@ -706,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:33275</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:39111</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -771,7 +780,7 @@ ready.</p>
 <span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
 <span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a>| aio_id |  ok  | has_frame |</span>
 <span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
-<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">2</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
+<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">1</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
 <span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span></code></pre></div>
 <p><strong><code>ducknng_ncurl</code> — HTTP client primitive.</strong>
 The framed RPC mount accepts POST only. Mount a server on an
@@ -966,7 +975,7 @@ packages.</p>
 <span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a></span>
 <span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co"># Render the bulk benchmark report to bench/rpc_bulk_compare.md.</span></span>
 <span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co"># This compares ducknng RPC over http/tcp/ipc/ws in both arrow_ipc_stream</span></span>
-<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co"># and quack_batch_v1 modes, plus Quack over its public client path.</span></span>
+<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co"># and ducknng_quack_batch modes, plus Quack over its public client path.</span></span>
 <span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co"># Requires network access to INSTALL quack FROM core_nightly.</span></span>
 <span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="fu">make</span> rpc_bulk_compare</span>
 <span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a></span>
@@ -984,7 +993,7 @@ now renders <code>bench/rpc_bulk_compare.md</code>, a benchmark report
 that records machine details and compares ducknng RPC over
 <code>http</code>, <code>tcp</code>, <code>ipc</code>, and
 <code>ws</code> in both <code>arrow_ipc_stream</code> and
-<code>quack_batch_v1</code> modes, plus Quack over its public
+<code>ducknng_quack_batch</code> modes, plus Quack over its public
 client/server path. The report generates a local TPC-H dataset if needed
 and installs <code>quack</code> from <code>core_nightly</code>. The
 unstable functions in use are tracked by
@@ -2478,16 +2487,25 @@ else. <code>exec</code> is registered explicitly.</p>
 <span id="cb17-35"><a href="#cb17-35" tabindex="-1"></a>| <span class="dv">12</span> | <span class="kw">true</span>  |</span>
 <span id="cb17-36"><a href="#cb17-36" tabindex="-1"></a><span class="op">+</span><span class="co">----+-------+</span></span></code></pre></div>
 <p>You can also request the Quack-derived batch serializer over the same
-session contract. Unlike upstream Quack, ducknng keeps transport choice
-separate from row serialization, so the same <code>quack_batch_v1</code>
-mode can ride over <code>http</code>, <code>tcp</code>,
-<code>ipc</code>, or <code>ws</code>.</p>
+session contract. Unlike upstream <a href="https://github.com/duckdb/duckdb-quack">Quack</a>, ducknng keeps
+transport choice separate from row serialization, so the same
+<code>ducknng_quack_batch</code> mode can ride over <code>http</code>,
+<code>tcp</code>, <code>ipc</code>, or <code>ws</code>. Version and
+schema compatibility belong to the negotiated ducknng session contract
+rather than to a suffix on the serializer token; full Quack protocol
+traffic uses <code>application/duckdb</code> messages and negotiates
+<code>quackVersion</code> during the connection exchange, but this fetch
+payload is not wrapped in that Quack connection envelope.
+<code>ducknng.fetch_batch_chunks</code> controls the default number of
+DuckDB chunks requested per fetch; it defaults to 12 and applies to
+Arrow IPC and <code>ducknng_quack_batch</code> alike unless the client
+sends an explicit <code>batch_rows</code> hint.</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span></span>
 <span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_query_rpc_mode(</span>
 <span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_readme_rpc.ipc&#39;</span>,</span>
 <span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>  <span class="st">&#39;SELECT i, i &gt; 10 AS gt_10 FROM rpc_demo_t ORDER BY i&#39;</span>,</span>
 <span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a>  <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
-<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a>  <span class="st">&#39;quack_batch_v1&#39;</span></span>
+<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a>  <span class="st">&#39;ducknng_quack_batch&#39;</span></span>
 <span id="cb18-7"><a href="#cb18-7" tabindex="-1"></a>);</span>
 <span id="cb18-8"><a href="#cb18-8" tabindex="-1"></a><span class="op">+</span><span class="co">----+-------+</span></span>
 <span id="cb18-9"><a href="#cb18-9" tabindex="-1"></a>| i  | gt_10 |</span>
@@ -2521,8 +2539,8 @@ through the same path. Supported mappings are documented in
 <span id="cb19-19"><a href="#cb19-19" tabindex="-1"></a><span class="op">+</span><span class="co">---------+-------+------------+---------+-----------+</span></span></code></pre></div>
 <p><code>ducknng_parse_body(...)</code> decodes content-type-tagged
 BLOBs. The built-in providers cover Arrow IPC, JSON, ducknng frames, the
-ducknng <code>quack_batch_v1</code> batch media type, and a text/raw
-fallback.</p>
+ducknng <code>application/vnd.ducknng.quack-batch</code> batch media
+type, and a text/raw fallback.</p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="kw">SELECT</span> provider, output <span class="kw">FROM</span> ducknng_list_codecs() <span class="kw">ORDER</span> <span class="kw">BY</span> provider;</span>
 <span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a><span class="kw">SELECT</span> a, b</span>
 <span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a><span class="kw">FROM</span> ducknng_parse_body(</span>
@@ -2530,21 +2548,21 @@ fallback.</p>
 <span id="cb20-5"><a href="#cb20-5" tabindex="-1"></a>  <span class="st">&#39;application/json; charset=utf-8&#39;</span></span>
 <span id="cb20-6"><a href="#cb20-6" tabindex="-1"></a>)</span>
 <span id="cb20-7"><a href="#cb20-7" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> a;</span>
-<span id="cb20-8"><a href="#cb20-8" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-----------------------------+</span></span>
-<span id="cb20-9"><a href="#cb20-9" tabindex="-1"></a>|    provider    |           output            |</span>
-<span id="cb20-10"><a href="#cb20-10" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-----------------------------+</span></span>
-<span id="cb20-11"><a href="#cb20-11" tabindex="-1"></a>| arrow_ipc      | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-12"><a href="#cb20-12" tabindex="-1"></a>| csv            | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-13"><a href="#cb20-13" tabindex="-1"></a>| ducknng_frame  | decoded frame <span class="kw">columns</span>       |</span>
-<span id="cb20-14"><a href="#cb20-14" tabindex="-1"></a>| form           | name <span class="dt">VARCHAR</span>, <span class="fu">value</span> <span class="dt">VARCHAR</span> |</span>
-<span id="cb20-15"><a href="#cb20-15" tabindex="-1"></a>| json           | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-16"><a href="#cb20-16" tabindex="-1"></a>| ndjson         | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-17"><a href="#cb20-17" tabindex="-1"></a>| parquet        | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-18"><a href="#cb20-18" tabindex="-1"></a>| quack_batch_v1 | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-19"><a href="#cb20-19" tabindex="-1"></a>| <span class="dt">raw</span>            | <span class="kw">body</span> <span class="dt">BLOB</span>                   |</span>
-<span id="cb20-20"><a href="#cb20-20" tabindex="-1"></a>| text           | body_text <span class="dt">VARCHAR</span>           |</span>
-<span id="cb20-21"><a href="#cb20-21" tabindex="-1"></a>| tsv            | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
-<span id="cb20-22"><a href="#cb20-22" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+-----------------------------+</span></span>
+<span id="cb20-8"><a href="#cb20-8" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------+-----------------------------+</span></span>
+<span id="cb20-9"><a href="#cb20-9" tabindex="-1"></a>|      provider       |           output            |</span>
+<span id="cb20-10"><a href="#cb20-10" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------+-----------------------------+</span></span>
+<span id="cb20-11"><a href="#cb20-11" tabindex="-1"></a>| arrow_ipc           | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-12"><a href="#cb20-12" tabindex="-1"></a>| csv                 | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-13"><a href="#cb20-13" tabindex="-1"></a>| ducknng_frame       | decoded frame <span class="kw">columns</span>       |</span>
+<span id="cb20-14"><a href="#cb20-14" tabindex="-1"></a>| ducknng_quack_batch | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-15"><a href="#cb20-15" tabindex="-1"></a>| form                | name <span class="dt">VARCHAR</span>, <span class="fu">value</span> <span class="dt">VARCHAR</span> |</span>
+<span id="cb20-16"><a href="#cb20-16" tabindex="-1"></a>| json                | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-17"><a href="#cb20-17" tabindex="-1"></a>| ndjson              | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-18"><a href="#cb20-18" tabindex="-1"></a>| parquet             | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-19"><a href="#cb20-19" tabindex="-1"></a>| <span class="dt">raw</span>                 | <span class="kw">body</span> <span class="dt">BLOB</span>                   |</span>
+<span id="cb20-20"><a href="#cb20-20" tabindex="-1"></a>| text                | body_text <span class="dt">VARCHAR</span>           |</span>
+<span id="cb20-21"><a href="#cb20-21" tabindex="-1"></a>| tsv                 | <span class="kw">dynamic</span> <span class="kw">table</span>               |</span>
+<span id="cb20-22"><a href="#cb20-22" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------+-----------------------------+</span></span>
 <span id="cb20-23"><a href="#cb20-23" tabindex="-1"></a><span class="op">+</span><span class="co">---+---+</span></span>
 <span id="cb20-24"><a href="#cb20-24" tabindex="-1"></a>| a | b |</span>
 <span id="cb20-25"><a href="#cb20-25" tabindex="-1"></a><span class="op">+</span><span class="co">---+---+</span></span>
@@ -3492,7 +3510,7 @@ for a service.</p>
 <span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
 <span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
 <span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">1206599782</span> | <span class="dv">1778874607316</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:47420</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">1609472418</span> | <span class="dv">1778880106927</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:36882</span> | <span class="kw">NULL</span>          |</span>
 <span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb44"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
@@ -3518,6 +3536,12 @@ library and transport family.</li>
 main client/server ergonomics reference.</li>
 <li><a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
 — thin-envelope + Arrow IPC RPC client.</li>
+<li><a href="https://github.com/duckdb/duckdb-quack"><code>quack</code></a> —
+DuckDB’s experimental Quack HTTP protocol extension.</li>
+<li><a href="https://github.com/tobilg/quack-protocol"><code>@quack-protocol/sdk</code></a>
+and <a href="https://github.com/gizmodata/adbc-driver-quack"><code>adbc-driver-quack</code></a>
+— related Quack client/codec implementations used as protocol
+references.</li>
 <li><a href="https://duckdb.org/docs/stable/clients/c/api">DuckDB C
 API</a> — extension and SQL integration boundary.</li>
 <li><a href="https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc">Apache

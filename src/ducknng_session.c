@@ -134,6 +134,7 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
         memset(result, 0, sizeof(*result));
         session->result_open = 1;
     }
+    session->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     session->last_touch_ms = ducknng_now_ms();
     if (ducknng_mutex_init(&session->mu) != 0) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session mutex");
@@ -196,6 +197,7 @@ ducknng_session *ducknng_session_create_streaming(
     session->stmt_open = (stmt != NULL) ? 1 : 0;
     session->pending_open = (pending != NULL) ? 1 : 0;
     session->pending_ready = 0;
+    session->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     session->last_touch_ms = ducknng_now_ms();
     if (ducknng_mutex_init(&session->mu) != 0) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session mutex");
@@ -504,7 +506,7 @@ size_t ducknng_service_prune_idle_sessions(ducknng_service *svc, uint64_t now_ms
 int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    const char *owner_identity, int row_payload_format,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
     size_t new_cap;
@@ -595,6 +597,9 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
         return -1;
     }
     session->row_payload_format = row_payload_format;
+    if (fetch_batch_chunks == 0) fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
+    if (fetch_batch_chunks > DUCKNNG_MAX_FETCH_BATCH_CHUNKS) fetch_batch_chunks = DUCKNNG_MAX_FETCH_BATCH_CHUNKS;
+    session->fetch_batch_chunks = fetch_batch_chunks;
     if (out_owner_token) {
         owner_token_copy = ducknng_strdup(owner_token);
         if (!owner_token_copy) {

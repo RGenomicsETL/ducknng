@@ -166,7 +166,7 @@ static const char *ducknng_body_codec_provider_name(int codec_kind) {
         case DUCKNNG_BODY_CODEC_DUCKNNG_FRAME: return "ducknng_frame";
         case DUCKNNG_BODY_CODEC_NDJSON: return "ndjson";
         case DUCKNNG_BODY_CODEC_FORM: return "form";
-        case DUCKNNG_BODY_CODEC_QUACK_BATCH: return "quack_batch_v1";
+        case DUCKNNG_BODY_CODEC_QUACK_BATCH: return "ducknng_quack_batch";
         case DUCKNNG_BODY_CODEC_USER: return "user";
         case DUCKNNG_BODY_CODEC_RAW:
         default: return "raw";
@@ -176,7 +176,7 @@ static const char *ducknng_body_codec_provider_name(int codec_kind) {
 static int ducknng_body_codec_for_media_type(const char *media_type) {
     if (!media_type || !media_type[0]) return DUCKNNG_BODY_CODEC_RAW;
     if (ducknng_ascii_ieq(media_type, "application/vnd.ducknng.frame")) return DUCKNNG_BODY_CODEC_DUCKNNG_FRAME;
-    if (ducknng_ascii_ieq(media_type, "application/vnd.ducknng.quack-batch-v1")) return DUCKNNG_BODY_CODEC_QUACK_BATCH;
+    if (ducknng_ascii_ieq(media_type, "application/vnd.ducknng.quack-batch")) return DUCKNNG_BODY_CODEC_QUACK_BATCH;
     if (ducknng_ascii_ieq(media_type, "application/vnd.apache.arrow.stream") ||
         ducknng_ascii_ieq(media_type, "application/vnd.apache.arrow.ipc") ||
         ducknng_ascii_ieq(media_type, "application/arrow")) return DUCKNNG_BODY_CODEC_ARROW_IPC;
@@ -1775,13 +1775,13 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
         case DUCKNNG_BODY_CODEC_QUACK_BATCH:
             if (!body || body_len == 0) {
                 destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: quack_batch_v1 body must not be empty");
+                duckdb_bind_set_error(info, "ducknng: ducknng_quack_batch body must not be empty");
                 return -1;
             }
             bind->raw = (uint8_t *)duckdb_malloc(body_len);
             if (!bind->raw) {
                 destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory copying quack_batch_v1 body");
+                duckdb_bind_set_error(info, "ducknng: out of memory copying ducknng_quack_batch body");
                 return -1;
             }
             memcpy(bind->raw, body, body_len);
@@ -1789,7 +1789,7 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
             if (ducknng_quack_payload_bind_columns(info, bind->raw, body_len,
                     &bind->quack_schema, &bind->row_count, &errmsg) != 0) {
                 destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode quack_batch_v1 body");
+                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode ducknng_quack_batch body");
                 if (errmsg) duckdb_free(errmsg);
                 return -1;
             }
@@ -2122,7 +2122,7 @@ static void ducknng_body_parse_scan(duckdb_function_info info, duckdb_data_chunk
         }
         if (ducknng_quack_payload_scan(output, bind->raw, (size_t)bind->raw_len,
                 &bind->quack_schema, &init->offset, &errmsg) != 0) {
-            duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode quack_batch_v1 body");
+            duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: failed to decode ducknng_quack_batch body");
             if (errmsg) duckdb_free(errmsg);
         }
         return;
@@ -2160,7 +2160,7 @@ static const ducknng_codec_static_row DUCKNNG_BUILTIN_CODECS[] = {
     {"tsv", "text/tab-separated-values, application/x-tsv, text/tsv", "dynamic table", "Parsed via direct C parser with tab delimiter; type inference (INT64, DOUBLE, VARCHAR) with nanoarrow array encoding. Separate ducknng_parse_tsv(body) uses DuckDB read_csv_auto(delim='\t') via tempfile."},
     {"parquet", "application/vnd.apache.parquet, application/parquet, application/x-parquet", "dynamic table", "Parsed via DuckDB read_parquet() through a temporary file. Separate ducknng_parse_parquet(body) provides the same path."},
     {"arrow_ipc", "application/vnd.apache.arrow.stream, application/vnd.apache.arrow.ipc, application/arrow", "dynamic table", "Decoded as Arrow IPC stream bytes with nanoarrow and mapped to DuckDB vectors."},
-    {"quack_batch_v1", "application/vnd.ducknng.quack-batch-v1", "dynamic table", "Decoded as one ducknng quack_batch_v1 batch. This is not the full upstream Quack application/duckdb message envelope."},
+    {"ducknng_quack_batch", "application/vnd.ducknng.quack-batch", "dynamic table", "Decoded as a standalone ducknng_quack_batch body. This is not the full upstream Quack application/duckdb message envelope."},
     {"ducknng_frame", "application/vnd.ducknng.frame", "decoded frame columns", "Decoded as one ducknng protocol frame, matching ducknng_decode_frame()."},
     {"ndjson", "application/x-ndjson, application/ndjson, application/x-jsonlines, application/jsonlines", "dynamic table", "Newline-delimited JSON lines wrapped into a JSON array and parsed in memory through DuckDB JSON functions."},
     {"form", "application/x-www-form-urlencoded", "name VARCHAR, value VARCHAR", "URL-decoded key/value pairs from a form body; one row per field."}

@@ -180,14 +180,20 @@ typedef struct ducknng_session_reply_view {
     const char *result_handle;
     int has_batch_index;
     uint64_t batch_index;
+    int has_protocol_version;
+    uint64_t protocol_version;
+    int has_row_schema_version;
+    uint64_t row_schema_version;
+    int has_fetch_batch_chunks;
+    uint64_t fetch_batch_chunks;
     const char *serialization_mode;
     const char *correlation_id;
 } ducknng_session_reply_view;
 
 static const char *ducknng_session_row_payload_format_name(int value) {
     switch (value) {
-    case DUCKNNG_PAYLOAD_QUACK_BATCH_V1:
-        return "quack_batch_v1";
+    case DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH:
+        return "ducknng_quack_batch";
     case DUCKNNG_PAYLOAD_ARROW_IPC_STREAM:
     default:
         return "arrow_ipc_stream";
@@ -197,8 +203,8 @@ static const char *ducknng_session_row_payload_format_name(int value) {
 static int ducknng_parse_row_payload_format(const char *value, int *out) {
     if (out) *out = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     if (!value || !value[0] || strcmp(value, "arrow_ipc_stream") == 0) return 0;
-    if (strcmp(value, "quack_batch_v1") == 0) {
-        if (out) *out = DUCKNNG_PAYLOAD_QUACK_BATCH_V1;
+    if (strcmp(value, "ducknng_quack_batch") == 0) {
+        if (out) *out = DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH;
         return 0;
     }
     return -1;
@@ -249,6 +255,21 @@ static char *ducknng_build_session_reply_json(const ducknng_session_reply_view *
     if (view->has_batch_index) {
         snprintf(numbuf, sizeof(numbuf), ",\"batch_index\":%llu",
             (unsigned long long)view->batch_index);
+        if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    }
+    if (view->has_protocol_version) {
+        snprintf(numbuf, sizeof(numbuf), ",\"ducknng_protocol_version\":%llu",
+            (unsigned long long)view->protocol_version);
+        if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    }
+    if (view->has_row_schema_version) {
+        snprintf(numbuf, sizeof(numbuf), ",\"row_schema_version\":%llu",
+            (unsigned long long)view->row_schema_version);
+        if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
+    }
+    if (view->has_fetch_batch_chunks) {
+        snprintf(numbuf, sizeof(numbuf), ",\"fetch_batch_chunks\":%llu",
+            (unsigned long long)view->fetch_batch_chunks);
         if (!ducknng_json_append_text(&buf, &len, &cap, numbuf)) goto oom;
     }
     if (view->serialization_mode) {
@@ -341,7 +362,7 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     char *errmsg = NULL;
     size_t len = 0;
     size_t cap = 0;
-    char numbuf[64];
+    char numbuf[160];
     (void)method;
     (void)svc;
     if (!reply) return -1;
@@ -386,14 +407,15 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     if (!ducknng_json_append_string(&response, &len, &cap, duckdb_version)) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap, ",\"server_platform\":")) goto oom;
     if (!ducknng_json_append_string(&response, &len, &cap, ducknng_server_platform_name())) goto oom;
-    snprintf(numbuf, sizeof(numbuf), ",\"protocol_version\":%u,\"selected_protocol_version\":%u",
-        (unsigned int)DUCKNNG_WIRE_VERSION, (unsigned int)DUCKNNG_WIRE_VERSION);
+    snprintf(numbuf, sizeof(numbuf), ",\"protocol_version\":%u,\"selected_protocol_version\":%u,\"ducknng_protocol_version\":1,\"row_schema_version\":1,\"default_fetch_batch_chunks\":%u",
+        (unsigned int)DUCKNNG_WIRE_VERSION, (unsigned int)DUCKNNG_WIRE_VERSION,
+        (unsigned int)DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS);
     if (!ducknng_json_append_text(&response, &len, &cap, numbuf)) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap, ",\"selected_serialization_mode\":")) goto oom;
     if (!ducknng_json_append_string(&response, &len, &cap,
             ducknng_session_row_payload_format_name(row_payload_format))) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap,
-            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"quack_batch_v1\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}}")) goto oom;
+            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true}}")) goto oom;
     if (correlation_id) {
         if (!ducknng_json_append_text(&response, &len, &cap, ",\"correlation_id\":")) goto oom;
         if (!ducknng_json_append_string(&response, &len, &cap, correlation_id)) goto oom;
@@ -428,6 +450,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     duckdb_pending_result pending = NULL;
     uint64_t session_id = 0;
     int row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
+    uint64_t fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     char *owner_token = NULL;
     char *result_handle = NULL;
     char *errmsg = NULL;
@@ -447,6 +470,12 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
             "ducknng: unsupported serialization_mode in query_open request");
         return -1;
+    }
+    if (open_req.batch_rows > 0) {
+        uint64_t vector_rows = (uint64_t)duckdb_vector_size();
+        fetch_batch_chunks = (open_req.batch_rows + vector_rows - 1) / vector_rows;
+        if (fetch_batch_chunks == 0) fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
+        if (fetch_batch_chunks > DUCKNNG_MAX_FETCH_BATCH_CHUNKS) fetch_batch_chunks = DUCKNNG_MAX_FETCH_BATCH_CHUNKS;
     }
     if (ducknng_service_acquire_session_connection(svc, &session_con, &session_pool_index, &errmsg) != 0) {
         ducknng_query_open_request_destroy(&open_req);
@@ -543,7 +572,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     {
         int add_rc = ducknng_service_add_session_streaming(svc, session_con, session_pool_index,
-            stmt, pending, req->caller_identity, row_payload_format,
+            stmt, pending, req->caller_identity, row_payload_format, fetch_batch_chunks,
             &session_id, &owner_token, &result_handle, &errmsg);
         if (add_rc != 0) {
             /* session was not created; release resources here */
@@ -568,6 +597,12 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         view.has_idle_timeout_ms = 1;
         view.idle_timeout_ms = svc->session_idle_ms;
         view.result_handle = result_handle;
+        view.has_protocol_version = 1;
+        view.protocol_version = 1;
+        view.has_row_schema_version = 1;
+        view.row_schema_version = 1;
+        view.has_fetch_batch_chunks = 1;
+        view.fetch_batch_chunks = fetch_batch_chunks;
         view.serialization_mode = ducknng_session_row_payload_format_name(row_payload_format);
         view.correlation_id = open_req.correlation_id;
         if (ducknng_session_state_reply(reply, "query_open", DUCKNNG_RPC_FLAG_SESSION_OPEN, &view) != 0) {
@@ -666,9 +701,11 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     }
     row_payload_format = session->row_payload_format;
     if (!session->result_open ||
-        (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
-            ? ducknng_result_next_chunk_to_quack_payload(session->result, &payload, &payload_len, &has_batch, &errmsg)
-            : ducknng_result_next_chunk_to_ipc(session->result, &payload, &payload_len, &has_batch, &errmsg)) != 0) {
+        (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
+            ? ducknng_result_next_chunks_to_quack_payload(session->result, session->fetch_batch_chunks,
+                !session->row_schema_sent, &payload, &payload_len, &has_batch, &errmsg)
+            : ducknng_result_next_chunks_to_ipc(session->result, session->fetch_batch_chunks,
+                &payload, &payload_len, &has_batch, &errmsg)) != 0) {
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
@@ -691,20 +728,21 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     }
     if (has_batch) {
         session->batch_no++;
+        session->row_schema_sent = 1;
         batch_index = session->batch_no;
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS |
-                (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+                (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
                     ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
                     : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM),
             payload, payload_len);
         return 0;
     }
     if (session->batch_no == 0) {
-        if ((row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+        if ((row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
                 ? ducknng_result_empty_quack_payload(session->result, &payload, &payload_len, &errmsg)
                 : ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg)) != 0) {
             ducknng_mutex_unlock(&session->mu);
@@ -723,7 +761,7 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         if (result_handle) duckdb_free(result_handle);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
             DUCKNNG_RPC_FLAG_RESULT_ROWS |
-                (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+                (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
                     ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
                     : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) |
                 DUCKNNG_RPC_FLAG_END_OF_STREAM,
@@ -1157,7 +1195,7 @@ const ducknng_method_descriptor ducknng_method_query_open = {
     0,
     1,
     "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true}]}",
-    "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"ducknng_protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"row_schema_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"fetch_batch_chunks\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
     ducknng_method_query_open_handler
 };
 
@@ -1184,7 +1222,7 @@ const ducknng_method_descriptor ducknng_method_fetch = {
     0,
     1,
     "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
-    "{\"mode\":\"rows_or_control\",\"rows\":{\"default\":\"arrow_ipc_stream\",\"supported\":[\"arrow_ipc_stream\",\"quack_batch_v1\"]},\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"quack_batch_v1\":{\"layout\":\"quack_prepare_response_body_subset\",\"fields\":[\"result_types\",\"result_names\",\"results\"]}}}",
+    "{\"mode\":\"rows_or_control\",\"rows\":{\"default\":\"arrow_ipc_stream\",\"supported\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"max_chunks_field\":\"fetch_batch_chunks\"},\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"ducknng_quack_batch\":{\"layout\":\"ducknng_quack_batch\",\"first_payload_fields\":[\"result_types\",\"result_names\",\"results\"],\"later_payload_fields\":[\"results\"]}}}",
     ducknng_method_fetch_handler
 };
 

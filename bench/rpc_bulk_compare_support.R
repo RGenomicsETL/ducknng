@@ -204,6 +204,190 @@ ducknng_bench_collect_rpc_timings <- function(system_name, protocol_name, transp
   do.call(rbind, results)
 }
 
+ducknng_bench_rpc_source_sql <- function(url, remote_sql, serialization_mode = "arrow_ipc_stream") {
+  if (identical(serialization_mode, "arrow_ipc_stream")) {
+    sprintf(
+      "ducknng_query_rpc(%s, %s, 0::UBIGINT)",
+      ducknng_bench_sql_quote(url),
+      ducknng_bench_sql_quote(remote_sql)
+    )
+  } else {
+    sprintf(
+      "ducknng_query_rpc_mode(%s, %s, 0::UBIGINT, %s)",
+      ducknng_bench_sql_quote(url),
+      ducknng_bench_sql_quote(remote_sql),
+      ducknng_bench_sql_quote(serialization_mode)
+    )
+  }
+}
+
+ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_mode,
+    rows, iterations, ext_path) {
+  con <- ducknng_bench_open_ducknng_db(":memory:")
+  on.exit(ducknng_bench_safe_disconnect(con), add = TRUE)
+  ducknng_bench_set_single_thread(con)
+  ducknng_bench_load_ducknng(con, ext_path)
+  latencies <- numeric(iterations)
+  rows_read <- 0
+  writes <- 0
+  for (iter in seq_len(iterations)) {
+    if (identical(kind, "reader")) {
+      source_sql <- ducknng_bench_rpc_source_sql(
+        url,
+        sprintf("SELECT l_orderkey FROM lineitem LIMIT %d", rows),
+        serialization_mode
+      )
+      sql <- sprintf("SELECT count(*) AS n FROM %s", source_sql)
+      elapsed <- system.time({ result <- DBI::dbGetQuery(con, sql) })[["elapsed"]]
+      stopifnot(identical(as.numeric(result$n[[1]]), as.numeric(rows)))
+      rows_read <- rows_read + rows
+      latencies[[iter]] <- elapsed
+    } else {
+      sql <- sprintf(
+        "INSERT INTO ducknng_bench_writes VALUES (%d, %d, %s)",
+        as.integer(worker_id),
+        as.integer(iter),
+        ducknng_bench_sql_quote(serialization_mode)
+      )
+      elapsed <- system.time({
+        DBI::dbGetQuery(con, sprintf(
+          "SELECT * FROM ducknng_run_rpc(%s, %s, 0::UBIGINT)",
+          ducknng_bench_sql_quote(url),
+          ducknng_bench_sql_quote(sql)
+        ))
+      })[["elapsed"]]
+      writes <- writes + 1L
+      latencies[[iter]] <- elapsed
+    }
+  }
+  data.frame(
+    kind = kind,
+    worker_id = worker_id,
+    operations = iterations,
+    rows_read = rows_read,
+    write_ops = writes,
+    total_worker_seconds = sum(latencies),
+    median_latency_seconds = stats::median(latencies),
+    p95_latency_seconds = as.numeric(stats::quantile(latencies, 0.95, names = FALSE, type = 7)),
+    stringsAsFactors = FALSE
+  )
+}
+
+ducknng_bench_run_concurrent_scenario <- function(url, transport, serialization_mode,
+    ext_path, rows, iterations, readers, writers) {
+  worker_plan <- rbind(
+    if (readers > 0L) data.frame(kind = "reader", worker_id = seq_len(readers)) else NULL,
+    if (writers > 0L) data.frame(kind = "writer", worker_id = seq_len(writers)) else NULL
+  )
+  if (nrow(worker_plan) == 0L) return(NULL)
+  scenario <- if (readers > 0L && writers > 0L) "mixed_read_write" else if (readers > 0L) "readers" else "writers"
+  message(sprintf(
+    "concurrent benchmark transport=%s serialization=%s scenario=%s readers=%d writers=%d rows=%d iterations=%d",
+    transport, serialization_mode, scenario, readers, writers, rows, iterations
+  ))
+  started <- proc.time()[["elapsed"]]
+  worker_fun <- function(i) {
+    ducknng_bench_concurrent_worker(
+      kind = worker_plan$kind[[i]],
+      worker_id = worker_plan$worker_id[[i]],
+      url = url,
+      serialization_mode = serialization_mode,
+      rows = rows,
+      iterations = iterations,
+      ext_path = ext_path
+    )
+  }
+  worker_results <- if (nrow(worker_plan) > 1L) {
+    cl <- parallel::makeCluster(nrow(worker_plan))
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterEvalQ(cl, suppressWarnings(suppressPackageStartupMessages({
+      library(DBI)
+      library(duckdb)
+    })))
+    parallel::clusterExport(
+      cl,
+      varlist = c("worker_plan", "url", "serialization_mode", "rows", "iterations", "ext_path"),
+      envir = environment()
+    )
+    parallel::clusterExport(
+      cl,
+      varlist = c(
+        "ducknng_bench_concurrent_worker", "ducknng_bench_open_ducknng_db",
+        "ducknng_bench_open_duckdb", "ducknng_bench_safe_disconnect",
+        "ducknng_bench_set_single_thread", "ducknng_bench_load_ducknng",
+        "ducknng_bench_rpc_source_sql", "ducknng_bench_sql_quote"
+      ),
+      envir = .GlobalEnv
+    )
+    parallel::parLapply(cl, seq_len(nrow(worker_plan)), function(i) {
+      ducknng_bench_concurrent_worker(
+        kind = worker_plan$kind[[i]],
+        worker_id = worker_plan$worker_id[[i]],
+        url = url,
+        serialization_mode = serialization_mode,
+        rows = rows,
+        iterations = iterations,
+        ext_path = ext_path
+      )
+    })
+  } else {
+    lapply(seq_len(nrow(worker_plan)), worker_fun)
+  }
+  elapsed <- proc.time()[["elapsed"]] - started
+  worker_df <- do.call(rbind, worker_results)
+  total_rows <- sum(worker_df$rows_read)
+  total_writes <- sum(worker_df$write_ops)
+  data.frame(
+    benchmark = "concurrent_read_write",
+    system = "ducknng",
+    protocol = "rpc",
+    transport = transport,
+    serialization_mode = serialization_mode,
+    scenario = scenario,
+    readers = readers,
+    writers = writers,
+    rows_per_reader_operation = rows,
+    iterations_per_worker = iterations,
+    wall_seconds = round(elapsed, 3),
+    rows_read = total_rows,
+    write_ops = total_writes,
+    rows_per_second = round(if (elapsed > 0) total_rows / elapsed else NA_real_, 1),
+    write_ops_per_second = round(if (elapsed > 0) total_writes / elapsed else NA_real_, 1),
+    median_latency_seconds = round(stats::median(worker_df$median_latency_seconds), 3),
+    p95_latency_seconds = round(max(worker_df$p95_latency_seconds), 3),
+    stringsAsFactors = FALSE
+  )
+}
+
+ducknng_bench_run_concurrent_ducknng_transport <- function(transport, url, ext_path,
+    rows = 100000L, iterations = 2L, clients = 2L,
+    serialization_modes = c("arrow_ipc_stream", "ducknng_quack_batch")) {
+  stopifnot(rows > 0L, iterations > 0L, clients > 0L)
+  out <- list()
+  idx <- 1L
+  for (mode in serialization_modes) {
+    scenarios <- list(
+      list(readers = clients, writers = 0L),
+      list(readers = 0L, writers = clients),
+      list(readers = clients, writers = clients)
+    )
+    for (scenario in scenarios) {
+      out[[idx]] <- ducknng_bench_run_concurrent_scenario(
+        url = url,
+        transport = transport,
+        serialization_mode = mode,
+        ext_path = ext_path,
+        rows = rows,
+        iterations = iterations,
+        readers = scenario$readers,
+        writers = scenario$writers
+      )
+      idx <- idx + 1L
+    }
+  }
+  do.call(rbind, out)
+}
+
 ducknng_bench_build_rpc_url_template <- function(transport) {
   switch(transport,
     http = "http://127.0.0.1:0/_ducknng",
@@ -215,7 +399,8 @@ ducknng_bench_build_rpc_url_template <- function(transport) {
 }
 
 ducknng_bench_run_ducknng_rpc_transport <- function(transport, rows, repetitions, baselines,
-    db_path, ext_path, dataset_name) {
+    db_path, ext_path, dataset_name, concurrent_rows = 0L,
+    concurrent_iterations = 0L, concurrent_clients = 0L) {
   service_name <- paste0("bench_bulk_", transport)
   listen_template <- ducknng_bench_build_rpc_url_template(transport)
   server <- ducknng_bench_open_ducknng_db(db_path)
@@ -234,12 +419,14 @@ ducknng_bench_run_ducknng_rpc_transport <- function(transport, rows, repetitions
   }, add = TRUE)
   ducknng_bench_set_single_thread(server)
   ducknng_bench_load_ducknng(server, ext_path)
+  service_contexts <- if (identical(transport, "http")) 1L else 8L
   stopifnot(isTRUE(DBI::dbGetQuery(
     server,
     sprintf(
-      "SELECT ducknng_start_server(%s, %s, 1, 134217728, 300000, 0::UBIGINT) AS ok",
+      "SELECT ducknng_start_server(%s, %s, %d, 134217728, 300000, 0::UBIGINT) AS ok",
       ducknng_bench_sql_quote(service_name),
-      ducknng_bench_sql_quote(listen_template)
+      ducknng_bench_sql_quote(listen_template),
+      service_contexts
     )
   )$ok[[1]]))
   actual_url <- DBI::dbGetQuery(
@@ -251,7 +438,7 @@ ducknng_bench_run_ducknng_rpc_transport <- function(transport, rows, repetitions
   client <- ducknng_bench_open_ducknng_db(":memory:")
   ducknng_bench_set_single_thread(client)
   ducknng_bench_load_ducknng(client, ext_path)
-  rbind(
+  rpc_results <- rbind(
     ducknng_bench_collect_rpc_timings(
       system_name = "ducknng",
       protocol_name = "rpc",
@@ -270,13 +457,27 @@ ducknng_bench_run_ducknng_rpc_transport <- function(transport, rows, repetitions
       transport_name = transport,
       dataset_name = dataset_name,
       client_con = client,
-      sql_builder = function(n) ducknng_bench_ducknng_query_sql(actual_url, n, "quack_batch_v1"),
+      sql_builder = function(n) ducknng_bench_ducknng_query_sql(actual_url, n, "ducknng_quack_batch"),
       rows = rows,
       repetitions = repetitions,
       baselines = baselines,
-      serialization_mode = "quack_batch_v1"
+      serialization_mode = "ducknng_quack_batch"
     )
   )
+  concurrent_results <- NULL
+  if (concurrent_rows > 0L && concurrent_iterations > 0L && concurrent_clients > 0L) {
+    DBI::dbExecute(server, "DROP TABLE IF EXISTS ducknng_bench_writes")
+    DBI::dbExecute(server, "CREATE TABLE ducknng_bench_writes(worker INTEGER, iter INTEGER, mode VARCHAR)")
+    concurrent_results <- ducknng_bench_run_concurrent_ducknng_transport(
+      transport = transport,
+      url = actual_url,
+      ext_path = ext_path,
+      rows = concurrent_rows,
+      iterations = concurrent_iterations,
+      clients = concurrent_clients
+    )
+  }
+  list(rpc = rpc_results, concurrent = concurrent_results)
 }
 
 ducknng_bench_run_quack_http <- function(rows, repetitions, baselines,
@@ -373,7 +574,10 @@ ducknng_bench_run_bulk_compare <- function(
     db_path = file.path(tempdir(), "ducknng_quack_tpch.duckdb"),
     quack_uri = Sys.getenv("DUCKNNG_QUACK_URI", unset = "quack:localhost:19494"),
     quack_token = Sys.getenv("DUCKNNG_QUACK_TOKEN", unset = "asdf"),
-    ducknng_transports = c("http", "tcp", "ipc", "ws")) {
+    ducknng_transports = c("http", "tcp", "ipc", "ws"),
+    concurrent_rows = min(rows),
+    concurrent_iterations = 2L,
+    concurrent_clients = 2L) {
   stopifnot(repetitions > 0L, length(rows) > 0L, all(rows > 0L))
   ext_path <- ducknng_bench_find_ext_path()
   message(sprintf("using ducknng extension: %s", ext_path))
@@ -391,7 +595,7 @@ ducknng_bench_run_bulk_compare <- function(
   ducknng_bench_set_single_thread(baseline_con)
   baselines <- setNames(lapply(rows, function(n) ducknng_bench_local_baseline(baseline_con, n)), as.character(rows))
 
-  ducknng_rpc_results <- do.call(rbind, lapply(ducknng_transports, function(transport) {
+  ducknng_transport_results <- lapply(ducknng_transports, function(transport) {
     message(sprintf("starting ducknng RPC benchmark transport=%s", transport))
     ducknng_bench_run_ducknng_rpc_transport(
       transport = transport,
@@ -400,9 +604,15 @@ ducknng_bench_run_bulk_compare <- function(
       baselines = baselines,
       db_path = db_path,
       ext_path = ext_path,
-      dataset_name = dataset_name
+      dataset_name = dataset_name,
+      concurrent_rows = concurrent_rows,
+      concurrent_iterations = concurrent_iterations,
+      concurrent_clients = concurrent_clients
     )
-  }))
+  })
+  ducknng_rpc_results <- do.call(rbind, lapply(ducknng_transport_results, `[[`, "rpc"))
+  concurrent_pieces <- Filter(Negate(is.null), lapply(ducknng_transport_results, `[[`, "concurrent"))
+  concurrent_results <- if (length(concurrent_pieces)) do.call(rbind, concurrent_pieces) else data.frame()
 
   message("starting Quack public HTTP benchmark")
   quack_results <- ducknng_bench_run_quack_http(
@@ -421,7 +631,7 @@ ducknng_bench_run_bulk_compare <- function(
   ]
   names(http_arrow_rows)[2] <- "ducknng_http_arrow_median_seconds"
   http_quack_rows <- ducknng_rpc_results[
-    ducknng_rpc_results$transport == "http" & ducknng_rpc_results$serialization_mode == "quack_batch_v1",
+    ducknng_rpc_results$transport == "http" & ducknng_rpc_results$serialization_mode == "ducknng_quack_batch",
     c("rows", "median_seconds")
   ]
   names(http_quack_rows)[2] <- "ducknng_http_quack_batch_median_seconds"
@@ -445,7 +655,10 @@ ducknng_bench_run_bulk_compare <- function(
       lineitem_rows_available = total_lineitem_rows,
       repetitions = repetitions,
       ducknng_transports = paste(ducknng_transports, collapse = ","),
-      ducknng_serialization_modes = "arrow_ipc_stream,quack_batch_v1",
+      ducknng_serialization_modes = "arrow_ipc_stream,ducknng_quack_batch",
+      concurrent_rows = concurrent_rows,
+      concurrent_iterations = concurrent_iterations,
+      concurrent_clients = concurrent_clients,
       quack_uri = quack_uri,
       stringsAsFactors = FALSE
     )
@@ -454,6 +667,7 @@ ducknng_bench_run_bulk_compare <- function(
   list(
     metadata = metadata,
     rpc_results = rbind(ducknng_rpc_results, quack_results),
-    http_vs_quack = http_vs_quack
+    http_vs_quack = http_vs_quack,
+    concurrent_results = concurrent_results
   )
 }

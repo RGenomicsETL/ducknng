@@ -482,28 +482,24 @@ done:
 }
 
 
-int ducknng_result_next_chunk_to_ipc(duckdb_result result,
+int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
     struct ArrowSchema schema;
-    struct ArrowArray arr;
+    struct ArrowArray *arrays = NULL;
+    int64_t nchunks = 0;
+    int64_t cap = 0;
     duckdb_data_chunk chunk = NULL;
     duckdb_arrow_options opts = NULL;
     duckdb_error_data err = NULL;
     int rc = -1;
 
     memset(&schema, 0, sizeof(schema));
-    memset(&arr, 0, sizeof(arr));
     if (has_chunk) *has_chunk = 0;
+    if (max_chunks == 0) max_chunks = 1;
 
     if (!out_bytes || !out_len) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid next chunk output pointers");
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid next chunks output pointers");
         return -1;
-    }
-
-    chunk = duckdb_fetch_chunk(result);
-    if (!chunk) {
-        if (has_chunk) *has_chunk = 0;
-        return 0;
     }
 
     opts = duckdb_result_get_arrow_options(&result);
@@ -515,25 +511,49 @@ int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     if (ducknng_result_to_arrow_schema(&result, opts, &schema, errmsg) != 0)
         goto cleanup;
 
-    err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
-    duckdb_destroy_data_chunk(&chunk);
-    chunk = NULL;
+    while ((uint64_t)nchunks < max_chunks) {
+        struct ArrowArray arr;
+        memset(&arr, 0, sizeof(arr));
+        chunk = duckdb_fetch_chunk(result);
+        if (!chunk) break;
 
-    if (duckdb_error_data_has_error(err)) {
-        if (errmsg) *errmsg = ducknng_strdup(duckdb_error_data_message(err));
+        err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
+        duckdb_destroy_data_chunk(&chunk);
+        chunk = NULL;
+
+        if (duckdb_error_data_has_error(err)) {
+            if (errmsg) *errmsg = ducknng_strdup(duckdb_error_data_message(err));
+            if (arr.release) ArrowArrayRelease(&arr);
+            goto cleanup;
+        }
+        duckdb_destroy_error_data(&err);
+        err = NULL;
+
+        if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0) {
+            if (arr.release) ArrowArrayRelease(&arr);
+            goto cleanup;
+        }
+        if (nchunks >= cap) {
+            int64_t newcap = cap == 0 ? 4 : cap * 2;
+            struct ArrowArray *tmp = (struct ArrowArray *)realloc(arrays,
+                (size_t)newcap * sizeof(*arrays));
+            if (!tmp) {
+                if (arr.release) ArrowArrayRelease(&arr);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory collecting Arrow chunks");
+                goto cleanup;
+            }
+            arrays = tmp;
+            cap = newcap;
+        }
+        arrays[nchunks++] = arr;
+    }
+    if (nchunks == 0) {
+        rc = 0;
         goto cleanup;
     }
-    duckdb_destroy_error_data(&err);
-    err = NULL;
-
-    if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0)
+    if (ducknng_ipc_arrays_to_bytes(&schema, arrays, nchunks, out_bytes, out_len, errmsg) != 0)
         goto cleanup;
-
-    /* ducknng_ipc_arrays_to_bytes takes ownership on success. */
-    if (ducknng_ipc_arrays_to_bytes(&schema, &arr, 1, out_bytes, out_len, errmsg) != 0) {
-        /* arr still needs releasing — schema was cleared inside, arr was cleared inside on success only */
-        goto cleanup;
-    }
+    arrays = NULL;
     if (has_chunk) *has_chunk = 1;
     return 0;
 
@@ -541,9 +561,18 @@ cleanup:
     if (chunk) duckdb_destroy_data_chunk(&chunk);
     if (err) duckdb_destroy_error_data(&err);
     if (opts) duckdb_destroy_arrow_options(&opts);
-    if (arr.release) ArrowArrayRelease(&arr);
+    if (arrays) {
+        int64_t i;
+        for (i = 0; i < nchunks; i++) if (arrays[i].release) ArrowArrayRelease(&arrays[i]);
+        free(arrays);
+    }
     if (schema.release) ArrowSchemaRelease(&schema);
     return rc;
+}
+
+int ducknng_result_next_chunk_to_ipc(duckdb_result result,
+    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
+    return ducknng_result_next_chunks_to_ipc(result, 1, out_bytes, out_len, has_chunk, errmsg);
 }
 
 /* -------------------------------------------------------------------------

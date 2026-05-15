@@ -186,6 +186,89 @@ cleanup:
     return rc;
 }
 
+void ducknng_arrow_batches_reset(ducknng_arrow_batches *batches) {
+    idx_t i;
+    if (!batches) return;
+    if (batches->arrays) {
+        for (i = 0; i < batches->array_count; i++) {
+            if (batches->arrays[i].release) ArrowArrayRelease(&batches->arrays[i]);
+        }
+        free(batches->arrays);
+    }
+    if (batches->schema.release) ArrowSchemaRelease(&batches->schema);
+    memset(batches, 0, sizeof(*batches));
+}
+
+int ducknng_decode_ipc_batches_payload(const uint8_t *payload, size_t payload_len,
+    ducknng_arrow_batches *out, char **errmsg) {
+    struct ArrowBuffer input_buf;
+    struct ArrowIpcInputStream input_stream;
+    struct ArrowArrayStream stream;
+    struct ArrowError error;
+    idx_t cap = 0;
+    int rc = -1;
+    memset(&input_buf, 0, sizeof(input_buf));
+    memset(&input_stream, 0, sizeof(input_stream));
+    memset(&stream, 0, sizeof(stream));
+    memset(&error, 0, sizeof(error));
+    if (!payload || payload_len == 0 || !out) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing Arrow batches payload");
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    ArrowBufferInit(&input_buf);
+    if (ArrowBufferAppend(&input_buf, payload, (int64_t)payload_len) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to copy Arrow batches payload");
+        goto cleanup;
+    }
+    if (ArrowIpcInputStreamInitBuffer(&input_stream, &input_buf) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize Arrow IPC input stream");
+        input_buf.data = NULL;
+        goto cleanup;
+    }
+    memset(&input_buf, 0, sizeof(input_buf));
+    if (ArrowIpcArrayStreamReaderInit(&stream, &input_stream, NULL) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize Arrow IPC reader");
+        memset(&input_stream, 0, sizeof(input_stream));
+        goto cleanup;
+    }
+    memset(&input_stream, 0, sizeof(input_stream));
+    if (ArrowArrayStreamGetSchema(&stream, &out->schema, &error) != NANOARROW_OK) {
+        if (errmsg) *errmsg = ducknng_strdup(error.message);
+        goto cleanup;
+    }
+    for (;;) {
+        struct ArrowArray arr;
+        memset(&arr, 0, sizeof(arr));
+        if (ArrowArrayStreamGetNext(&stream, &arr, &error) != NANOARROW_OK) {
+            if (errmsg) *errmsg = ducknng_strdup(error.message);
+            goto cleanup;
+        }
+        if (!arr.release) break;
+        if (out->array_count >= cap) {
+            idx_t newcap = cap == 0 ? 4 : cap * 2;
+            struct ArrowArray *next = (struct ArrowArray *)realloc(out->arrays,
+                (size_t)newcap * sizeof(*out->arrays));
+            if (!next) {
+                ArrowArrayRelease(&arr);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory collecting Arrow IPC batches");
+                goto cleanup;
+            }
+            out->arrays = next;
+            cap = newcap;
+        }
+        out->row_count += (idx_t)arr.length;
+        out->arrays[out->array_count++] = arr;
+    }
+    rc = 0;
+cleanup:
+    if (rc != 0) ducknng_arrow_batches_reset(out);
+    if (stream.release) ArrowArrayStreamRelease(&stream);
+    if (input_stream.release) input_stream.release(&input_stream);
+    if (input_buf.data) ArrowBufferReset(&input_buf);
+    return rc;
+}
+
 int ducknng_decode_ipc_table_payload(const uint8_t *payload, size_t payload_len,
     struct ArrowSchema *schema, struct ArrowArray *array, char **errmsg) {
     struct ArrowBuffer input_buf;

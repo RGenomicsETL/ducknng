@@ -608,6 +608,8 @@ benchmark</h1>
 details</a></li>
 <li><a href="#rpc-bulk-transfer-results">RPC bulk transfer
 results</a></li>
+<li><a href="#concurrent-readerwriter-results">Concurrent reader/writer
+results</a></li>
 <li><a href="#http-ducknng-vs-quack-ratio">HTTP ducknng vs Quack
 ratio</a></li>
 <li><a href="#notes">Notes</a></li>
@@ -616,13 +618,19 @@ ratio</a></li>
 default workload uses
 <code>DUCKNNG_BULK_ROWS=100000,1000000,10000000</code> and
 <code>DUCKNNG_BULK_REPETITIONS=5</code>; set those environment variables
-when you want a smoke render instead of the full benchmark.</p>
-<p>It measures two things:</p>
+when you want a smoke render instead of the full benchmark. The
+concurrent slice uses <code>DUCKNNG_CONCURRENT_ROWS</code>,
+<code>DUCKNNG_CONCURRENT_ITERATIONS</code>, and
+<code>DUCKNNG_CONCURRENT_CLIENTS</code> with defaults derived from the
+row-transfer workload.</p>
+<p>It measures three things:</p>
 <ol style="list-style-type: decimal">
 <li><code>ducknng</code> bulk row transfer over its RPC/session surface
 on <code>http</code>, <code>tcp</code>, <code>ipc</code>, and
 <code>ws</code>, in both <code>arrow_ipc_stream</code> and
-<code>quack_batch_v1</code> modes.</li>
+<code>ducknng_quack_batch</code> modes.</li>
+<li>concurrent ducknng reader, writer, and mixed reader/writer RPC
+workloads across those transports and serializers.</li>
 <li><code>quack</code> bulk row transfer over its published
 client/server surface.</li>
 </ol>
@@ -640,7 +648,7 @@ transport selection is part of its SQL-facing contract.</p>
 <tbody>
 <tr class="odd">
 <td align="left">generated_at</td>
-<td align="left">2026-05-15 19:54:29 UTC</td>
+<td align="left">2026-05-15 21:28:17 UTC</td>
 </tr>
 <tr class="even">
 <td align="left">hostname</td>
@@ -688,7 +696,7 @@ transport selection is part of its SQL-facing contract.</p>
 </tr>
 <tr class="odd">
 <td align="left">ducknng_git_commit</td>
-<td align="left">d403851</td>
+<td align="left">e275d6c</td>
 </tr>
 <tr class="even">
 <td align="left">quack_install_source</td>
@@ -696,15 +704,15 @@ transport selection is part of its SQL-facing contract.</p>
 </tr>
 <tr class="odd">
 <td align="left">dataset</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 </tr>
 <tr class="even">
 <td align="left">lineitem_rows_available</td>
-<td align="left">6001215</td>
+<td align="left">11997996</td>
 </tr>
 <tr class="odd">
 <td align="left">repetitions</td>
-<td align="left">1</td>
+<td align="left">5</td>
 </tr>
 <tr class="even">
 <td align="left">ducknng_transports</td>
@@ -712,9 +720,21 @@ transport selection is part of its SQL-facing contract.</p>
 </tr>
 <tr class="odd">
 <td align="left">ducknng_serialization_modes</td>
-<td align="left">arrow_ipc_stream,quack_batch_v1</td>
+<td align="left">arrow_ipc_stream,ducknng_quack_batch</td>
 </tr>
 <tr class="even">
+<td align="left">concurrent_rows</td>
+<td align="left">100000</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_iterations</td>
+<td align="left">2</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_clients</td>
+<td align="left">2</td>
+</tr>
+<tr class="odd">
 <td align="left">quack_uri</td>
 <td align="left">quack:localhost:19494</td>
 </tr>
@@ -744,129 +764,871 @@ checksum.</p>
 <tbody>
 <tr class="odd">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">http</td>
 <td align="left">arrow_ipc_stream</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="left">0.008</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.102</td>
+<td align="right">0.089</td>
+<td align="right">0.124</td>
+<td align="left">0.106,0.124,0.089,0.089,0.102</td>
 </tr>
 <tr class="even">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">http</td>
-<td align="left">quack_batch_v1</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.010</td>
-<td align="right">0.010</td>
-<td align="right">0.010</td>
-<td align="left">0.010</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.928</td>
+<td align="right">0.883</td>
+<td align="right">0.970</td>
+<td align="left">0.923,0.928,0.883,0.946,0.970</td>
 </tr>
 <tr class="odd">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">6.654</td>
+<td align="right">6.337</td>
+<td align="right">7.162</td>
+<td align="left">7.016,6.337,6.482,7.162,6.654</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.083</td>
+<td align="right">0.067</td>
+<td align="right">0.088</td>
+<td align="left">0.067,0.083,0.084,0.082,0.088</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.631</td>
+<td align="right">0.624</td>
+<td align="right">0.688</td>
+<td align="left">0.653,0.688,0.624,0.628,0.631</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">5.380</td>
+<td align="right">4.921</td>
+<td align="right">5.623</td>
+<td align="left">5.380,5.623,5.461,4.933,4.921</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">quack</td>
 <td align="left">quack_query</td>
 <td align="left">http</td>
 <td align="left">application/duckdb</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.011</td>
-<td align="right">0.011</td>
-<td align="right">0.011</td>
-<td align="left">0.011</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.095</td>
+<td align="right">0.090</td>
+<td align="right">0.104</td>
+<td align="left">0.095,0.104,0.097,0.093,0.090</td>
 </tr>
 <tr class="even">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">quack</td>
+<td align="left">quack_query</td>
+<td align="left">http</td>
+<td align="left">application/duckdb</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.732</td>
+<td align="right">0.655</td>
+<td align="right">0.907</td>
+<td align="left">0.907,0.762,0.659,0.655,0.732</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">quack</td>
+<td align="left">quack_query</td>
+<td align="left">http</td>
+<td align="left">application/duckdb</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">4.189</td>
+<td align="right">4.120</td>
+<td align="right">4.235</td>
+<td align="left">4.235,4.181,4.189,4.120,4.198</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">ipc</td>
 <td align="left">arrow_ipc_stream</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="left">0.007</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.083</td>
+<td align="right">0.082</td>
+<td align="right">0.092</td>
+<td align="left">0.083,0.085,0.082,0.092,0.083</td>
 </tr>
 <tr class="odd">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">ipc</td>
-<td align="left">quack_batch_v1</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="left">0.007</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.783</td>
+<td align="right">0.759</td>
+<td align="right">0.950</td>
+<td align="left">0.950,0.813,0.759,0.776,0.783</td>
 </tr>
 <tr class="even">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">5.894</td>
+<td align="right">5.891</td>
+<td align="right">6.127</td>
+<td align="left">5.894,5.891,5.911,6.127,5.893</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.068</td>
+<td align="right">0.066</td>
+<td align="right">0.081</td>
+<td align="left">0.068,0.081,0.068,0.069,0.066</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.610</td>
+<td align="right">0.582</td>
+<td align="right">0.691</td>
+<td align="left">0.660,0.610,0.691,0.582,0.609</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">5.074</td>
+<td align="right">4.497</td>
+<td align="right">5.147</td>
+<td align="left">5.147,5.074,5.098,4.691,4.497</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">tcp</td>
 <td align="left">arrow_ipc_stream</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="left">0.008</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.081</td>
+<td align="right">0.076</td>
+<td align="right">0.105</td>
+<td align="left">0.079,0.081,0.105,0.089,0.076</td>
 </tr>
 <tr class="odd">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">tcp</td>
-<td align="left">quack_batch_v1</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="right">0.007</td>
-<td align="left">0.007</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.721</td>
+<td align="right">0.703</td>
+<td align="right">0.775</td>
+<td align="left">0.743,0.711,0.721,0.775,0.703</td>
 </tr>
 <tr class="even">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">5.442</td>
+<td align="right">5.226</td>
+<td align="right">6.018</td>
+<td align="left">5.442,5.378,6.018,5.496,5.226</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.065</td>
+<td align="right">0.064</td>
+<td align="right">0.069</td>
+<td align="left">0.069,0.065,0.065,0.066,0.064</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.563</td>
+<td align="right">0.562</td>
+<td align="right">0.565</td>
+<td align="left">0.565,0.563,0.562,0.562,0.565</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">4.317</td>
+<td align="right">4.145</td>
+<td align="right">5.087</td>
+<td align="left">4.571,4.259,5.087,4.145,4.317</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">ws</td>
 <td align="left">arrow_ipc_stream</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.009</td>
-<td align="right">0.009</td>
-<td align="right">0.009</td>
-<td align="left">0.009</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.092</td>
+<td align="right">0.084</td>
+<td align="right">0.111</td>
+<td align="left">0.109,0.111,0.085,0.084,0.092</td>
 </tr>
 <tr class="odd">
 <td align="left">bulk_transfer_lineitem_limit</td>
-<td align="left">tpch_sf1.lineitem</td>
+<td align="left">tpch_sf2.lineitem</td>
 <td align="left">ducknng</td>
 <td align="left">rpc</td>
 <td align="left">ws</td>
-<td align="left">quack_batch_v1</td>
-<td align="right">1000</td>
-<td align="right">1</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="right">0.008</td>
-<td align="left">0.008</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.827</td>
+<td align="right">0.780</td>
+<td align="right">0.870</td>
+<td align="left">0.870,0.856,0.780,0.825,0.827</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">6.431</td>
+<td align="right">6.267</td>
+<td align="right">6.649</td>
+<td align="left">6.649,6.507,6.424,6.267,6.431</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">100000</td>
+<td align="right">5</td>
+<td align="right">0.075</td>
+<td align="right">0.071</td>
+<td align="right">0.085</td>
+<td align="left">0.075,0.071,0.075,0.085,0.077</td>
+</tr>
+<tr class="even">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">1000000</td>
+<td align="right">5</td>
+<td align="right">0.661</td>
+<td align="right">0.630</td>
+<td align="right">0.708</td>
+<td align="left">0.708,0.705,0.630,0.648,0.661</td>
+</tr>
+<tr class="odd">
+<td align="left">bulk_transfer_lineitem_limit</td>
+<td align="left">tpch_sf2.lineitem</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="right">10000000</td>
+<td align="right">5</td>
+<td align="right">4.855</td>
+<td align="right">4.561</td>
+<td align="right">5.135</td>
+<td align="left">4.561,4.640,4.887,5.135,4.855</td>
+</tr>
+</tbody>
+</table>
+<h2 id="concurrent-readerwriter-results">Concurrent reader/writer
+results</h2>
+<p>These runs open multiple client connections against the same ducknng
+service. Reader workers fetch row batches through
+<code>ducknng_query_rpc(...)</code> /
+<code>ducknng_query_rpc_mode(...)</code>; writer workers issue
+<code>INSERT</code> statements through
+<code>ducknng_run_rpc(...)</code>. The mixed scenario runs the
+configured number of readers and writers at the same time.</p>
+<table>
+<thead>
+<tr class="header">
+<th align="left">benchmark</th>
+<th align="left">system</th>
+<th align="left">protocol</th>
+<th align="left">transport</th>
+<th align="left">serialization_mode</th>
+<th align="left">scenario</th>
+<th align="right">readers</th>
+<th align="right">writers</th>
+<th align="right">rows_per_reader_operation</th>
+<th align="right">iterations_per_worker</th>
+<th align="right">wall_seconds</th>
+<th align="right">rows_read</th>
+<th align="right">write_ops</th>
+<th align="right">rows_per_second</th>
+<th align="right">write_ops_per_second</th>
+<th align="right">median_latency_seconds</th>
+<th align="right">p95_latency_seconds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.645</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">620155.0</td>
+<td align="right">6.2</td>
+<td align="right">0.018</td>
+<td align="right">0.028</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.557</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">718132.9</td>
+<td align="right">0.0</td>
+<td align="right">0.024</td>
+<td align="right">0.026</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.527</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.6</td>
+<td align="right">0.002</td>
+<td align="right">0.002</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.640</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">625000.0</td>
+<td align="right">6.2</td>
+<td align="right">0.012</td>
+<td align="right">0.026</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.582</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">687285.2</td>
+<td align="right">0.0</td>
+<td align="right">0.022</td>
+<td align="right">0.024</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">http</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.542</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.4</td>
+<td align="right">0.002</td>
+<td align="right">0.002</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.635</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">629921.3</td>
+<td align="right">6.3</td>
+<td align="right">0.014</td>
+<td align="right">0.027</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.584</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">684931.5</td>
+<td align="right">0.0</td>
+<td align="right">0.023</td>
+<td align="right">0.025</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.521</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.7</td>
+<td align="right">0.002</td>
+<td align="right">0.003</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.622</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">643086.8</td>
+<td align="right">6.4</td>
+<td align="right">0.012</td>
+<td align="right">0.023</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.556</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">719424.5</td>
+<td align="right">0.0</td>
+<td align="right">0.018</td>
+<td align="right">0.023</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ipc</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.528</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.6</td>
+<td align="right">0.003</td>
+<td align="right">0.003</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.654</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">611620.8</td>
+<td align="right">6.1</td>
+<td align="right">0.014</td>
+<td align="right">0.030</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.585</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">683760.7</td>
+<td align="right">0.0</td>
+<td align="right">0.023</td>
+<td align="right">0.028</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.522</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.7</td>
+<td align="right">0.002</td>
+<td align="right">0.002</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.627</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">637958.5</td>
+<td align="right">6.4</td>
+<td align="right">0.014</td>
+<td align="right">0.031</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.588</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">680272.1</td>
+<td align="right">0.0</td>
+<td align="right">0.022</td>
+<td align="right">0.023</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">tcp</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.520</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.7</td>
+<td align="right">0.002</td>
+<td align="right">0.002</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.629</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">635930.0</td>
+<td align="right">6.4</td>
+<td align="right">0.014</td>
+<td align="right">0.027</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.607</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">658978.6</td>
+<td align="right">0.0</td>
+<td align="right">0.026</td>
+<td align="right">0.030</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">arrow_ipc_stream</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.523</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.6</td>
+<td align="right">0.003</td>
+<td align="right">0.003</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">mixed_read_write</td>
+<td align="right">2</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.633</td>
+<td align="right">400000</td>
+<td align="right">4</td>
+<td align="right">631911.5</td>
+<td align="right">6.3</td>
+<td align="right">0.013</td>
+<td align="right">0.025</td>
+</tr>
+<tr class="odd">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">readers</td>
+<td align="right">2</td>
+<td align="right">0</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.573</td>
+<td align="right">400000</td>
+<td align="right">0</td>
+<td align="right">698080.3</td>
+<td align="right">0.0</td>
+<td align="right">0.022</td>
+<td align="right">0.024</td>
+</tr>
+<tr class="even">
+<td align="left">concurrent_read_write</td>
+<td align="left">ducknng</td>
+<td align="left">rpc</td>
+<td align="left">ws</td>
+<td align="left">ducknng_quack_batch</td>
+<td align="left">writers</td>
+<td align="right">0</td>
+<td align="right">2</td>
+<td align="right">100000</td>
+<td align="right">2</td>
+<td align="right">0.531</td>
+<td align="right">0</td>
+<td align="right">4</td>
+<td align="right">0.0</td>
+<td align="right">7.5</td>
+<td align="right">0.002</td>
+<td align="right">0.002</td>
 </tr>
 </tbody>
 </table>
@@ -887,12 +1649,28 @@ path.</p>
 </thead>
 <tbody>
 <tr class="odd">
-<td align="right">1000</td>
-<td align="right">0.008</td>
-<td align="right">0.01</td>
-<td align="right">0.011</td>
-<td align="right">0.727</td>
-<td align="right">0.909</td>
+<td align="right">100000</td>
+<td align="right">0.102</td>
+<td align="right">0.083</td>
+<td align="right">0.095</td>
+<td align="right">1.074</td>
+<td align="right">0.874</td>
+</tr>
+<tr class="even">
+<td align="right">1000000</td>
+<td align="right">0.928</td>
+<td align="right">0.631</td>
+<td align="right">0.732</td>
+<td align="right">1.268</td>
+<td align="right">0.862</td>
+</tr>
+<tr class="odd">
+<td align="right">10000000</td>
+<td align="right">6.654</td>
+<td align="right">5.380</td>
+<td align="right">4.189</td>
+<td align="right">1.588</td>
+<td align="right">1.284</td>
 </tr>
 </tbody>
 </table>

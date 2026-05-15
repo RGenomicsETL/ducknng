@@ -3,6 +3,9 @@
 #include "ducknng_thread.h"
 #include <stdint.h>
 
+#define DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS 12u
+#define DUCKNNG_MAX_FETCH_BATCH_CHUNKS 256u
+
 typedef struct ducknng_schema_cache {
     idx_t ncols;
     char **names;
@@ -15,6 +18,8 @@ typedef struct ducknng_session {
     char *owner_identity;
     char *result_handle;
     int row_payload_format;
+    uint64_t fetch_batch_chunks;
+    int row_schema_sent;
     duckdb_result result;
     int result_open;
     int eos;
@@ -60,7 +65,7 @@ int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
 int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    const char *owner_identity, int row_payload_format,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
 ducknng_session *ducknng_service_acquire_session(ducknng_service *svc, uint64_t session_id,
     const char *owner_token, const char *caller_identity, int *out_unauthorized);

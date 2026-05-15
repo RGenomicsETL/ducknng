@@ -6,6 +6,7 @@
 
 struct ducknng_service;
 typedef struct ducknng_http_server_state ducknng_http_server_state;
+typedef struct ducknng_http_frame_client ducknng_http_frame_client;
 
 int ducknng_validate_http_url(const char *url, char **errmsg);
 int ducknng_validate_http_server_url(const char *url, const ducknng_tls_opts *tls_opts, char **errmsg);
@@ -26,6 +27,12 @@ int ducknng_http_frame_transact_aio_prepare(const char *url, const uint8_t *fram
 int ducknng_http_frame_transact(const char *url, const uint8_t *frame, size_t frame_len,
     int timeout_ms, const ducknng_tls_opts *tls_opts, uint8_t **out_frame, size_t *out_frame_len,
     char **errmsg);
+int ducknng_http_frame_client_open(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg);
+int ducknng_http_frame_client_transact(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg);
+void ducknng_http_frame_client_close(ducknng_http_frame_client *client);
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
     char **out_resolved_url, char **errmsg);
 void ducknng_http_server_stop(ducknng_http_server_state *state);

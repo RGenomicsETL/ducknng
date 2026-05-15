@@ -111,7 +111,7 @@ stopifnot(manifest_reply$type == 2L)
 stopifnot(grepl('"name":"exec"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"name":"manifest"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"name":"handshake"', manifest_text, fixed = TRUE))
-stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","quack_batch_v1"]', manifest_text, fixed = TRUE))
+stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]', manifest_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', manifest_text, fixed = TRUE))
 
 handshake_json <- paste0(
@@ -125,13 +125,16 @@ handshake_text <- rawToChar(handshake_reply$payload)
 stopifnot(handshake_reply$type == 2L)
 stopifnot(handshake_reply$name == "handshake")
 stopifnot(grepl('"selected_serialization_mode":"arrow_ipc_stream"', handshake_text, fixed = TRUE))
-stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","quack_batch_v1"]', handshake_text, fixed = TRUE))
+stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]', handshake_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', handshake_text, fixed = TRUE))
+stopifnot(grepl('"ducknng_protocol_version":1', handshake_text, fixed = TRUE))
+stopifnot(grepl('"row_schema_version":1', handshake_text, fixed = TRUE))
+stopifnot(grepl('"default_fetch_batch_chunks":12', handshake_text, fixed = TRUE))
 stopifnot(grepl('"correlation_id":"hs-1"', handshake_text, fixed = TRUE))
 
 unsupported_handshake_json <- paste0(
   '{"min_protocol_version":1,"max_protocol_version":1,',
-  '"preferred_serialization_mode":"protobuf_v1"}'
+  '"preferred_serialization_mode":"not_a_ducknng_serializer"}'
 )
 stopifnot(nanonext::send(req, encode_call("handshake", charToRaw(unsupported_handshake_json)), mode = "raw", block = 1000L) == 0)
 unsupported_handshake_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))
@@ -164,6 +167,9 @@ open_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))
 open_text <- rawToChar(open_reply$payload)
 stopifnot(grepl('"correlation_id":"open-1"', open_text, fixed = TRUE))
 stopifnot(grepl('"serialization_mode":"arrow_ipc_stream"', open_text, fixed = TRUE))
+stopifnot(grepl('"ducknng_protocol_version":1', open_text, fixed = TRUE))
+stopifnot(grepl('"row_schema_version":1', open_text, fixed = TRUE))
+stopifnot(grepl('"fetch_batch_chunks":12', open_text, fixed = TRUE))
 session_id <- json_get_number(open_text, "session_id")
 session_token <- json_get_string(open_text, "session_token")
 result_handle <- json_get_string(open_text, "result_handle")
@@ -201,12 +207,25 @@ invisible(DBI::dbExecute(client_con, sprintf("LOAD '%s'", ext_path)))
 quack_rows <- DBI::dbGetQuery(
   client_con,
   sprintf(
-    "SELECT * FROM ducknng_query_rpc_mode('%s', 'SELECT x, x > 1 AS gt_one FROM smoke_table ORDER BY x', 0::UBIGINT, 'quack_batch_v1')",
+    "SELECT * FROM ducknng_query_rpc_mode('%s', 'SELECT x, x > 1 AS gt_one FROM smoke_table ORDER BY x', 0::UBIGINT, 'ducknng_quack_batch')",
     ipc_url
   )
 )
 stopifnot(identical(quack_rows$x, c(1L, 2L)))
 stopifnot(identical(quack_rows$gt_one, c(FALSE, TRUE)))
+for (mode in c("arrow_ipc_stream", "ducknng_quack_batch")) {
+  bulk <- DBI::dbGetQuery(
+    client_con,
+    sprintf(
+      "SELECT count(*)::INTEGER AS n, min(x)::INTEGER AS mn, max(x)::INTEGER AS mx FROM ducknng_query_rpc_mode('%s', 'SELECT i::INTEGER AS x FROM range(50000) AS t(i)', 0::UBIGINT, '%s')",
+      ipc_url,
+      mode
+    )
+  )
+  stopifnot(identical(bulk$n, 50000L))
+  stopifnot(identical(bulk$mn, 0L))
+  stopifnot(identical(bulk$mx, 49999L))
+}
 DBI::dbDisconnect(client_con, shutdown = TRUE)
 
 close(req)

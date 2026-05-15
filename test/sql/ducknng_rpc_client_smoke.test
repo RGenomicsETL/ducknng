@@ -59,13 +59,13 @@ SELECT position('"name":"handshake"' IN manifest) > 0,
        json_extract_string(manifest::JSON, '$.capabilities.supported_serialization_modes[1]')
 FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
 ----
-1	1	1	1	arrow_ipc_stream	quack_batch_v1
+1	1	1	1	arrow_ipc_stream	ducknng_quack_batch
 
 query IIIIII
 SELECT ok, type_name, name,
        position('"selected_serialization_mode":"arrow_ipc_stream"' IN payload_text) > 0,
        position('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}' IN payload_text) > 0,
-       position('"supported_serialization_modes":["arrow_ipc_stream","quack_batch_v1"]' IN payload_text) > 0
+       position('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]' IN payload_text) > 0
 FROM ducknng_decode_frame(
   ducknng_request_raw(
     'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
