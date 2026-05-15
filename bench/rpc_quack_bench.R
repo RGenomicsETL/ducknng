@@ -234,20 +234,14 @@ run_bulk_compare <- function(args) {
       c(100000L, 1000000L, 10000000L))
   }
   db_path <- if (length(args) >= 3L) args[[3]] else file.path(tempdir(), "ducknng_quack_tpch.duckdb")
-  raw_payload_bytes <- ducknng_bench_parse_int_csv(
-    Sys.getenv("DUCKNNG_RAW_PAYLOAD_BYTES", unset = ""),
-    c(1048576L, 4194304L, 16777216L)
-  )
   results <- ducknng_bench_run_bulk_compare(
     repetitions = repetitions,
     rows = rows,
-    raw_payload_bytes = raw_payload_bytes,
     db_path = db_path
   )
   print(results$metadata, row.names = FALSE)
   print(results$rpc_results, row.names = FALSE)
   print(results$http_vs_quack, row.names = FALSE)
-  print(results$raw_results, row.names = FALSE)
 }
 
 parsed <- parse_mode(commandArgs(trailingOnly = TRUE))

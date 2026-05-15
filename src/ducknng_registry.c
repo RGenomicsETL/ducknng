@@ -261,6 +261,7 @@ const char *ducknng_payload_format_name(ducknng_payload_format value) {
         case DUCKNNG_PAYLOAD_NONE: return "none";
         case DUCKNNG_PAYLOAD_JSON: return "json";
         case DUCKNNG_PAYLOAD_ARROW_IPC_STREAM: return "arrow_ipc_stream";
+        case DUCKNNG_PAYLOAD_QUACK_BATCH_V1: return "quack_batch_v1";
         default: return "unknown";
     }
 }
@@ -419,7 +420,7 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
     }
     if (!append_text(&buf, &len, &cap,
-            "},\"capabilities\":{\"handshake\":true,\"supported_serialization_modes\":[\"arrow_ipc_stream\"],\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}},\"methods\":[")) goto oom;
+            "},\"capabilities\":{\"handshake\":true,\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"quack_batch_v1\"],\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}},\"methods\":[")) goto oom;
     for (i = 0; i < registry->method_count; i++) {
         const ducknng_method_descriptor *m = registry->methods[i];
         ducknng_method_projection view;

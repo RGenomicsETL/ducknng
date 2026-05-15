@@ -111,7 +111,7 @@ stopifnot(manifest_reply$type == 2L)
 stopifnot(grepl('"name":"exec"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"name":"manifest"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"name":"handshake"', manifest_text, fixed = TRUE))
-stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream"]', manifest_text, fixed = TRUE))
+stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","quack_batch_v1"]', manifest_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', manifest_text, fixed = TRUE))
 
 handshake_json <- paste0(
@@ -125,7 +125,7 @@ handshake_text <- rawToChar(handshake_reply$payload)
 stopifnot(handshake_reply$type == 2L)
 stopifnot(handshake_reply$name == "handshake")
 stopifnot(grepl('"selected_serialization_mode":"arrow_ipc_stream"', handshake_text, fixed = TRUE))
-stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream"]', handshake_text, fixed = TRUE))
+stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","quack_batch_v1"]', handshake_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', handshake_text, fixed = TRUE))
 stopifnot(grepl('"correlation_id":"hs-1"', handshake_text, fixed = TRUE))
 
@@ -194,6 +194,20 @@ close_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))
 close_text <- rawToChar(close_reply$payload)
 stopifnot(grepl('"state":"closed"', close_text, fixed = TRUE))
 stopifnot(grepl('"correlation_id":"close-1"', close_text, fixed = TRUE))
+
+client_drv <- duckdb::duckdb(config = list(allow_unsigned_extensions = "true"))
+client_con <- DBI::dbConnect(client_drv, dbdir = ":memory:")
+invisible(DBI::dbExecute(client_con, sprintf("LOAD '%s'", ext_path)))
+quack_rows <- DBI::dbGetQuery(
+  client_con,
+  sprintf(
+    "SELECT * FROM ducknng_query_rpc_mode('%s', 'SELECT x, x > 1 AS gt_one FROM smoke_table ORDER BY x', 0::UBIGINT, 'quack_batch_v1')",
+    ipc_url
+  )
+)
+stopifnot(identical(quack_rows$x, c(1L, 2L)))
+stopifnot(identical(quack_rows$gt_one, c(FALSE, TRUE)))
+DBI::dbDisconnect(client_con, shutdown = TRUE)
 
 close(req)
 rows <- parallel::mccollect(server_job)[[1]]

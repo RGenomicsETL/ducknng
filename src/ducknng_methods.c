@@ -1,6 +1,7 @@
 #include "ducknng_manifest.h"
 #include "ducknng_ipc_in.h"
 #include "ducknng_ipc_out.h"
+#include "ducknng_quack.h"
 #include "ducknng_service.h"
 #include "ducknng_session.h"
 #include "ducknng_runtime.h"
@@ -184,13 +185,22 @@ typedef struct ducknng_session_reply_view {
 } ducknng_session_reply_view;
 
 static const char *ducknng_session_row_payload_format_name(int value) {
-    (void)value;
-    return "arrow_ipc_stream";
+    switch (value) {
+    case DUCKNNG_PAYLOAD_QUACK_BATCH_V1:
+        return "quack_batch_v1";
+    case DUCKNNG_PAYLOAD_ARROW_IPC_STREAM:
+    default:
+        return "arrow_ipc_stream";
+    }
 }
 
 static int ducknng_parse_row_payload_format(const char *value, int *out) {
     if (out) *out = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     if (!value || !value[0] || strcmp(value, "arrow_ipc_stream") == 0) return 0;
+    if (strcmp(value, "quack_batch_v1") == 0) {
+        if (out) *out = DUCKNNG_PAYLOAD_QUACK_BATCH_V1;
+        return 0;
+    }
     return -1;
 }
 
@@ -383,7 +393,7 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     if (!ducknng_json_append_string(&response, &len, &cap,
             ducknng_session_row_payload_format_name(row_payload_format))) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap,
-            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}}")) goto oom;
+            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"quack_batch_v1\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}}")) goto oom;
     if (correlation_id) {
         if (!ducknng_json_append_text(&response, &len, &cap, ",\"correlation_id\":")) goto oom;
         if (!ducknng_json_append_string(&response, &len, &cap, correlation_id)) goto oom;
@@ -654,15 +664,19 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         /* pending result consumed; mark closed so destroy doesn't double-free */
         session->pending_open = 0;
     }
-    if (!session->result_open || ducknng_result_next_chunk_to_ipc(session->result, &payload, &payload_len, &has_batch, &errmsg) != 0) {
+    row_payload_format = session->row_payload_format;
+    if (!session->result_open ||
+        (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+            ? ducknng_result_next_chunk_to_quack_payload(session->result, &payload, &payload_len, &has_batch, &errmsg)
+            : ducknng_result_next_chunk_to_ipc(session->result, &payload, &payload_len, &has_batch, &errmsg)) != 0) {
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
-        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR, errmsg ? errmsg : "ducknng: fetch failed to encode Arrow batch");
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            errmsg ? errmsg : "ducknng: fetch failed to encode row batch");
         if (errmsg) duckdb_free(errmsg);
         return -1;
     }
-    row_payload_format = session->row_payload_format;
     if (!has_batch && session->result_handle) {
         result_handle = ducknng_strdup(session->result_handle);
         if (!result_handle) {
@@ -682,18 +696,23 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
-            DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
+            DUCKNNG_RPC_FLAG_RESULT_ROWS |
+                (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+                    ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
+                    : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM),
             payload, payload_len);
         return 0;
     }
     if (session->batch_no == 0) {
-        if (ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg) != 0) {
+        if ((row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+                ? ducknng_result_empty_quack_payload(session->result, &payload, &payload_len, &errmsg)
+                : ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg)) != 0) {
             ducknng_mutex_unlock(&session->mu);
             ducknng_session_release(session);
             ducknng_session_control_request_reset(&control_req);
             if (result_handle) duckdb_free(result_handle);
-            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
-                errmsg ? errmsg : "ducknng: fetch failed to encode empty Arrow batch");
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                errmsg ? errmsg : "ducknng: fetch failed to encode empty row batch");
             if (errmsg) duckdb_free(errmsg);
             return -1;
         }
@@ -703,7 +722,10 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_session_control_request_reset(&control_req);
         if (result_handle) duckdb_free(result_handle);
         ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
-            DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM |
+            DUCKNNG_RPC_FLAG_RESULT_ROWS |
+                (row_payload_format == DUCKNNG_PAYLOAD_QUACK_BATCH_V1
+                    ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
+                    : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) |
                 DUCKNNG_RPC_FLAG_END_OF_STREAM,
             payload, payload_len);
         return 0;
@@ -1142,14 +1164,14 @@ const ducknng_method_descriptor ducknng_method_query_open = {
 const ducknng_method_descriptor ducknng_method_fetch = {
     "fetch",
     "query",
-    "Fetch the next Arrow batch from an open session",
+    "Fetch the next row batch from an open session",
     DUCKNNG_TRANSPORT_REQREP,
     DUCKNNG_PAYLOAD_JSON,
     DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
     DUCKNNG_RESPONSE_ROWS,
     DUCKNNG_SESSION_REQUIRES,
     0,
-    DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM | DUCKNNG_RPC_FLAG_END_OF_STREAM | DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
+    DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM | DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH | DUCKNNG_RPC_FLAG_END_OF_STREAM | DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
     1024 * 1024,
     16 * 1024 * 1024,
     0,
@@ -1162,7 +1184,7 @@ const ducknng_method_descriptor ducknng_method_fetch = {
     0,
     1,
     "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
-    "{\"mode\":\"rows_or_control\",\"rows\":{\"default\":\"arrow_ipc_stream\"},\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}}",
+    "{\"mode\":\"rows_or_control\",\"rows\":{\"default\":\"arrow_ipc_stream\",\"supported\":[\"arrow_ipc_stream\",\"quack_batch_v1\"]},\"control\":{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"batch_index\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"quack_batch_v1\":{\"layout\":\"quack_prepare_response_body_subset\",\"fields\":[\"result_types\",\"result_names\",\"results\"]}}}",
     ducknng_method_fetch_handler
 };
 

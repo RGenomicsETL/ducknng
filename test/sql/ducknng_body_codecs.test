@@ -6,7 +6,7 @@ require ducknng
 query I
 SELECT count(*) FROM ducknng_list_codecs()
 ----
-10
+11
 
 query IT
 SELECT a, b
@@ -15,6 +15,13 @@ ORDER BY a
 ----
 1	x
 2	y
+
+query T
+SELECT output
+FROM ducknng_list_codecs()
+WHERE provider = 'quack_batch_v1'
+----
+dynamic table
 
 query IT
 SELECT a, b

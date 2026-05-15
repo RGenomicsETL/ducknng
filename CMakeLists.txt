@@ -79,6 +79,7 @@ set(EXTENSION_SOURCES
     src/ducknng_wire.c
     src/ducknng_ipc_in.c
     src/ducknng_ipc_out.c
+    src/ducknng_quack.c
     src/ducknng_transport.c
     src/ducknng_http_compat.c
     src/ducknng_nng_compat.c

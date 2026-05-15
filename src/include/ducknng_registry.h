@@ -13,7 +13,8 @@ typedef enum ducknng_transport_pattern {
 typedef enum ducknng_payload_format {
     DUCKNNG_PAYLOAD_NONE = 0,
     DUCKNNG_PAYLOAD_JSON = 1,
-    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM = 2
+    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM = 2,
+    DUCKNNG_PAYLOAD_QUACK_BATCH_V1 = 3
 } ducknng_payload_format;
 
 typedef enum ducknng_response_mode {

@@ -21,21 +21,24 @@ for the thin versioned RPC envelope design.
 
 ## Layer map
 
-| Layer          | What it does                                                                                                                                                                                                             |
-|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Transport**  | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.                                                                                                                            |
-| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. `manifest` is always on; `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                                             |
-| **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                              |
-| **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw fallback. User-registered codec hooks extend the set. |
+| Layer          | What it does                                                                                                                                                                                                                                                          |
+|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Transport**  | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.                                                                                                                                                                         |
+| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. `manifest` is always on; `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                                                                                          |
+| **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                                                                           |
+| **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng `quack_batch_v1` batch media type, and text/raw fallback. User-registered codec hooks extend the set. |
 
 Raw protocol clients now also have a built-in `handshake` control method
 for capability negotiation. It advertises
 `supported_serialization_modes` plus a `fetch_metadata` capability
 object covering control-plane `correlation_id` echo, stable
 query-session `result_handle` values, and terminal `batch_index`
-metadata. Today the only advertised row payload mode is direct Arrow
-IPC; the runnable wire-level example lives in `test/rpc_smoke.R`, and
-the contract is pinned in `docs/protocol.md`.
+metadata. Today the advertised row payload modes are `arrow_ipc_stream`
+and `quack_batch_v1`: Arrow IPC remains the broad default, while
+`quack_batch_v1` is the Quack-derived DuckDB BinarySerializer batch path
+used for the new comparative benchmarks. The runnable wire-level example
+lives in `test/rpc_smoke.R`, and the contract is pinned in
+`docs/protocol.md`.
 
 ## Quick tour
 
@@ -76,7 +79,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:37107 |
+| tls+tcp://127.0.0.1:33275 |
 +---------------------------+
 
 +--------+
@@ -150,7 +153,7 @@ ORDER BY aio_id;
 +--------+------+-----------+
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
-| 1      | true | true      |
+| 2      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -365,8 +368,8 @@ make test_release
 make rpc_bench
 
 # Render the bulk benchmark report to bench/rpc_bulk_compare.md.
-# This compares ducknng RPC over http/tcp/ipc/ws, Quack over its public
-# client path, and ducknng raw pair-socket echo over ipc/tcp/ws.
+# This compares ducknng RPC over http/tcp/ipc/ws in both arrow_ipc_stream
+# and quack_batch_v1 modes, plus Quack over its public client path.
 # Requires network access to INSTALL quack FROM core_nightly.
 make rpc_bulk_compare
 
@@ -383,12 +386,12 @@ result-to-IPC emit path. Deprecated entrypoints are avoided.
 `make rpc_bench` keeps the existing raw-RPC microbench path.
 `make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
 benchmark report that records machine details and compares ducknng RPC
-over `http`, `tcp`, `ipc`, and `ws`, Quack over its public client/server
-path, and ducknng raw pair-socket echo over `ipc`, `tcp`, and `ws`. The
-report generates a local TPC-H dataset if needed and installs `quack`
-from `core_nightly`. The unstable functions in use are tracked by
-`tools/used_duckdb_unstable_api.R`; the table below is generated fresh
-on every README render:
+over `http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
+`quack_batch_v1` modes, plus Quack over its public client/server path.
+The report generates a local TPC-H dataset if needed and installs
+`quack` from `core_nightly`. The unstable functions in use are tracked
+by `tools/used_duckdb_unstable_api.R`; the table below is generated
+fresh on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
@@ -930,6 +933,28 @@ FROM ducknng_query_rpc(
 +----+-------+
 ```
 
+You can also request the Quack-derived batch serializer over the same
+session contract. Unlike upstream Quack, ducknng keeps transport choice
+separate from row serialization, so the same `quack_batch_v1` mode can
+ride over `http`, `tcp`, `ipc`, or `ws`.
+
+``` sql
+SELECT *
+FROM ducknng_query_rpc_mode(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i, i > 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
+  0::UBIGINT,
+  'quack_batch_v1'
+);
++----+-------+
+| i  | gt_10 |
++----+-------+
+| 10 | false |
+| 11 | true  |
+| 12 | true  |
++----+-------+
+```
+
 Arrow IPC carries temporal, decimal, list, struct, union, large-string,
 large-binary, fixed-size-binary, and duration values through the same
 path. Supported mappings are documented in `docs/types.md`.
@@ -957,8 +982,8 @@ FROM ducknng_query_rpc(
 ```
 
 `ducknng_parse_body(...)` decodes content-type-tagged BLOBs. The
-built-in providers cover Arrow IPC, JSON, ducknng frames, and a text/raw
-fallback.
+built-in providers cover Arrow IPC, JSON, ducknng frames, the ducknng
+`quack_batch_v1` batch media type, and a text/raw fallback.
 
 ``` sql
 SELECT provider, output FROM ducknng_list_codecs() ORDER BY provider;
@@ -968,20 +993,21 @@ FROM ducknng_parse_body(
   'application/json; charset=utf-8'
 )
 ORDER BY a;
-+---------------+-----------------------------+
-|   provider    |           output            |
-+---------------+-----------------------------+
-| arrow_ipc     | dynamic table               |
-| csv           | dynamic table               |
-| ducknng_frame | decoded frame columns       |
-| form          | name VARCHAR, value VARCHAR |
-| json          | dynamic table               |
-| ndjson        | dynamic table               |
-| parquet       | dynamic table               |
-| raw           | body BLOB                   |
-| text          | body_text VARCHAR           |
-| tsv           | dynamic table               |
-+---------------+-----------------------------+
++----------------+-----------------------------+
+|    provider    |           output            |
++----------------+-----------------------------+
+| arrow_ipc      | dynamic table               |
+| csv            | dynamic table               |
+| ducknng_frame  | decoded frame columns       |
+| form           | name VARCHAR, value VARCHAR |
+| json           | dynamic table               |
+| ndjson         | dynamic table               |
+| parquet        | dynamic table               |
+| quack_batch_v1 | dynamic table               |
+| raw            | body BLOB                   |
+| text           | body_text VARCHAR           |
+| tsv            | dynamic table               |
++----------------+-----------------------------+
 +---+---+
 | a | b |
 +---+---+
@@ -1980,7 +2006,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1996950582 | 1778676263523 | 127.0.0.1:33822 | NULL          |
+| 1206599782 | 1778874607316 | 127.0.0.1:47420 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 
