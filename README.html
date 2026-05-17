@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:39823</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42641</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -990,9 +990,11 @@ native Arrow conversion API (<code>duckdb_to_arrow_schema</code>,
 The only deprecated-entrypoint exception is the pending-result streaming
 pair, isolated in <code>src/ducknng_duckdb_streaming_compat.c</code>,
 because DuckDB v1.5.2 does not yet expose an undeprecated C API for
-pending execution with incremental chunk delivery.
-<code>make rpc_bench</code> keeps the existing raw-RPC microbench path.
-<code>make rpc_bulk_compare</code> now renders
+pending execution with incremental chunk delivery. Query sessions do not
+silently fall back to materialized results; when DuckDB provides a
+replacement streaming API, that compatibility boundary is the single
+place to change. <code>make rpc_bench</code> keeps the existing raw-RPC
+microbench path. <code>make rpc_bulk_compare</code> now renders
 <code>bench/rpc_bulk_compare.md</code>, a benchmark report that records
 machine details, compares ducknng RPC over <code>http</code>,
 <code>tcp</code>, <code>ipc</code>, and <code>ws</code> in both
@@ -3519,11 +3521,11 @@ and active-pipe counters.</p>
 for a service.</p>
 <div class="sourceCode" id="cb43"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
 <span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
-<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
-<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">1559056819</span> | <span class="dv">1779029688264</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42096</span> | <span class="kw">NULL</span>          |</span>
-<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
+<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
+<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">924190260</span> | <span class="dv">1779031836353</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:58058</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb44"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
 <span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------------------------------------------------------------------------------------------+</span></span>

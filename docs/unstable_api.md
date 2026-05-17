@@ -293,11 +293,14 @@ The original Arrow result-set APIs are deprecated in favour of
 pair is different: DuckDB v1.5.2 has no undeprecated C API that combines pending
 execution with incremental chunk delivery. `ducknng` therefore uses
 `duckdb_pending_prepared_streaming` and `duckdb_stream_fetch_chunk` only through
-`src/ducknng_duckdb_streaming_compat.c`, with a fallback to materialized pending
-results when deprecated APIs are disabled at compile time.
+`src/ducknng_duckdb_streaming_compat.c`. There is no materialized-result fallback
+inside query sessions because that would change the internal session contract and
+reintroduce the performance path this boundary exists to avoid.
 
 **Recommendation: EXCEPTION ONLY.** Keep the pending-result streaming exception
 isolated in the compatibility boundary and avoid all other deprecated entrypoints.
+When DuckDB provides a replacement, update the boundary rather than adding branches
+at query, session, or codec call sites.
 
 ---
 
@@ -513,15 +516,12 @@ caller controls.
 `ducknng_methods.c` uses this API in the `query_open` / `fetch` session flow:
 
 - `query_open` calls `ducknng_pending_prepared_for_session(...)`, implemented in
-  `src/ducknng_duckdb_streaming_compat.c`. On DuckDB versions that expose the current
-  pending-streaming C entrypoint, that wrapper calls `duckdb_pending_prepared_streaming`
-  so fetches can read rows incrementally. If deprecated C entrypoints are explicitly
-  disabled at compile time, the wrapper falls back to `duckdb_pending_prepared`.
+  `src/ducknng_duckdb_streaming_compat.c`. The wrapper calls
+  `duckdb_pending_prepared_streaming` so fetches can read rows incrementally.
 - The first `fetch` call drives execution by looping `duckdb_pending_execute_task` until
   `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain the
   `duckdb_result`. Subsequent `fetch` calls read chunks through
-  `ducknng_result_fetch_session_chunk(...)`, which dispatches to `duckdb_stream_fetch_chunk`
-  for streaming results and to `duckdb_fetch_chunk` for fallback materialized results.
+  `ducknng_result_fetch_session_chunk(...)`, which calls `duckdb_stream_fetch_chunk`.
 
 This is the one deliberate exception to the repository's normal avoidance of deprecated
 DuckDB C entrypoints. Profiling showed the materialized pending-result path spending a

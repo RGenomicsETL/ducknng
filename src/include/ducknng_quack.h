@@ -19,7 +19,7 @@ void ducknng_quack_schema_reset(ducknng_quack_schema *schema);
 
 int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg);
-int ducknng_result_next_chunks_to_quack_payload(duckdb_result result, int result_streaming,
+int ducknng_result_next_chunks_to_quack_payload(duckdb_result result,
     uint64_t max_chunks, int include_schema, uint8_t **out_bytes, size_t *out_len,
     int *has_chunk, char **errmsg);
 int ducknng_result_empty_quack_payload(duckdb_result result,

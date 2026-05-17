@@ -486,9 +486,8 @@ done:
 }
 
 
-int ducknng_result_next_chunks_to_ipc(duckdb_result result, int result_streaming,
-    uint64_t max_chunks, uint8_t **out_bytes, size_t *out_len, int *has_chunk,
-    char **errmsg) {
+int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
+    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
     struct ArrowSchema schema;
     struct ArrowArray *arrays = NULL;
     int64_t nchunks = 0;
@@ -519,7 +518,7 @@ int ducknng_result_next_chunks_to_ipc(duckdb_result result, int result_streaming
     while ((uint64_t)nchunks < max_chunks) {
         struct ArrowArray arr;
         memset(&arr, 0, sizeof(arr));
-        chunk = ducknng_result_fetch_session_chunk(result, result_streaming);
+        chunk = ducknng_result_fetch_session_chunk(result);
         if (!chunk) break;
 
         err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
@@ -579,7 +578,7 @@ cleanup:
 
 int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
-    return ducknng_result_next_chunks_to_ipc(result, 0, 1, out_bytes, out_len, has_chunk, errmsg);
+    return ducknng_result_next_chunks_to_ipc(result, 1, out_bytes, out_len, has_chunk, errmsg);
 }
 
 /* -------------------------------------------------------------------------

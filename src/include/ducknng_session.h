@@ -22,7 +22,6 @@ typedef struct ducknng_session {
     int row_schema_sent;
     duckdb_result result;
     int result_open;
-    int result_streaming;
     int eos;
     int cancelled;
     uint64_t batch_no;
@@ -40,7 +39,6 @@ typedef struct ducknng_session {
     duckdb_prepared_statement session_stmt;
     duckdb_pending_result session_pending;
     int pending_ready;  /* 1 after duckdb_execute_pending has been called */
-    int pending_result_streaming;
     int stmt_open;
     int pending_open;
 } ducknng_session;
@@ -58,8 +56,8 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
 ducknng_session *ducknng_session_create_streaming(
     struct ducknng_service *svc, duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    int pending_result_streaming, uint64_t session_id, const char *owner_token,
-    const char *owner_identity, char **errmsg);
+    uint64_t session_id, const char *owner_token, const char *owner_identity,
+    char **errmsg);
 void ducknng_session_destroy(ducknng_session *session);
 void ducknng_session_release(ducknng_session *session);
 int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
@@ -68,8 +66,7 @@ int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
 int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    int pending_result_streaming, const char *owner_identity, int row_payload_format,
-    uint64_t fetch_batch_chunks,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
 ducknng_session *ducknng_service_acquire_session(ducknng_service *svc, uint64_t session_id,
     const char *owner_token, const char *caller_identity, int *out_unauthorized);

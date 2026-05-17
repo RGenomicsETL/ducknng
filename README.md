@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:39823 |
+| tls+tcp://127.0.0.1:42641 |
 +---------------------------+
 
 +--------+
@@ -395,18 +395,20 @@ result-to-IPC emit path. The only deprecated-entrypoint exception is the
 pending-result streaming pair, isolated in
 `src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.5.2 does not
 yet expose an undeprecated C API for pending execution with incremental
-chunk delivery. `make rpc_bench` keeps the existing raw-RPC microbench
-path. `make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
-benchmark report that records machine details, compares ducknng RPC over
-`http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
-`ducknng_quack_batch` modes, compares Quack over its public
-client/server path, and includes concurrent reader, writer, and mixed
-reader/writer RPC slices. The writer slice is a set-oriented remote SQL
-write dispatch benchmark, not a client-side bulk append protocol. The
-report generates a local TPC-H dataset if needed and installs `quack`
-from `core_nightly`. The unstable functions in use are tracked by
-`tools/used_duckdb_unstable_api.R`; the table below is generated fresh
-on every README render:
+chunk delivery. Query sessions do not silently fall back to materialized
+results; when DuckDB provides a replacement streaming API, that
+compatibility boundary is the single place to change. `make rpc_bench`
+keeps the existing raw-RPC microbench path. `make rpc_bulk_compare` now
+renders `bench/rpc_bulk_compare.md`, a benchmark report that records
+machine details, compares ducknng RPC over `http`, `tcp`, `ipc`, and
+`ws` in both `arrow_ipc_stream` and `ducknng_quack_batch` modes,
+compares Quack over its public client/server path, and includes
+concurrent reader, writer, and mixed reader/writer RPC slices. The
+writer slice is a set-oriented remote SQL write dispatch benchmark, not
+a client-side bulk append protocol. The report generates a local TPC-H
+dataset if needed and installs `quack` from `core_nightly`. The unstable
+functions in use are tracked by `tools/used_duckdb_unstable_api.R`; the
+table below is generated fresh on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
@@ -2030,11 +2032,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1559056819 | 1779029688264 | 127.0.0.1:42096 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 924190260 | 1779031836353 | 127.0.0.1:58058 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

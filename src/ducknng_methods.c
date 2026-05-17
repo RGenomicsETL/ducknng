@@ -449,7 +449,6 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     size_t session_pool_index = (size_t)-1;
     duckdb_prepared_statement stmt = NULL;
     duckdb_pending_result pending = NULL;
-    int pending_result_streaming = 0;
     uint64_t session_id = 0;
     int row_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM;
     uint64_t fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
@@ -561,7 +560,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
         }
         duckdb_destroy_extracted(&extracted);
     }
-    if (ducknng_pending_prepared_for_session(stmt, &pending, &pending_result_streaming) == DuckDBError) {
+    if (ducknng_pending_prepared_for_session(stmt, &pending) == DuckDBError) {
         if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
         if (pending) duckdb_destroy_pending(&pending);
         duckdb_destroy_prepare(&stmt);
@@ -574,8 +573,7 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     {
         int add_rc = ducknng_service_add_session_streaming(svc, session_con, session_pool_index,
-            stmt, pending, pending_result_streaming, req->caller_identity,
-            row_payload_format, fetch_batch_chunks,
+            stmt, pending, req->caller_identity, row_payload_format, fetch_batch_chunks,
             &session_id, &owner_token, &result_handle, &errmsg);
         if (add_rc != 0) {
             /* session was not created; release resources here */
@@ -698,7 +696,6 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         }
         if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
         session->result_open = 1;
-        session->result_streaming = session->pending_result_streaming;
         session->pending_ready = 1;
         /* pending result consumed; mark closed so destroy doesn't double-free */
         session->pending_open = 0;
@@ -706,10 +703,10 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     row_payload_format = session->row_payload_format;
     if (!session->result_open ||
         (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
-            ? ducknng_result_next_chunks_to_quack_payload(session->result, session->result_streaming,
+            ? ducknng_result_next_chunks_to_quack_payload(session->result,
                 session->fetch_batch_chunks, !session->row_schema_sent,
                 &payload, &payload_len, &has_batch, &errmsg)
-            : ducknng_result_next_chunks_to_ipc(session->result, session->result_streaming,
+            : ducknng_result_next_chunks_to_ipc(session->result,
                 session->fetch_batch_chunks, &payload, &payload_len, &has_batch, &errmsg)) != 0) {
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);

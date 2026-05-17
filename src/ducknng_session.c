@@ -161,8 +161,8 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
 ducknng_session *ducknng_session_create_streaming(
     ducknng_service *svc, duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    int pending_result_streaming, uint64_t session_id, const char *owner_token,
-    const char *owner_identity, char **errmsg) {
+    uint64_t session_id, const char *owner_token, const char *owner_identity,
+    char **errmsg) {
     ducknng_session *session = (ducknng_session *)duckdb_malloc(sizeof(*session));
     if (!session) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating session");
@@ -198,7 +198,6 @@ ducknng_session *ducknng_session_create_streaming(
     session->stmt_open = (stmt != NULL) ? 1 : 0;
     session->pending_open = (pending != NULL) ? 1 : 0;
     session->pending_ready = 0;
-    session->pending_result_streaming = pending_result_streaming ? 1 : 0;
     session->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     session->last_touch_ms = ducknng_now_ms();
     if (ducknng_mutex_init(&session->mu) != 0) {
@@ -508,8 +507,7 @@ size_t ducknng_service_prune_idle_sessions(ducknng_service *svc, uint64_t now_ms
 int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    int pending_result_streaming, const char *owner_identity, int row_payload_format,
-    uint64_t fetch_batch_chunks,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
     size_t new_cap;
@@ -582,7 +580,7 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
     ducknng_session_generate_owner_token(owner_token);
     ducknng_session_generate_result_handle(result_handle);
     session = ducknng_session_create_streaming(svc, session_con, pool_index, stmt, pending,
-        pending_result_streaming, session_id, owner_token, owner_identity, errmsg);
+        session_id, owner_token, owner_identity, errmsg);
     if (!session) {
         ducknng_mutex_unlock(&svc->mu);
         return -1;
