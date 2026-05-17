@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:40055</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:39823</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -987,19 +987,22 @@ sets up CMake. The extension targets <code>TARGET_DUCKDB_VERSION</code>.
 It builds with <code>USE_UNSTABLE_C_API=1</code> to access DuckDB’s
 native Arrow conversion API (<code>duckdb_to_arrow_schema</code>,
 <code>duckdb_data_chunk_to_arrow</code>) in the result-to-IPC emit path.
-Deprecated entrypoints are avoided. <code>make rpc_bench</code> keeps
-the existing raw-RPC microbench path. <code>make rpc_bulk_compare</code>
-now renders <code>bench/rpc_bulk_compare.md</code>, a benchmark report
-that records machine details, compares ducknng RPC over
-<code>http</code>, <code>tcp</code>, <code>ipc</code>, and
-<code>ws</code> in both <code>arrow_ipc_stream</code> and
-<code>ducknng_quack_batch</code> modes, compares Quack over its public
-client/server path, and includes concurrent reader, writer, and mixed
-reader/writer RPC slices. The writer slice is a set-oriented remote SQL
-write dispatch benchmark, not a client-side bulk append protocol. The
-report generates a local TPC-H dataset if needed and installs
-<code>quack</code> from <code>core_nightly</code>. The unstable
-functions in use are tracked by
+The only deprecated-entrypoint exception is the pending-result streaming
+pair, isolated in <code>src/ducknng_duckdb_streaming_compat.c</code>,
+because DuckDB v1.5.2 does not yet expose an undeprecated C API for
+pending execution with incremental chunk delivery.
+<code>make rpc_bench</code> keeps the existing raw-RPC microbench path.
+<code>make rpc_bulk_compare</code> now renders
+<code>bench/rpc_bulk_compare.md</code>, a benchmark report that records
+machine details, compares ducknng RPC over <code>http</code>,
+<code>tcp</code>, <code>ipc</code>, and <code>ws</code> in both
+<code>arrow_ipc_stream</code> and <code>ducknng_quack_batch</code>
+modes, compares Quack over its public client/server path, and includes
+concurrent reader, writer, and mixed reader/writer RPC slices. The
+writer slice is a set-oriented remote SQL write dispatch benchmark, not
+a client-side bulk append protocol. The report generates a local TPC-H
+dataset if needed and installs <code>quack</code> from
+<code>core_nightly</code>. The unstable functions in use are tracked by
 <code>tools/used_duckdb_unstable_api.R</code>; the table below is
 generated fresh on every README render:</p>
 <table>
@@ -1012,12 +1015,18 @@ generated fresh on every README render:</p>
 </thead>
 <tbody>
 <tr class="odd">
+<td><code>unstable_deprecated</code></td>
+<td><code>duckdb_pending_prepared_streaming</code>,
+<code>duckdb_stream_fetch_chunk</code></td>
+<td align="right">2</td>
+</tr>
+<tr class="even">
 <td><code>unstable_new_arrow_functions</code></td>
 <td><code>duckdb_data_chunk_to_arrow</code>,
 <code>duckdb_to_arrow_schema</code></td>
 <td align="right">2</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>unstable_new_config_options_functions</code></td>
 <td><code>duckdb_client_context_get_config_option</code>,
 <code>duckdb_config_option_set_default_scope</code>,
@@ -1030,14 +1039,14 @@ generated fresh on every README render:</p>
 <code>duckdb_register_config_option</code></td>
 <td align="right">9</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_error_data_functions</code></td>
 <td><code>duckdb_destroy_error_data</code>,
 <code>duckdb_error_data_has_error</code>,
 <code>duckdb_error_data_message</code></td>
 <td align="right">3</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>unstable_new_logger_functions</code></td>
 <td><code>duckdb_create_log_storage</code>,
 <code>duckdb_destroy_log_storage</code>,
@@ -1047,40 +1056,40 @@ generated fresh on every README render:</p>
 <code>duckdb_register_log_storage</code></td>
 <td align="right">6</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_open_connect_functions</code></td>
 <td><code>duckdb_connection_get_arrow_options</code>,
 <code>duckdb_destroy_arrow_options</code></td>
 <td align="right">2</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>unstable_new_prepared_statement_functions</code></td>
 <td><code>duckdb_prepared_statement_column_count</code>,
 <code>duckdb_prepared_statement_column_logical_type</code>,
 <code>duckdb_prepared_statement_column_name</code></td>
 <td align="right">3</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_query_execution_functions</code></td>
 <td><code>duckdb_result_get_arrow_options</code></td>
 <td align="right">1</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>unstable_new_scalar_function_functions</code></td>
 <td><code>duckdb_scalar_function_set_bind</code></td>
 <td align="right">1</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_scalar_function_state_functions</code></td>
 <td><code>duckdb_scalar_function_set_init</code></td>
 <td align="right">1</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>unstable_new_string_functions</code></td>
 <td><code>duckdb_valid_utf8_check</code></td>
 <td align="right">1</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>unstable_new_vector_functions</code></td>
 <td><code>duckdb_unsafe_vector_assign_string_element_len</code></td>
 <td align="right">1</td>
@@ -3510,11 +3519,11 @@ and active-pipe counters.</p>
 for a service.</p>
 <div class="sourceCode" id="cb43"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb43-1"><a href="#cb43-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
 <span id="cb43-2"><a href="#cb43-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
-<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
-<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
-<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
-<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">213037617</span> | <span class="dv">1778882954309</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:47124</span> | <span class="kw">NULL</span>          |</span>
-<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
+<span id="cb43-3"><a href="#cb43-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
+<span id="cb43-4"><a href="#cb43-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
+<span id="cb43-5"><a href="#cb43-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
+<span id="cb43-6"><a href="#cb43-6" tabindex="-1"></a>| <span class="dv">1559056819</span> | <span class="dv">1779029688264</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42096</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb43-7"><a href="#cb43-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb44"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
 <span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------------------------------------------------------------------------------------------+</span></span>

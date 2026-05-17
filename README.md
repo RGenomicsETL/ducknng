@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:40055 |
+| tls+tcp://127.0.0.1:39823 |
 +---------------------------+
 
 +--------+
@@ -391,9 +391,12 @@ pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The
 extension targets `TARGET_DUCKDB_VERSION`. It builds with
 `USE_UNSTABLE_C_API=1` to access DuckDB’s native Arrow conversion API
 (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
-result-to-IPC emit path. Deprecated entrypoints are avoided.
-`make rpc_bench` keeps the existing raw-RPC microbench path.
-`make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
+result-to-IPC emit path. The only deprecated-entrypoint exception is the
+pending-result streaming pair, isolated in
+`src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.5.2 does not
+yet expose an undeprecated C API for pending execution with incremental
+chunk delivery. `make rpc_bench` keeps the existing raw-RPC microbench
+path. `make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
 benchmark report that records machine details, compares ducknng RPC over
 `http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
 `ducknng_quack_batch` modes, compares Quack over its public
@@ -407,6 +410,7 @@ on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
+| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                                                                        |     2 |
 | `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
 | `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
 | `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
@@ -2026,11 +2030,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+-----------+---------------+-----------------+---------------+
-|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
-+-----------+---------------+-----------------+---------------+
-| 213037617 | 1778882954309 | 127.0.0.1:47124 | NULL          |
-+-----------+---------------+-----------------+---------------+
++------------+---------------+-----------------+---------------+
+|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
++------------+---------------+-----------------+---------------+
+| 1559056819 | 1779029688264 | 127.0.0.1:42096 | NULL          |
++------------+---------------+-----------------+---------------+
 ```
 
 ``` sql

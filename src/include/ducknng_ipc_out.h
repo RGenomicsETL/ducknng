@@ -20,8 +20,9 @@ int ducknng_query_to_ipc_stream(duckdb_connection con, const char *sql,
     uint8_t **out_bytes, size_t *out_len, char **errmsg);
 int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg);
-int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
-    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg);
+int ducknng_result_next_chunks_to_ipc(duckdb_result result, int result_streaming,
+    uint64_t max_chunks, uint8_t **out_bytes, size_t *out_len, int *has_chunk,
+    char **errmsg);
 int ducknng_exec_metadata_to_ipc(uint64_t rows_changed,
     uint32_t statement_type, uint32_t result_type, uint8_t **out_bytes,
     size_t *out_len, char **errmsg);

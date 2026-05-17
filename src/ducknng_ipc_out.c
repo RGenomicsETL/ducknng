@@ -1,4 +1,5 @@
 #include "ducknng_ipc_out.h"
+#include "ducknng_duckdb_streaming_compat.h"
 #include "ducknng_util.h"
 #include "nanoarrow/nanoarrow.h"
 #include "nanoarrow/nanoarrow_ipc.h"
@@ -390,7 +391,10 @@ int ducknng_result_to_ipc_stream(duckdb_prepared_statement stmt, duckdb_result r
 
     /* Empty result: still need a 0-batch stream. */
     rc = ducknng_ipc_arrays_to_bytes(&schema, arrays, nchunks, out_bytes, out_len, errmsg);
-    arrays = NULL; /* consumed by stream on success path; released in cleanup loop otherwise */
+    if (rc == 0) {
+        free(arrays);
+        arrays = NULL; /* stream consumed array contents; caller frees the container */
+    }
     goto done;
 
 cleanup:
@@ -482,8 +486,9 @@ done:
 }
 
 
-int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
-    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
+int ducknng_result_next_chunks_to_ipc(duckdb_result result, int result_streaming,
+    uint64_t max_chunks, uint8_t **out_bytes, size_t *out_len, int *has_chunk,
+    char **errmsg) {
     struct ArrowSchema schema;
     struct ArrowArray *arrays = NULL;
     int64_t nchunks = 0;
@@ -514,7 +519,7 @@ int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
     while ((uint64_t)nchunks < max_chunks) {
         struct ArrowArray arr;
         memset(&arr, 0, sizeof(arr));
-        chunk = duckdb_fetch_chunk(result);
+        chunk = ducknng_result_fetch_session_chunk(result, result_streaming);
         if (!chunk) break;
 
         err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
@@ -553,9 +558,11 @@ int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
     }
     if (ducknng_ipc_arrays_to_bytes(&schema, arrays, nchunks, out_bytes, out_len, errmsg) != 0)
         goto cleanup;
-    arrays = NULL;
+    free(arrays);
+    arrays = NULL; /* stream consumed array contents; caller frees the container */
     if (has_chunk) *has_chunk = 1;
-    return 0;
+    rc = 0;
+    goto cleanup;
 
 cleanup:
     if (chunk) duckdb_destroy_data_chunk(&chunk);
@@ -572,7 +579,7 @@ cleanup:
 
 int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
-    return ducknng_result_next_chunks_to_ipc(result, 1, out_bytes, out_len, has_chunk, errmsg);
+    return ducknng_result_next_chunks_to_ipc(result, 0, 1, out_bytes, out_len, has_chunk, errmsg);
 }
 
 /* -------------------------------------------------------------------------

@@ -74,6 +74,7 @@ set(EXTENSION_SOURCES
     src/ducknng_runtime.c
     src/ducknng_service.c
     src/ducknng_session.c
+    src/ducknng_duckdb_streaming_compat.c
     src/ducknng_registry.c
     src/ducknng_methods.c
     src/ducknng_wire.c

@@ -1,4 +1,5 @@
 #include "ducknng_quack.h"
+#include "ducknng_duckdb_streaming_compat.h"
 #include "ducknng_util.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -867,8 +868,9 @@ void ducknng_quack_schema_reset(ducknng_quack_schema *schema) {
     memset(schema, 0, sizeof(*schema));
 }
 
-int ducknng_result_next_chunks_to_quack_payload(duckdb_result result, uint64_t max_chunks,
-    int include_schema, uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
+int ducknng_result_next_chunks_to_quack_payload(duckdb_result result, int result_streaming,
+    uint64_t max_chunks, int include_schema, uint8_t **out_bytes, size_t *out_len,
+    int *has_chunk, char **errmsg) {
     duckdb_data_chunk *chunks = NULL;
     idx_t chunk_count = 0;
     uint64_t i;
@@ -882,7 +884,7 @@ int ducknng_result_next_chunks_to_quack_payload(duckdb_result result, uint64_t m
     }
     memset(chunks, 0, sizeof(*chunks) * (size_t)max_chunks);
     for (i = 0; i < max_chunks; i++) {
-        chunks[chunk_count] = duckdb_fetch_chunk(result);
+        chunks[chunk_count] = ducknng_result_fetch_session_chunk(result, result_streaming);
         if (!chunks[chunk_count]) break;
         chunk_count++;
     }
@@ -902,7 +904,7 @@ int ducknng_result_next_chunks_to_quack_payload(duckdb_result result, uint64_t m
 
 int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
-    return ducknng_result_next_chunks_to_quack_payload(result, 1, 1,
+    return ducknng_result_next_chunks_to_quack_payload(result, 0, 1, 1,
         out_bytes, out_len, has_chunk, errmsg);
 }
 

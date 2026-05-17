@@ -285,12 +285,19 @@ is set. Users can raise the limit for wide CSV inputs with
 ## `unstable_deprecated`
 
 **Functions:** `duckdb_query_arrow`, `duckdb_arrow_array_scan`,
-`duckdb_arrow_rows_changed`, etc.
+`duckdb_arrow_rows_changed`, `duckdb_pending_prepared_streaming`,
+`duckdb_stream_fetch_chunk`, etc.
 
-These are the original Arrow result-set APIs, deprecated in favour of
-`unstable_new_arrow_functions`.
+The original Arrow result-set APIs are deprecated in favour of
+`unstable_new_arrow_functions` and remain forbidden. The pending-result streaming
+pair is different: DuckDB v1.5.2 has no undeprecated C API that combines pending
+execution with incremental chunk delivery. `ducknng` therefore uses
+`duckdb_pending_prepared_streaming` and `duckdb_stream_fetch_chunk` only through
+`src/ducknng_duckdb_streaming_compat.c`, with a fallback to materialized pending
+results when deprecated APIs are disabled at compile time.
 
-**Recommendation: DO NOT USE.** Avoid entirely.
+**Recommendation: EXCEPTION ONLY.** Keep the pending-result streaming exception
+isolated in the compatibility boundary and avoid all other deprecated entrypoints.
 
 ---
 
@@ -464,22 +471,26 @@ from new RPC methods.
 | `unstable_new_catalog_interface` | NOT applicable | — |
 | `unstable_instance_cache` | NOT applicable | — |
 | `unstable_new_append_functions` | NOT applicable | — |
-| `unstable_deprecated` | **DO NOT USE** | Avoid entirely |
+| `unstable_deprecated` | EXCEPTION | Pending-result streaming is isolated in `ducknng_duckdb_streaming_compat.c`; avoid all other deprecated entrypoints |
 
 ---
 
-## DuckDB async query surface (stable API)
+## DuckDB async query surface
 
-This section covers the DuckDB pending-query API, which is part of the stable v1.2.0 C
-API, not the unstable extension API. It is documented here because it intersects directly
-with `ducknng`'s session lifecycle and async dispatch model.
+This section covers DuckDB's pending-query API plus the single deprecated streaming
+exception that `ducknng` uses for incremental session fetches. It is documented here
+because it intersects directly with `ducknng`'s session lifecycle and async dispatch
+model.
 
 ### Pending query API
 
-**Functions (stable):** `duckdb_pending_prepared`, `duckdb_pending_prepared_streaming`,
-`duckdb_destroy_pending`, `duckdb_pending_error`, `duckdb_pending_execute_task`,
+**Functions (stable):** `duckdb_pending_prepared`, `duckdb_destroy_pending`,
+`duckdb_pending_error`, `duckdb_pending_execute_task`,
 `duckdb_pending_execute_check_state`, `duckdb_execute_pending`,
 `duckdb_pending_execution_is_finished`
+
+**Functions (deprecated streaming exception):** `duckdb_pending_prepared_streaming`,
+`duckdb_stream_fetch_chunk`
 
 **Task execution (stable):** `duckdb_execute_tasks`, `duckdb_create_task_state`,
 `duckdb_execute_tasks_state`, `duckdb_execute_n_tasks_state`, `duckdb_finish_execution`,
@@ -497,16 +508,30 @@ to a boolean.
 multi-threaded execution model where DuckDB task work is pumped by a thread pool that the
 caller controls.
 
-**Status: ADOPTED in session query lifecycle.**
+**Status: ADOPTED in session query lifecycle, with streaming isolated behind a compatibility boundary.**
 
 `ducknng_methods.c` uses this API in the `query_open` / `fetch` session flow:
 
-- `query_open` calls `duckdb_pending_prepared` on the final extracted statement,
-  creating a `duckdb_pending_result` that is stored on the `ducknng_session`.
+- `query_open` calls `ducknng_pending_prepared_for_session(...)`, implemented in
+  `src/ducknng_duckdb_streaming_compat.c`. On DuckDB versions that expose the current
+  pending-streaming C entrypoint, that wrapper calls `duckdb_pending_prepared_streaming`
+  so fetches can read rows incrementally. If deprecated C entrypoints are explicitly
+  disabled at compile time, the wrapper falls back to `duckdb_pending_prepared`.
 - The first `fetch` call drives execution by looping `duckdb_pending_execute_task` until
-  `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain a
-  streaming `duckdb_result`. Subsequent `fetch` calls read chunks with
-  `duckdb_fetch_chunk`.
+  `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain the
+  `duckdb_result`. Subsequent `fetch` calls read chunks through
+  `ducknng_result_fetch_session_chunk(...)`, which dispatches to `duckdb_stream_fetch_chunk`
+  for streaming results and to `duckdb_fetch_chunk` for fallback materialized results.
+
+This is the one deliberate exception to the repository's normal avoidance of deprecated
+DuckDB C entrypoints. Profiling showed the materialized pending-result path spending a
+large share of query-session time in `MaterializedQueryResult::FetchInternal` and
+`ColumnDataCollection::Scan` for 10M-row RPC fetches. After switching session fetches to
+the compatibility wrapper, the sampled path moves through `StreamQueryResult::FetchInternal`
+and DuckDB buffered/scan work instead. DuckDB v1.5.2 does not expose an undeprecated C API
+that combines pending execution with incremental result chunks, so the compatibility
+wrapper centralizes this version-sensitive choice and keeps the rest of the session code
+independent of the deprecated symbol.
 
 **Outstanding design question: cooperative vs. preemptive task dispatch.**
 
