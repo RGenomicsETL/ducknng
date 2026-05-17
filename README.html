@@ -626,7 +626,7 @@ extension and related Quack client work such as <a href="https://github.com/tobi
 and <a href="https://github.com/gizmodata/adbc-driver-quack"><code>adbc-driver-quack</code></a>.
 In ducknng today, that Quack-derived encoding is a row-payload mode
 inside the ducknng RPC/session protocol; it is not yet a full Quack
-<code>POST /quack</code> / <code>application/duckdb</code> server or
+<code>POST /quack</code> / <code>application/vnd.duckdb</code> server or
 client.</p>
 <h2 id="layer-map">Layer map</h2>
 <table>
@@ -2507,7 +2507,7 @@ transport choice separate from row serialization, so the same
 <code>tcp</code>, <code>ipc</code>, or <code>ws</code>. Version and
 schema compatibility belong to the negotiated ducknng session contract
 rather than to a suffix on the serializer token; full Quack protocol
-traffic uses <code>application/duckdb</code> messages and negotiates
+traffic uses <code>application/vnd.duckdb</code> messages and negotiates
 <code>quackVersion</code> during the connection exchange, but this fetch
 payload is not wrapped in that Quack connection envelope.
 <code>ducknng.fetch_batch_chunks</code> controls the default number of

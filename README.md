@@ -25,7 +25,7 @@ and related Quack client work such as
 [`adbc-driver-quack`](https://github.com/gizmodata/adbc-driver-quack).
 In ducknng today, that Quack-derived encoding is a row-payload mode
 inside the ducknng RPC/session protocol; it is not yet a full Quack
-`POST /quack` / `application/duckdb` server or client.
+`POST /quack` / `application/vnd.duckdb` server or client.
 
 ## Layer map
 
@@ -958,9 +958,9 @@ choice separate from row serialization, so the same
 `ducknng_quack_batch` mode can ride over `http`, `tcp`, `ipc`, or `ws`.
 Version and schema compatibility belong to the negotiated ducknng
 session contract rather than to a suffix on the serializer token; full
-Quack protocol traffic uses `application/duckdb` messages and negotiates
-`quackVersion` during the connection exchange, but this fetch payload is
-not wrapped in that Quack connection envelope.
+Quack protocol traffic uses `application/vnd.duckdb` messages and
+negotiates `quackVersion` during the connection exchange, but this fetch
+payload is not wrapped in that Quack connection envelope.
 `ducknng.fetch_batch_chunks` controls the default number of DuckDB
 chunks requested per fetch; it defaults to 12 and applies to Arrow IPC
 and `ducknng_quack_batch` alike unless the client sends an explicit

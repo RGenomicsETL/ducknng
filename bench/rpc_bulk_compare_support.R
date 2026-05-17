@@ -520,7 +520,7 @@ ducknng_bench_run_quack_http <- function(rows, repetitions, baselines,
     rows = rows,
     repetitions = repetitions,
     baselines = baselines,
-    serialization_mode = "application/duckdb"
+    serialization_mode = "application/vnd.duckdb"
   )
 }
 

@@ -5,13 +5,14 @@ client library. The goal is to make the wire format concrete enough that
 `ducknng` can later grow a real C implementation that decodes, encodes, and
 converts Quack messages to and from Arrow through nanoarrow C.
 
-The upstream sources inspected for this note are under `/tmp/duckdb-quack`:
-`src/quack_message.cpp`, `src/include/quack_message.hpp`,
-`src/serialize_quack_message.cpp`, `src/quack_server.cpp`,
-`src/quack_client.cpp`, `src/quack_http_server.cpp`, `src/quack_scan.cpp`,
-`src/storage/quack_insert.cpp`, `src/quack_start_stop.cpp`, and
-`src/quack_extension.cpp`. The serializer itself is DuckDB core code, not Quack
-code, so this note also uses `/tmp/duckdb-quack/duckdb/src/common/serializer/`,
+The upstream sources inspected for this note are under `/tmp/duckdb-quack` at
+commit `1693647` on branch `v1.5-variegata`: `src/quack_message.cpp`,
+`src/include/quack_message.hpp`, `src/serialize_quack_message.cpp`,
+`src/quack_server.cpp`, `src/quack_client.cpp`, `src/quack_http_server.cpp`,
+`src/quack_scan.cpp`, `src/storage/quack_insert.cpp`,
+`src/quack_start_stop.cpp`, and `src/quack_extension.cpp`. The serializer itself
+is DuckDB core code, not Quack code, so this note also uses
+`/tmp/duckdb-quack/duckdb/src/common/serializer/`,
 `duckdb/src/common/types/data_chunk.cpp`, `duckdb/src/common/types/vector.cpp`,
 `duckdb/src/common/types.cpp`, and
 `duckdb/src/storage/serialization/serialize_types.cpp`.
@@ -19,10 +20,12 @@ code, so this note also uses `/tmp/duckdb-quack/duckdb/src/common/serializer/`,
 ## What Quack is
 
 Quack is an HTTP-carried DuckDB RPC protocol. The current upstream server exposes
-`POST /quack` and uses `application/duckdb` bodies. The body is a DuckDB
-`BinarySerializer` byte stream containing one Quack message. There is no JSON
-inside the RPC path, no Arrow IPC inside the RPC path, and no outer Quack length
-prefix on HTTP: the HTTP request or response body is the message.
+`POST /quack` and returns `application/vnd.duckdb` response bodies. The body is a
+DuckDB `BinarySerializer` byte stream containing one Quack message. There is no
+JSON inside the RPC path, no Arrow IPC inside the RPC path, and no outer Quack
+length prefix on HTTP: the HTTP request or response body is the message. The
+inspected C++ server does not validate the request content type before reading the
+body.
 
 The endpoint is connection-oriented at the message layer. A client first sends a
 connection request with an authentication string. The server creates a
@@ -43,7 +46,7 @@ carries one `DataChunkWrapper` to append into a remote table.
 `HttpQuackServer` constructs a `duckdb_httplib::Server`, registers `POST /quack`,
 reads the full request body into a DuckDB `MemoryStream`, calls
 `QuackServer::HandleMessage`, serializes the response into the same stream, and
-sets the response content type to `application/duckdb`.
+sets the response content type to `application/vnd.duckdb`.
 
 The server also registers `GET /` as a human-readable informational endpoint and
 `OPTIONS /quack` for CORS. The server uses a 128-thread httplib pool,
@@ -52,15 +55,18 @@ Errors are usually protocol-level `ERROR_RESPONSE` messages rather than HTTP
 status errors.
 
 The client uses DuckDB `HTTPUtil`, builds the URL as `uri.Http() + "/quack"`,
-serializes the request to a `MemoryStream`, posts it, and deserializes the
-response body from the returned HTTP buffer. `QuackClientConnection` caches HTTP
-clients for a Quack connection and sends a `DISCONNECT_MESSAGE` from its
-destructor when possible.
+serializes the request to a `MemoryStream`, posts it with default HTTP headers in
+the inspected code, and deserializes the response body from the returned HTTP
+buffer. `QuackClientConnection` caches HTTP clients for a Quack connection and
+sends a `DISCONNECT_MESSAGE` from its destructor when possible.
 
 Quack URIs have the `quack:` scheme and default to port 9494. The URI parser
 also tolerates `quack://` by normalizing it to `quack:`. A server listens without
 SSL; clients enable HTTPS for non-local URIs unless disabled. The HTTP URL
 materialized from a Quack URI is `http://host:port` or `https://host:port`.
+`quack_serve` now throws `NotImplementedException` on `__EMSCRIPTEN__`, so the
+upstream extension currently supports connecting to existing endpoints on wasm but
+not starting a Quack server there.
 
 ## Message byte layout
 
@@ -578,9 +584,9 @@ For append support, the encoder wraps one encoded `DataChunk` in
 ### Layer 6: Quack HTTP adapter
 
 The protocol codec should stay transport-independent. A small HTTP adapter can
-then implement upstream-compatible `POST /quack` with `application/duckdb` and
-map decoded messages to `ducknng` server/session operations, or implement a
-client helper that sends Quack messages to an upstream Quack server.
+then implement upstream-compatible `POST /quack` and return `application/vnd.duckdb`
+responses while mapping decoded messages to `ducknng` server/session operations,
+or implement a client helper that sends Quack messages to an upstream Quack server.
 
 ## Compatibility and version policy
 
