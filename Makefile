@@ -1,4 +1,6 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r rpc_bench rpc_bulk_compare http_smoke subscriber_gateway_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r
+.PHONY: rpc_bench rpc_bulk_compare http_smoke subscriber_gateway_rdm
+.PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -8,6 +10,82 @@ http_smoke: release
 
 subscriber_gateway_rdm: release
 	R -e "rmarkdown::render('demo/subscriber_gateway.Rmd')"
+
+PROP_CC ?= cc
+PROP_TRIALS ?= 1000
+PROP_QUICK_TRIALS ?= 200
+PROP_SEED ?= 0xd17c0ffee1234567
+PROP_BIN := test/bin/ducknng_prop
+PROP_ASAN_BIN := test/bin/ducknng_prop_asan
+PROP_UBSAN_BIN := test/bin/ducknng_prop_ubsan
+PROP_DUCKNNG_SRCS := \
+	src/ducknng_wire.c \
+	src/ducknng_transport.c \
+	src/ducknng_util.c \
+	src/ducknng_quack.c
+PROP_THEFT_SRCS := $(wildcard test/vendor/theft/src/*.c)
+PROP_SRCS := test/property/ducknng_prop.c $(PROP_DUCKNNG_SRCS) $(PROP_THEFT_SRCS)
+PROP_HDRS := \
+	$(wildcard test/vendor/greatest/*.h) \
+	$(wildcard test/vendor/theft/inc/*.h) \
+	$(wildcard test/vendor/theft/src/*.h) \
+	$(wildcard src/include/*.h) \
+	$(wildcard duckdb_capi/*.h)
+PROP_COMMON_CFLAGS := \
+	-std=c99 -g -O1 -Wall -Wextra -Wno-unused-function -D_DEFAULT_SOURCE \
+	-DDUCKDB_EXTENSION_API_VERSION_MAJOR=1 \
+	-DDUCKDB_EXTENSION_API_VERSION_MINOR=5 \
+	-DDUCKDB_EXTENSION_API_VERSION_PATCH=2 \
+	-DDUCKDB_EXTENSION_API_VERSION_UNSTABLE=v1.5.2 \
+	-DTHEFT_USE_FLOATING_POINT=0 \
+	-ffunction-sections -fdata-sections \
+	-Itest/vendor/greatest \
+	-Itest/vendor/theft/inc \
+	-Itest/vendor/theft/src \
+	-Isrc/include \
+	-Iduckdb_capi \
+	-Ithird_party/nng/include
+PROP_COMMON_LDFLAGS := -Wl,--gc-sections -pthread
+
+$(PROP_BIN): $(PROP_SRCS) $(PROP_HDRS) Makefile | test/bin
+	$(PROP_CC) $(PROP_COMMON_CFLAGS) $(PROP_CFLAGS_EXTRA) $(PROP_SRCS) \
+		$(PROP_COMMON_LDFLAGS) $(PROP_LDFLAGS_EXTRA) -o $@
+
+$(PROP_ASAN_BIN): $(PROP_SRCS) $(PROP_HDRS) Makefile | test/bin
+	$(PROP_CC) $(PROP_COMMON_CFLAGS) -O1 -fsanitize=address \
+		-fno-omit-frame-pointer $(PROP_SRCS) $(PROP_COMMON_LDFLAGS) \
+		-fsanitize=address -o $@
+
+$(PROP_UBSAN_BIN): $(PROP_SRCS) $(PROP_HDRS) Makefile | test/bin
+	$(PROP_CC) $(PROP_COMMON_CFLAGS) -O1 -fsanitize=undefined \
+		-fno-omit-frame-pointer $(PROP_SRCS) $(PROP_COMMON_LDFLAGS) \
+		-fsanitize=undefined -o $@
+
+test/bin:
+	mkdir -p test/bin
+
+prop: $(PROP_BIN)
+	DUCKNNG_PROP_TRIALS=$(PROP_TRIALS) DUCKNNG_PROP_SEED=$(PROP_SEED) $(PROP_BIN)
+
+prop-quick: $(PROP_BIN)
+	DUCKNNG_PROP_TRIALS=$(PROP_QUICK_TRIALS) DUCKNNG_PROP_SEED=$(PROP_SEED) $(PROP_BIN)
+
+prop-regression: prop
+
+prop-asan: $(PROP_ASAN_BIN)
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+		DUCKNNG_PROP_TRIALS=$(PROP_TRIALS) DUCKNNG_PROP_SEED=$(PROP_SEED) \
+		$(PROP_ASAN_BIN)
+
+prop-ubsan: $(PROP_UBSAN_BIN)
+	UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1 \
+		DUCKNNG_PROP_TRIALS=$(PROP_TRIALS) DUCKNNG_PROP_SEED=$(PROP_SEED) \
+		$(PROP_UBSAN_BIN)
+
+prop-sanitize: prop-asan prop-ubsan
+
+prop-clean:
+	rm -f $(PROP_BIN) $(PROP_ASAN_BIN) $(PROP_UBSAN_BIN)
 
 check_news:
 ifdef BASE
