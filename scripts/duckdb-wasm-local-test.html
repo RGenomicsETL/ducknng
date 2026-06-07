@@ -163,9 +163,9 @@
           Run ad hoc SQL after setup. Results are rendered as a table, while the left log
           keeps the full setup and query transcript.
         </p>
-        <textarea id="sql">SELECT codec_name, media_types
+        <textarea id="sql">SELECT function_name, media_types
 FROM ducknng_list_codecs()
-ORDER BY codec_name
+ORDER BY function_name
 LIMIT 8;</textarea>
         <div class="controls">
           <button id="run-sql" disabled>Run SQL</button>
@@ -223,9 +223,9 @@ LIMIT 8;</textarea>
     const duckdbExtensionRelativePath = "duckdb-wasm/ducknng.duckdb_extension.wasm";
 
     const examples = {
-      codecs: `SELECT codec_name, media_types
+      codecs: `SELECT function_name, media_types
 FROM ducknng_list_codecs()
-ORDER BY codec_name
+ORDER BY function_name
 LIMIT 8;`,
       versions: `SELECT version() AS duckdb_version,
        ducknng_nng_version() AS nng_version;`,
