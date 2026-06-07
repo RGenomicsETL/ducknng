@@ -1687,7 +1687,8 @@ static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context
         return -1;
     }
     /* User-registered codecs take precedence over built-in providers so a
-     * deployment can override application/json or text/* with its own scalar. */
+     * deployment can override application/json or text wildcard media types with
+     * its own scalar. */
     user_fn = ctx && ctx->rt ? ducknng_runtime_find_user_codec(ctx->rt, bind->media_type) : NULL;
     if (user_fn) {
         bind->codec_kind = DUCKNNG_BODY_CODEC_USER;

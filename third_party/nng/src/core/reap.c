@@ -14,6 +14,29 @@
 
 #include <stdbool.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <stdio.h>
+#endif
+
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	fprintf(stderr, "[ducknng nng wasm trace] %s\n", where ? where : "(null)");
+	fflush(stderr);
+}
+#else
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	NNI_ARG_UNUSED(where);
+#if defined(__EMSCRIPTEN__)
+	__asm__ __volatile__("" ::: "memory");
+	fflush(stderr);
+#endif
+}
+#endif
+
 // New stuff.
 static nni_reap_list *reap_list = NULL;
 static nni_thr        reap_thr;
@@ -28,6 +51,7 @@ reap_worker(void *unused)
 {
 	NNI_ARG_UNUSED(unused);
 	nni_thr_set_name(NULL, "nng:reap2");
+	ducknng_nng_wasm_trace("reap: worker entered");
 
 	nni_mtx_lock(&reap_mtx);
 	for (;;) {
@@ -107,9 +131,11 @@ nni_reap_sys_init(void)
 
 	// If this fails, we don't fail init, instead we will try to
 	// start up at reap time.
+	ducknng_nng_wasm_trace("reap: thread init begin");
 	if ((rv = nni_thr_init(&reap_thr, reap_worker, NULL)) != 0) {
 		return (rv);
 	}
+	ducknng_nng_wasm_trace("reap: thread run begin");
 	nni_thr_run(&reap_thr);
 	return (0);
 }

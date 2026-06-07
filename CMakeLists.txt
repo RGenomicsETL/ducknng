@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16...3.29)
 option(DUCKDB_WASM_EXTENSION "Whether compiling for Wasm target" OFF)
+option(DUCKNNG_WASM_TRACE "Emit diagnostic trace messages from wasm transport probes" OFF)
+option(DUCKNNG_WASM_INPROC_ONLY "Limit NNG's browser wasm transport footprint to inproc" ON)
 
 if(NOT DEFINED EXTENSION_NAME)
     message(FATAL_ERROR "DuckDB extension name is required")
@@ -37,11 +39,21 @@ set(NNG_TOOLS OFF CACHE BOOL "" FORCE)
 set(NNG_ENABLE_HTTP ON CACHE BOOL "" FORCE)
 set(NNG_ENABLE_TLS ON CACHE BOOL "" FORCE)
 set(NNG_TLS_ENGINE "mbed" CACHE STRING "" FORCE)
-set(NNG_TRANSPORT_IPC ON CACHE BOOL "" FORCE)
-set(NNG_TRANSPORT_TCP ON CACHE BOOL "" FORCE)
-set(NNG_TRANSPORT_TLS ON CACHE BOOL "" FORCE)
-set(NNG_TRANSPORT_WS ON CACHE BOOL "" FORCE)
-set(NNG_TRANSPORT_WSS ON CACHE BOOL "" FORCE)
+set(NNG_TRANSPORT_INPROC ON CACHE BOOL "" FORCE)
+if (DUCKDB_WASM_EXTENSION AND DUCKNNG_WASM_INPROC_ONLY)
+    set(NNG_TRANSPORT_IPC OFF CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_TCP OFF CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_TLS OFF CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_WS OFF CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_WSS OFF CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_FDC OFF CACHE BOOL "" FORCE)
+else()
+    set(NNG_TRANSPORT_IPC ON CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_TCP ON CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_TLS ON CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_WS ON CACHE BOOL "" FORCE)
+    set(NNG_TRANSPORT_WSS ON CACHE BOOL "" FORCE)
+endif()
 set(NNG_PROTO_BUS0 ON CACHE BOOL "" FORCE)
 set(NNG_PROTO_PAIR0 ON CACHE BOOL "" FORCE)
 set(NNG_PROTO_PAIR1 ON CACHE BOOL "" FORCE)
@@ -55,6 +67,29 @@ set(NNG_PROTO_RESPONDENT0 ON CACHE BOOL "" FORCE)
 set(NNG_PROTO_SURVEYOR0 ON CACHE BOOL "" FORCE)
 
 add_subdirectory(third_party/nng EXCLUDE_FROM_ALL)
+
+if (DUCKDB_WASM_EXTENSION)
+    foreach(DUCKNNG_WASM_DEP_TARGET nng mbedtls mbedx509 mbedcrypto)
+        if (TARGET ${DUCKNNG_WASM_DEP_TARGET})
+            target_compile_definitions(${DUCKNNG_WASM_DEP_TARGET} PRIVATE
+                DUCKNNG_WASM_DUCKDB_RUNTIME=1)
+            if (DUCKNNG_WASM_INPROC_ONLY)
+                target_compile_definitions(${DUCKNNG_WASM_DEP_TARGET} PRIVATE
+                    DUCKNNG_WASM_INPROC_ONLY=1)
+            endif()
+            if (DUCKNNG_WASM_TRACE)
+                target_compile_definitions(${DUCKNNG_WASM_DEP_TARGET} PRIVATE
+                    DUCKNNG_WASM_TRACE=1)
+            endif()
+            target_compile_options(${DUCKNNG_WASM_DEP_TARGET} PRIVATE
+                -fwasm-exceptions
+                -include ${CMAKE_SOURCE_DIR}/src/include/ducknng_wasm_compat.h)
+            if (DUCKNNG_DUCKDB_WASM_PLATFORM STREQUAL "wasm_threads")
+                target_compile_options(${DUCKNNG_WASM_DEP_TARGET} PRIVATE -pthread)
+            endif()
+        endif()
+    endforeach()
+endif()
 
 set(EXTENSION_SOURCES
     src/ducknng_extension.c
@@ -102,6 +137,23 @@ set(EXTENSION_SOURCES
 
 if (DUCKDB_WASM_EXTENSION)
     add_library(${EXTENSION_NAME} STATIC ${EXTENSION_SOURCES})
+    target_compile_definitions(${EXTENSION_NAME} PRIVATE
+        DUCKNNG_WASM_DUCKDB_RUNTIME=1)
+    if (DUCKNNG_WASM_INPROC_ONLY)
+        target_compile_definitions(${EXTENSION_NAME} PRIVATE
+            DUCKNNG_WASM_INPROC_ONLY=1)
+    endif()
+    if (DUCKNNG_DUCKDB_WASM_PLATFORM STREQUAL "wasm_eh" OR
+        DUCKNNG_DUCKDB_WASM_PLATFORM STREQUAL "wasm_threads")
+        target_compile_options(${EXTENSION_NAME} PRIVATE
+            -fwasm-exceptions
+            -include ${CMAKE_SOURCE_DIR}/src/include/ducknng_wasm_compat.h)
+    endif()
+    if (DUCKNNG_DUCKDB_WASM_PLATFORM STREQUAL "wasm_threads")
+        target_compile_options(${EXTENSION_NAME} PRIVATE -pthread)
+        target_compile_definitions(${EXTENSION_NAME} PRIVATE
+            DUCKNNG_WASM_THREADS_RUNTIME=1)
+    endif()
 else()
     add_library(${EXTENSION_NAME} SHARED ${EXTENSION_SOURCES})
 endif()
@@ -110,7 +162,9 @@ set_target_properties(${EXTENSION_NAME} PROPERTIES
     C_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -s")
+if (NOT DUCKDB_WASM_EXTENSION)
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -s")
+endif()
 
 target_include_directories(${EXTENSION_NAME} PRIVATE
     src/include
@@ -124,7 +178,18 @@ target_compile_definitions(${EXTENSION_NAME} PRIVATE
     NANOARROW_NAMESPACE=DucknngNanoarrow
 )
 
-target_link_libraries(${EXTENSION_NAME} PRIVATE
-    $<LINK_LIBRARY:WHOLE_ARCHIVE,nng>
-    Threads::Threads)
 find_package(Threads REQUIRED)
+if (DUCKDB_WASM_EXTENSION AND DUCKNNG_WASM_TRACE)
+    target_compile_definitions(${EXTENSION_NAME} PRIVATE DUCKNNG_WASM_TRACE=1)
+endif()
+
+if (DUCKDB_WASM_EXTENSION)
+    target_link_libraries(${EXTENSION_NAME} PRIVATE Threads::Threads)
+    add_dependencies(${EXTENSION_NAME} nng mbedtls mbedx509 mbedcrypto)
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/wasm_link_inputs.rsp" CONTENT
+        "$<TARGET_FILE:nng>\n$<TARGET_FILE:mbedtls>\n$<TARGET_FILE:mbedx509>\n$<TARGET_FILE:mbedcrypto>\n")
+else()
+    target_link_libraries(${EXTENSION_NAME} PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,nng>
+        Threads::Threads)
+endif()

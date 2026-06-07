@@ -6,8 +6,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/threading.h>
+#endif
 
 DUCKDB_EXTENSION_EXTERN
+
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void ducknng_socket_wasm_trace(const char *where) {
+    fprintf(stderr, "[ducknng wasm trace] %s\n", where ? where : "(null)");
+    fflush(stderr);
+}
+#else
+static void ducknng_socket_wasm_trace(const char *where) {
+    (void)where;
+    /* Browser pthread side modules need small progress points around NNG
+     * socket/listener operations even when diagnostic trace text is disabled. */
+#if defined(__EMSCRIPTEN__)
+    __asm__ __volatile__("" ::: "memory");
+    fflush(stderr);
+#if defined(DUCKNNG_WASM_INPROC_ONLY) && DUCKNNG_WASM_INPROC_ONLY
+    emscripten_thread_sleep(1.0);
+#endif
+#endif
+}
+#endif
 
 typedef struct {
     uint64_t socket_id;
@@ -327,13 +350,18 @@ static void ducknng_socket_scalar(duckdb_function_info info, duckdb_data_chunk i
             goto emit;
         }
         sock->cv_initialized = 1;
+        ducknng_socket_wasm_trace("open_socket: nng socket open begin");
         if (ducknng_socket_open_protocol(sock->protocol, &sock->sock, &errmsg) != 0) {
+            ducknng_socket_wasm_trace("open_socket: nng socket open failed");
             ducknng_client_socket_destroy(sock);
             ducknng_socket_result_take_error(&result, errmsg, "ducknng: failed to open socket protocol");
             errmsg = NULL;
             goto emit;
         }
+        ducknng_socket_wasm_trace("open_socket: nng socket open returned");
+        ducknng_socket_wasm_trace("open_socket: ctx open begin");
         rv = ducknng_ctx_open(&sock->ctx, sock->sock);
+        ducknng_socket_wasm_trace("open_socket: ctx open returned");
         if (rv == 0) {
             sock->has_ctx = 1;
         } else if (rv != NNG_ENOTSUP) {
@@ -344,6 +372,7 @@ static void ducknng_socket_scalar(duckdb_function_info info, duckdb_data_chunk i
             goto emit;
         }
         sock->open = 1;
+        ducknng_socket_wasm_trace("open_socket: runtime add socket begin");
         if (ducknng_runtime_add_client_socket(ctx->rt, sock, &errmsg) != 0) {
             if (sock->has_ctx) {
                 ducknng_ctx_close(sock->ctx);
@@ -358,6 +387,7 @@ static void ducknng_socket_scalar(duckdb_function_info info, duckdb_data_chunk i
             errmsg = NULL;
             goto emit;
         }
+        ducknng_socket_wasm_trace("open_socket: runtime add socket returned");
         result.ok = true;
         result.socket_id = sock->socket_id;
 emit:
@@ -417,9 +447,17 @@ static void ducknng_dial_scalar(duckdb_function_info info, duckdb_data_chunk inp
             ducknng_socket_result_set_error(&result, "ducknng: socket is already dialed");
             goto emit;
         }
+        ducknng_socket_wasm_trace("dial_socket: set timeout begin");
         rv = ducknng_socket_set_timeout_ms(sock->sock, timeout_ms, timeout_ms);
-        if (rv == 0) rv = ducknng_socket_apply_tls(sock->sock, url, tls_opts);
-        if (rv == 0) rv = ducknng_socket_dial(sock->sock, url);
+        if (rv == 0) {
+            ducknng_socket_wasm_trace("dial_socket: apply tls begin");
+            rv = ducknng_socket_apply_tls(sock->sock, url, tls_opts);
+        }
+        if (rv == 0) {
+            ducknng_socket_wasm_trace("dial_socket: blocking dial begin");
+            rv = ducknng_socket_dial(sock->sock, url);
+            ducknng_socket_wasm_trace("dial_socket: blocking dial returned");
+        }
         if (rv == 0) {
             if (sock->url) duckdb_free(sock->url);
             sock->url = url;
@@ -449,12 +487,18 @@ static void ducknng_listen_scalar(duckdb_function_info info, duckdb_data_chunk i
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    ducknng_socket_wasm_trace("listen_socket: function entered");
     if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
     for (row = 0; row < count; row++) {
+        ducknng_socket_wasm_trace("listen_socket: row begin");
         uint64_t socket_id = arg_u64(duckdb_data_chunk_get_vector(input, 0), row, 0);
+        ducknng_socket_wasm_trace("listen_socket: arg socket id read");
         char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        ducknng_socket_wasm_trace("listen_socket: arg url read");
         uint64_t recv_max_bytes = arg_u64(duckdb_data_chunk_get_vector(input, 2), row, 0);
+        ducknng_socket_wasm_trace("listen_socket: arg recvmax read");
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 3), row, 0);
+        ducknng_socket_wasm_trace("listen_socket: arg tls id read");
         const ducknng_tls_opts *tls_opts = NULL;
         ducknng_client_socket *sock;
         char *errmsg = NULL;
@@ -466,26 +510,35 @@ static void ducknng_listen_scalar(duckdb_function_info info, duckdb_data_chunk i
         ducknng_socket_result_init(&result);
         result.socket_id = socket_id;
         memset(&lst, 0, sizeof(lst));
+        ducknng_socket_wasm_trace("listen_socket: scalar begin");
         if (!ctx || !ctx->rt || socket_id == 0 || !url) {
             ducknng_socket_result_set_error(&result, "ducknng: socket id and URL are required");
             goto emit;
         }
+        ducknng_socket_wasm_trace("listen_socket: tls lookup begin");
         if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
             ducknng_socket_result_take_error(&result, errmsg, "ducknng: tls config not found");
             errmsg = NULL;
             goto emit;
         }
+        ducknng_socket_wasm_trace("listen_socket: tls lookup returned");
+        ducknng_socket_wasm_trace("listen_socket: validate url begin");
         if (ducknng_listener_validate_startup_url(url, tls_opts, &errmsg) != 0) {
             ducknng_socket_result_take_error(&result, errmsg, "ducknng: invalid listen URL");
             errmsg = NULL;
             goto emit;
         }
+        ducknng_socket_wasm_trace("listen_socket: validate url returned");
+        ducknng_socket_wasm_trace("listen_socket: acquire socket begin");
         sock = ducknng_runtime_acquire_client_socket(ctx->rt, socket_id);
+        ducknng_socket_wasm_trace("listen_socket: acquire socket returned");
         if (!sock) {
             ducknng_socket_result_set_error(&result, "ducknng: client socket not found");
             goto emit;
         }
+        ducknng_socket_wasm_trace("listen_socket: socket mutex lock begin");
         ducknng_mutex_lock(&sock->mu);
+        ducknng_socket_wasm_trace("listen_socket: socket mutex lock returned");
         if (!sock->open) {
             ducknng_mutex_unlock(&sock->mu);
             ducknng_runtime_release_client_socket(sock);
@@ -498,11 +551,25 @@ static void ducknng_listen_scalar(duckdb_function_info info, duckdb_data_chunk i
             ducknng_socket_result_set_error(&result, "ducknng: socket is already listening");
             goto emit;
         }
+        ducknng_socket_wasm_trace("listen_socket: listener create begin");
         rv = ducknng_listener_create(&lst, sock->sock, url);
+        ducknng_socket_wasm_trace("listen_socket: listener create returned");
         if (rv == 0) listener_created = 1;
-        if (rv == 0 && recv_max_bytes > 0) rv = ducknng_listener_set_recvmaxsz(lst, (size_t)recv_max_bytes);
-        if (rv == 0) rv = ducknng_listener_apply_tls(lst, tls_opts);
-        if (rv == 0) rv = ducknng_listener_start(lst);
+        if (rv == 0 && recv_max_bytes > 0) {
+            ducknng_socket_wasm_trace("listen_socket: set recvmax begin");
+            rv = ducknng_listener_set_recvmaxsz(lst, (size_t)recv_max_bytes);
+            ducknng_socket_wasm_trace("listen_socket: set recvmax returned");
+        }
+        if (rv == 0) {
+            ducknng_socket_wasm_trace("listen_socket: apply tls begin");
+            rv = ducknng_listener_apply_tls(lst, tls_opts);
+            ducknng_socket_wasm_trace("listen_socket: apply tls returned");
+        }
+        if (rv == 0) {
+            ducknng_socket_wasm_trace("listen_socket: listener start begin");
+            rv = ducknng_listener_start(lst);
+            ducknng_socket_wasm_trace("listen_socket: listener start returned");
+        }
         if (rv == 0) {
             resolved_url = ducknng_listener_resolve_url(lst, url);
             if (sock->listen_url) duckdb_free(sock->listen_url);
@@ -593,9 +660,12 @@ static void ducknng_send_scalar(duckdb_function_info info, duckdb_data_chunk inp
             goto emit;
         }
         ducknng_mutex_lock(&sock->mu);
+        ducknng_socket_wasm_trace("send_socket_raw: set timeout begin");
         rv = ducknng_socket_set_timeout_ms(sock->sock, timeout_ms, sock->recv_timeout_ms);
         if (rv == 0) {
+            ducknng_socket_wasm_trace("send_socket_raw: send begin");
             rv = ducknng_socket_send(sock->sock, msg);
+            ducknng_socket_wasm_trace("send_socket_raw: send returned");
             if (rv == 0) msg = NULL;
         }
         if (rv == 0) {
@@ -643,8 +713,13 @@ static void ducknng_recv_scalar(duckdb_function_info info, duckdb_data_chunk inp
             goto emit;
         }
         ducknng_mutex_lock(&sock->mu);
+        ducknng_socket_wasm_trace("recv_socket_raw: set timeout begin");
         rv = ducknng_socket_set_timeout_ms(sock->sock, sock->send_timeout_ms, timeout_ms);
-        if (rv == 0) rv = ducknng_socket_recv(sock->sock, &msg);
+        if (rv == 0) {
+            ducknng_socket_wasm_trace("recv_socket_raw: recv begin");
+            rv = ducknng_socket_recv(sock->sock, &msg);
+            ducknng_socket_wasm_trace("recv_socket_raw: recv returned");
+        }
         if (rv == 0) sock->recv_timeout_ms = timeout_ms;
         ducknng_mutex_unlock(&sock->mu);
         ducknng_runtime_release_client_socket(sock);
