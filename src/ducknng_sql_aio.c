@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/threading.h>
+#endif
 
 DUCKDB_EXTENSION_EXTERN
 
@@ -196,24 +199,46 @@ static void destroy_aio_collect_init_data(void *ptr) {
     if (data) duckdb_free(data);
 }
 
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void ducknng_wasm_trace(const char *where) {
+    fprintf(stderr, "[ducknng wasm trace] %s\n", where ? where : "(null)");
+    fflush(stderr);
+}
+#else
+static void ducknng_wasm_trace(const char *where) {
+    (void)where;
+#if defined(__EMSCRIPTEN__)
+    __asm__ __volatile__("" ::: "memory");
+    fflush(stderr);
+#if defined(DUCKNNG_WASM_INPROC_ONLY) && DUCKNNG_WASM_INPROC_ONLY
+    emscripten_thread_sleep(1.0);
+#endif
+#endif
+}
+#endif
+
 static int ducknng_client_open_req_socket_tls(const char *url, int timeout_ms, const ducknng_tls_opts *tls_opts, nng_socket *out, char **errmsg) {
     int rv;
     if (!url || !url[0] || !out) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: client URL is required");
         return -1;
     }
+    ducknng_wasm_trace("open_req_socket_tls: validate begin");
     if (ducknng_socket_validate_client_url(url, tls_opts, errmsg) != 0) return -1;
+    ducknng_wasm_trace("open_req_socket_tls: req open begin");
     rv = ducknng_req_socket_open(out);
     if (rv != 0) {
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         return -1;
     }
+    ducknng_wasm_trace("open_req_socket_tls: set timeout begin");
     rv = ducknng_socket_set_timeout_ms(*out, timeout_ms, timeout_ms);
     if (rv != 0) {
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         ducknng_socket_close(*out);
         return -1;
     }
+    ducknng_wasm_trace("open_req_socket_tls: apply tls begin");
     rv = ducknng_socket_apply_tls(*out, url, tls_opts);
     if (rv != 0) {
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
@@ -223,7 +248,9 @@ static int ducknng_client_open_req_socket_tls(const char *url, int timeout_ms, c
     /* Launch must not block on the first dial attempt. The request AIO itself
      * remains the one user-visible future, while NNG retries the initial
      * connection attempt in the background. */
+    ducknng_wasm_trace("open_req_socket_tls: nonblocking dial begin");
     rv = ducknng_socket_dial_nonblocking(*out, url);
+    ducknng_wasm_trace("open_req_socket_tls: nonblocking dial returned");
     if (rv != 0) {
         if (errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         ducknng_socket_close(*out);
@@ -322,6 +349,7 @@ static void ducknng_client_aio_cb(void *arg) {
     ducknng_client_aio *slot = (ducknng_client_aio *)arg;
     ducknng_runtime *rt;
     int rv;
+    ducknng_wasm_trace("client_aio_cb: entered");
     if (!slot || !(rt = slot->rt) || !slot->aio) return;
     rv = ducknng_aio_result(slot->aio);
     ducknng_mutex_lock(&rt->mu);
@@ -447,11 +475,14 @@ static ducknng_client_aio *ducknng_client_aio_alloc_slot(ducknng_runtime *rt, in
     slot->send_result = -1;
     slot->recv_result = -1;
     slot->started_ms = ducknng_now_ms();
+    ducknng_wasm_trace("client_aio_alloc_slot: nng aio alloc begin");
     if (ducknng_aio_alloc(&slot->aio, ducknng_client_aio_cb, slot, timeout_ms) != 0) {
+        ducknng_wasm_trace("client_aio_alloc_slot: nng aio alloc failed");
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: failed to allocate nng aio");
         duckdb_free(slot);
         return NULL;
     }
+    ducknng_wasm_trace("client_aio_alloc_slot: nng aio alloc returned");
     return slot;
 }
 
@@ -502,13 +533,17 @@ static ducknng_client_aio *ducknng_client_prepare_url_aio(ducknng_runtime *rt, c
     ducknng_client_aio *slot = ducknng_client_aio_alloc_slot(rt, timeout_ms, errmsg);
     int rv;
     if (!slot) return NULL;
+    ducknng_wasm_trace("prepare_url_aio: open req socket begin");
     if (ducknng_client_open_req_socket_tls(url, timeout_ms, tls_opts, &slot->sock, errmsg) != 0) {
         ducknng_client_aio_destroy(slot);
         return NULL;
     }
+    ducknng_wasm_trace("prepare_url_aio: open req socket returned");
     slot->owns_socket = 1;
     slot->open = 1;
+    ducknng_wasm_trace("prepare_url_aio: ctx open begin");
     rv = ducknng_ctx_open(&slot->ctx, slot->sock);
+    ducknng_wasm_trace("prepare_url_aio: ctx open returned");
     if (rv != 0) {
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
         ducknng_client_aio_destroy(slot);
@@ -559,17 +594,21 @@ static ducknng_client_aio *ducknng_client_prepare_socket_raw_aio(ducknng_runtime
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: active client socket is required for aio socket operation");
         return NULL;
     }
+    ducknng_wasm_trace("prepare_socket_raw_aio: acquire socket begin");
     sock = ducknng_runtime_acquire_client_socket(rt, socket_id);
+    ducknng_wasm_trace("prepare_socket_raw_aio: acquire socket returned");
     if (!ducknng_socket_is_active(sock)) {
         if (sock) ducknng_runtime_release_client_socket(sock);
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: active client socket is required for aio socket operation");
         return NULL;
     }
+    ducknng_wasm_trace("prepare_socket_raw_aio: aio slot alloc begin");
     slot = ducknng_client_aio_alloc_slot(rt, timeout_ms, errmsg);
     if (!slot) {
         ducknng_runtime_release_client_socket(sock);
         return NULL;
     }
+    ducknng_wasm_trace("prepare_socket_raw_aio: aio slot alloc returned");
     slot->socket_ref = sock;
     slot->sock = sock->sock;
     slot->socket_id = sock->socket_id;
@@ -582,15 +621,20 @@ static int ducknng_client_launch_request_aio(ducknng_runtime *rt, ducknng_client
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing aio launch state");
         return -1;
     }
+    ducknng_wasm_trace("launch_request_aio: add runtime aio begin");
     if (ducknng_runtime_add_client_aio(rt, slot, errmsg) != 0) {
         nng_msg_free(req);
         ducknng_client_aio_destroy(slot);
         return -1;
     }
+    ducknng_wasm_trace("launch_request_aio: add runtime aio returned");
     slot->kind = DUCKNNG_CLIENT_AIO_KIND_REQUEST;
     slot->phase = DUCKNNG_CLIENT_AIO_PHASE_SEND;
+    ducknng_wasm_trace("launch_request_aio: set msg begin");
     ducknng_aio_set_msg(slot->aio, req);
+    ducknng_wasm_trace("launch_request_aio: ctx send aio begin");
     ducknng_ctx_send_aio(slot->ctx, slot->aio);
+    ducknng_wasm_trace("launch_request_aio: ctx send aio returned");
     return 0;
 }
 
@@ -600,15 +644,20 @@ static int ducknng_client_launch_socket_send_aio(ducknng_runtime *rt, ducknng_cl
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing aio send state");
         return -1;
     }
+    ducknng_wasm_trace("launch_socket_send_aio: add runtime aio begin");
     if (ducknng_runtime_add_client_aio(rt, slot, errmsg) != 0) {
         nng_msg_free(msg);
         ducknng_client_aio_destroy(slot);
         return -1;
     }
+    ducknng_wasm_trace("launch_socket_send_aio: add runtime aio returned");
     slot->kind = DUCKNNG_CLIENT_AIO_KIND_SEND;
     slot->phase = DUCKNNG_CLIENT_AIO_PHASE_SEND;
+    ducknng_wasm_trace("launch_socket_send_aio: set msg begin");
     ducknng_aio_set_msg(slot->aio, msg);
+    ducknng_wasm_trace("launch_socket_send_aio: socket send aio begin");
     ducknng_socket_send_aio(slot->sock, slot->aio);
+    ducknng_wasm_trace("launch_socket_send_aio: socket send aio returned");
     return 0;
 }
 
@@ -617,13 +666,17 @@ static int ducknng_client_launch_socket_recv_aio(ducknng_runtime *rt, ducknng_cl
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing aio recv state");
         return -1;
     }
+    ducknng_wasm_trace("launch_socket_recv_aio: add runtime aio begin");
     if (ducknng_runtime_add_client_aio(rt, slot, errmsg) != 0) {
         ducknng_client_aio_destroy(slot);
         return -1;
     }
+    ducknng_wasm_trace("launch_socket_recv_aio: add runtime aio returned");
     slot->kind = DUCKNNG_CLIENT_AIO_KIND_RECV;
     slot->phase = DUCKNNG_CLIENT_AIO_PHASE_RECV;
+    ducknng_wasm_trace("launch_socket_recv_aio: socket recv aio begin");
     ducknng_socket_recv_aio(slot->sock, slot->aio);
+    ducknng_wasm_trace("launch_socket_recv_aio: socket recv aio returned");
     return 0;
 }
 
@@ -633,19 +686,23 @@ static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const
     ducknng_transport_url parsed;
     ducknng_client_aio *slot = NULL;
     if (out_aio_id) *out_aio_id = 0;
+    ducknng_wasm_trace("launch_url_request_aio: begin");
     if (!ctx || !ctx->rt || !url || !req) {
         if (req) nng_msg_free(req);
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing async RPC request state");
         return -1;
     }
+    ducknng_wasm_trace("launch_url_request_aio: parse url begin");
     if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) {
         nng_msg_free(req);
         return -1;
     }
+    ducknng_wasm_trace("launch_url_request_aio: lookup tls begin");
     if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, errmsg) != 0) {
         nng_msg_free(req);
         return -1;
     }
+    ducknng_wasm_trace("launch_url_request_aio: transport dispatch begin");
     if (ducknng_transport_url_is_http(&parsed)) {
         slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
         if (!slot) {
@@ -721,12 +778,14 @@ static int ducknng_client_launch_ncurl_aio(ducknng_sql_context *ctx, const char 
 
 
 static void ducknng_request_raw_aio_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    ducknng_wasm_trace("request_raw_aio: function entered");
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
     if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
     uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
     for (row = 0; row < count; row++) {
+        ducknng_wasm_trace("request_raw_aio: row begin");
         char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
         idx_t payload_len = 0;
         uint8_t *payload = arg_blob_dup(duckdb_data_chunk_get_vector(input, 1), row, &payload_len);
@@ -743,7 +802,9 @@ static void ducknng_request_raw_aio_scalar(duckdb_function_info info, duckdb_dat
                     timeout_ms, "ducknng: request_raw_aio requires url and payload") != 0) return;
             continue;
         }
+        ducknng_wasm_trace("request_raw_aio: raw message build begin");
         req = ducknng_client_raw_request_message(payload, (size_t)payload_len, &errmsg);
+        ducknng_wasm_trace("request_raw_aio: raw message build returned");
         if (payload) duckdb_free(payload);
         payload = NULL;
         if (!req) {
@@ -757,6 +818,7 @@ static void ducknng_request_raw_aio_scalar(duckdb_function_info info, duckdb_dat
             if (errmsg) duckdb_free(errmsg);
             continue;
         }
+        ducknng_wasm_trace("request_raw_aio: launch url aio begin");
         if (ducknng_client_launch_url_request_aio(ctx, url, timeout_ms, tls_config_id, req, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
@@ -768,6 +830,7 @@ static void ducknng_request_raw_aio_scalar(duckdb_function_info info, duckdb_dat
             if (errmsg) duckdb_free(errmsg);
             continue;
         }
+        ducknng_wasm_trace("request_raw_aio: launch url aio returned");
         duckdb_free(url);
     }
 }
