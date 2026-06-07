@@ -80,14 +80,14 @@ jobs:
       - name: Package release artifacts
         run: |
           set -euo pipefail
-          mkdir -p .duckdb-wasm-release
+          mkdir -p duckdb-wasm-release
           cp .duckdb-wasm-local-artifacts/site/duckdb-wasm/ducknng.duckdb_extension.wasm \
-            ".duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}"
+            "duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}"
           cp .duckdb-wasm-local-artifacts/site/ducknng-wasm-config.json \
-            .duckdb-wasm-release/ducknng-wasm-config.json
+            duckdb-wasm-release/ducknng-wasm-config.json
           tar -C .duckdb-wasm-local-artifacts/site -czf \
-            .duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz .
-          (cd .duckdb-wasm-release && sha256sum * > SHA256SUMS)
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz .
+          (cd duckdb-wasm-release && sha256sum * > SHA256SUMS)
 
       - name: Upload staged demo site artifact
         uses: actions/upload-artifact@v4
@@ -100,7 +100,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ducknng-wasm-release-bundle
-          path: .duckdb-wasm-release
+          path: duckdb-wasm-release
           if-no-files-found: error
 
       - name: Move rolling demo release tag
@@ -126,10 +126,10 @@ jobs:
           make_latest: false
           overwrite_files: true
           files: |
-            .duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}
-            .duckdb-wasm-release/ducknng-wasm-config.json
-            .duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz
-            .duckdb-wasm-release/SHA256SUMS
+            duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}
+            duckdb-wasm-release/ducknng-wasm-config.json
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz
+            duckdb-wasm-release/SHA256SUMS
 
   deploy-pages-branch:
     name: Publish gh-pages from CI artifact
