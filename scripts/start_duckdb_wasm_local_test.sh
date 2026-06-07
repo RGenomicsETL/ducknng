@@ -85,6 +85,7 @@ docker run --rm -v "${DOCKER_WORK_ROOT}:/work" -w /work \
   "${LOCAL_WASM_IMAGE}" bash -lc "
 set -euo pipefail
 source /opt/emsdk/emsdk_env.sh
+git config --global --add safe.directory /work
 make DUCKDB_PLATFORM=${DUCKDB_WASM_PLATFORM} \
   DUCKNNG_WASM_TRACE=${DUCKNNG_WASM_TRACE} \
   DUCKNNG_WASM_INPROC_ONLY=${DUCKNNG_WASM_INPROC_ONLY} \
