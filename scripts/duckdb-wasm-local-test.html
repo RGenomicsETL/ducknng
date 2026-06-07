@@ -697,8 +697,9 @@ FROM ducknng_list_servers();`,
           throw new Error(`extension fetch failed with HTTP ${response.status}`);
         }
         const bytes = new Uint8Array(await withTimeout(response.arrayBuffer(), "extension byte read", extensionLoadTimeoutMs));
+        const byteLength = bytes.byteLength;
         await db.registerFileBuffer(extPath, bytes);
-        log(`Registered extension buffer: ${extPath} (${bytes.byteLength} bytes)`);
+        log(`Registered extension buffer: ${extPath} (${byteLength} bytes)`);
       } else {
         await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
         log("Registered extension URL:", extUrl);
