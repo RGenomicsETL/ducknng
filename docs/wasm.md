@@ -98,11 +98,15 @@ The default Pages build uses `DUCKDB_WASM_PLATFORM=wasm_threads`,
 pair as the local script. Because ordinary GitHub Pages cannot set COOP/COEP
 headers from branch content, the static site also includes a same-origin COI
 service worker. On first load, the smoke page may register that worker and
-reload once before `crossOriginIsolated` becomes true. A passing Pages demo is
-still only a browser proof for the tested side-module path: extension load,
-codec and registry calls, raw URL-launched `inproc://` AIO bytes, and framed RPC
-manifest collection over `inproc://`. It is not a release promise for browser
-`ipc://`, raw `tcp://`, native `tls+tcp://`, HTTP, or WebSocket transports.
+reload once before `crossOriginIsolated` becomes true. The Pages demo proves the
+CI-built side module can load in `duckdb-wasm`, run scalar extension calls, and
+support the interactive SQL shell. The full `inproc://` transport proof remains
+attached to the local smoke page or another host that sends real COOP/COEP
+headers; on GitHub Pages the page skips that transport proof because
+service-worker-provided COI has proven insufficiently reliable for the current
+NNG pthread progress path. A passing Pages demo is not a release promise for
+browser `ipc://`, raw `tcp://`, native `tls+tcp://`, HTTP, or WebSocket
+transports.
 
 The side-module wasm file on `gh-pages` is a same-origin mirror of the CI-built
 demo release asset, not a stable binary release channel. The mirror is deliberate:

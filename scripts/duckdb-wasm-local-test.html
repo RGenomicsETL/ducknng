@@ -125,9 +125,12 @@
     <p>
       This page loads the ducknng DuckDB extension in duckdb-wasm, runs the browser
       smoke checks, and then exposes a small SQL shell against the same connection.
-      The current browser proof is intentionally narrow: extension load, codec and
-      registry calls, raw <code>inproc://</code> URL-launched AIO bytes, and framed RPC
-      manifest collection over <code>inproc://</code> under the pthread runtime.
+      The local/header-served browser proof is intentionally narrow: extension load,
+      codec and registry calls, raw <code>inproc://</code> URL-launched AIO bytes, and
+      framed RPC manifest collection over <code>inproc://</code> under the pthread runtime.
+      On GitHub Pages, where cross-origin isolation is supplied by a service worker,
+      the page loads the extension and enables the SQL shell but skips the transport
+      proof unless the host can provide real COOP/COEP headers.
     </p>
     <div class="banner">
       Browser <code>ipc://</code>, raw <code>tcp://</code>, native POSIX-style
@@ -437,6 +440,12 @@ FROM ducknng_list_servers();`,
       return String(errorOrMessage?.message ?? errorOrMessage ?? "").includes("query timed out after");
     }
 
+    function usesStaticPagesCoiServiceWorker() {
+      return runtimeConfig?.requiresCrossOriginIsolation &&
+        location.hostname.endsWith("github.io") &&
+        !!navigator.serviceWorker?.controller;
+    }
+
     function requireRows(rows, label) {
       if (!rows || rows.length === 0) {
         throw new Error(`${label} returned no rows`);
@@ -639,6 +648,10 @@ FROM ducknng_list_servers();`,
         'inproc://ducknng_wasm_missing_socket_probe',
         1048576,
         0::UBIGINT)).ok AS missing_socket_listen_ok`, nngSetupTimeoutMs);
+      if (usesStaticPagesCoiServiceWorker()) {
+        log("Skipping inproc:// transport proof on GitHub Pages service-worker COI; use the local smoke page or another host with real COOP/COEP headers for that proof.");
+        return true;
+      }
       const urlRawOk = await runInprocUrlRawAioSmoke();
       return urlRawOk ? await runInprocSmoke() : false;
     }
