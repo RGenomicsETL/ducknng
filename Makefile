@@ -63,6 +63,57 @@ configure: venv platform extension_version
 debug: build_extension_library_debug build_extension_with_metadata_debug
 release: build_extension_library_release build_extension_with_metadata_release
 
+# duckdb-wasm side modules need to match the runtime ABI.  The EH and
+# threads runtimes use native wasm exceptions and native i64/BigInt imports;
+# pthread builds also need the Emscripten link-time tuning used by nanonext.
+ifneq ($(DUCKDB_WASM_PLATFORM),)
+CMAKE_EXTRA_BUILD_FLAGS += -DDUCKNNG_DUCKDB_WASM_PLATFORM=$(DUCKDB_WASM_PLATFORM)
+ifneq ($(DUCKNNG_WASM_TRACE),)
+CMAKE_EXTRA_BUILD_FLAGS += -DDUCKNNG_WASM_TRACE=$(DUCKNNG_WASM_TRACE)
+endif
+ifneq ($(DUCKNNG_WASM_INPROC_ONLY),)
+CMAKE_EXTRA_BUILD_FLAGS += -DDUCKNNG_WASM_INPROC_ONLY=$(DUCKNNG_WASM_INPROC_ONLY)
+endif
+DUCKNNG_WASM_LINK_FLAGS := -sSIDE_MODULE=2 -sEXPORTED_FUNCTIONS="_$(EXTENSION_NAME)_init_c_api"
+ifeq ($(DUCKDB_WASM_PLATFORM),wasm_eh)
+DUCKNNG_WASM_LINK_FLAGS += -sWASM_BIGINT -fwasm-exceptions
+endif
+ifeq ($(DUCKDB_WASM_PLATFORM),wasm_threads)
+DUCKNNG_WASM_LINK_FLAGS += \
+	-sWASM_BIGINT -fwasm-exceptions -pthread \
+	-s PTHREAD_POOL_SIZE=16 \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s INITIAL_MEMORY=33554432
+endif
+link_wasm_debug:
+	@WASM_LINK_RSP=""; \
+	if [ -f "cmake_build/debug/wasm_link_inputs.rsp" ]; then \
+		WASM_LINK_RSP="@cmake_build/debug/wasm_link_inputs.rsp"; \
+	elif [ -f "$(EXTENSION_BUILD_PATH)/debug/wasm_link_inputs.rsp" ]; then \
+		WASM_LINK_RSP="@$(EXTENSION_BUILD_PATH)/debug/wasm_link_inputs.rsp"; \
+	else \
+		echo "ducknng wasm dependency response file not found" >&2; \
+		exit 1; \
+	fi; \
+	emcc $(EXTENSION_BUILD_PATH)/debug/$(EXTENSION_LIB_FILENAME) $$WASM_LINK_RSP \
+		-o $(EXTENSION_BUILD_PATH)/debug/$(EXTENSION_FILENAME_NO_METADATA) \
+		-O3 -g $(DUCKNNG_WASM_LINK_FLAGS)
+
+link_wasm_release:
+	@WASM_LINK_RSP=""; \
+	if [ -f "cmake_build/release/wasm_link_inputs.rsp" ]; then \
+		WASM_LINK_RSP="@cmake_build/release/wasm_link_inputs.rsp"; \
+	elif [ -f "$(EXTENSION_BUILD_PATH)/release/wasm_link_inputs.rsp" ]; then \
+		WASM_LINK_RSP="@$(EXTENSION_BUILD_PATH)/release/wasm_link_inputs.rsp"; \
+	else \
+		echo "ducknng wasm dependency response file not found" >&2; \
+		exit 1; \
+	fi; \
+	emcc $(EXTENSION_BUILD_PATH)/release/$(EXTENSION_LIB_FILENAME) $$WASM_LINK_RSP \
+		-o $(EXTENSION_BUILD_PATH)/release/$(EXTENSION_FILENAME_NO_METADATA) \
+		-O3 $(DUCKNNG_WASM_LINK_FLAGS)
+endif
+
 test: test_debug
 test_debug: test_extension_debug
 test_release: test_extension_release
