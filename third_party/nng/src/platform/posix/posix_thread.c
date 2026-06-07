@@ -24,6 +24,44 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_INPROC_ONLY) && DUCKNNG_WASM_INPROC_ONLY
+#define DUCKNNG_NNG_WASM_INPROC_ONLY 1
+#else
+#define DUCKNNG_NNG_WASM_INPROC_ONLY 0
+#endif
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/threading.h>
+#include <stdio.h>
+#endif
+
+static void
+ducknng_nng_wasm_thread_yield(void)
+{
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_INPROC_ONLY) && DUCKNNG_WASM_INPROC_ONLY
+	emscripten_thread_sleep(1.0);
+#endif
+}
+
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	fprintf(stderr, "[ducknng nng wasm trace] %s\n", where ? where : "(null)");
+	fflush(stderr);
+}
+#else
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	NNI_ARG_UNUSED(where);
+#if defined(__EMSCRIPTEN__)
+	__asm__ __volatile__("" ::: "memory");
+	fflush(stderr);
+#endif
+}
+#endif
+
 #ifdef NNG_PLATFORM_OPENBSD
 #include <pthread_np.h>
 #endif
@@ -276,12 +314,17 @@ nni_plat_thr_init(nni_plat_thr *thr, void (*fn)(void *), void *arg)
 	thr->arg  = arg;
 
 	// POSIX wants functions to return a void *, but we don't care.
+	ducknng_nng_wasm_thread_yield();
+	ducknng_nng_wasm_trace("posix_thread: pthread_create begin");
 	rv = pthread_create(&thr->tid, &nni_thrattr, nni_plat_thr_main, thr);
+	ducknng_nng_wasm_thread_yield();
 	if (rv != 0) {
+		ducknng_nng_wasm_trace("posix_thread: pthread_create failed");
 		// nni_printf("pthread_create: %s",
 		// strerror(rv));
 		return (NNG_ENOMEM);
 	}
+	ducknng_nng_wasm_trace("posix_thread: pthread_create returned");
 	return (0);
 }
 
@@ -393,6 +436,10 @@ nni_plat_init(int (*helper)(void))
 	(void) pthread_mutexattr_settype(
 	    &nni_mxattr, PTHREAD_MUTEX_ERRORCHECK);
 
+#if DUCKNNG_NNG_WASM_INPROC_ONLY
+	ducknng_nng_wasm_trace("posix_thread: skip pollq/resolver sysinit for wasm inproc-only");
+#else
+	ducknng_nng_wasm_trace("posix_thread: pollq sysinit begin");
 	if ((rv = nni_posix_pollq_sysinit()) != 0) {
 		pthread_mutex_unlock(&nni_plat_init_lock);
 		pthread_mutexattr_destroy(&nni_mxattr);
@@ -401,6 +448,7 @@ nni_plat_init(int (*helper)(void))
 		return (rv);
 	}
 
+	ducknng_nng_wasm_trace("posix_thread: resolver sysinit begin");
 	if ((rv = nni_posix_resolv_sysinit()) != 0) {
 		pthread_mutex_unlock(&nni_plat_init_lock);
 		nni_posix_pollq_sysfini();
@@ -409,7 +457,12 @@ nni_plat_init(int (*helper)(void))
 		pthread_attr_destroy(&nni_thrattr);
 		return (rv);
 	}
+#endif
 
+#if DUCKNNG_NNG_WASM_INPROC_ONLY
+	ducknng_nng_wasm_trace("posix_thread: skip atfork for wasm inproc-only");
+#else
+	ducknng_nng_wasm_trace("posix_thread: atfork begin");
 	if (pthread_atfork(NULL, NULL, nni_atfork_child) != 0) {
 		pthread_mutex_unlock(&nni_plat_init_lock);
 		nni_posix_resolv_sysfini();
@@ -419,9 +472,12 @@ nni_plat_init(int (*helper)(void))
 		pthread_attr_destroy(&nni_thrattr);
 		return (NNG_ENOMEM);
 	}
+#endif
+	ducknng_nng_wasm_trace("posix_thread: helper begin");
 	if ((rv = helper()) == 0) {
 		nni_plat_inited = 1;
 	}
+	ducknng_nng_wasm_trace("posix_thread: helper returned");
 	pthread_mutex_unlock(&nni_plat_init_lock);
 
 	return (rv);
@@ -432,8 +488,10 @@ nni_plat_fini(void)
 {
 	pthread_mutex_lock(&nni_plat_init_lock);
 	if (nni_plat_inited) {
+#if !DUCKNNG_NNG_WASM_INPROC_ONLY
 		nni_posix_resolv_sysfini();
 		nni_posix_pollq_sysfini();
+#endif
 		pthread_mutexattr_destroy(&nni_mxattr);
 		pthread_condattr_destroy(&nni_cvattr);
 		nni_plat_inited = 0;
