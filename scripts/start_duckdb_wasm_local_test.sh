@@ -206,6 +206,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const url = new URL(event.request.url);
+  if (url.origin === self.location.origin &&
+      url.pathname.endsWith("/duckdb-wasm/ducknng.duckdb_extension.wasm")) {
+    return;
+  }
+
   event.respondWith((async () => {
     const response = await fetch(event.request);
     if (response.type === "opaque") {
