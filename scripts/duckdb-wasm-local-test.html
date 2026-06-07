@@ -690,10 +690,22 @@ FROM ducknng_list_servers();`,
 
       const extUrl = resourceUrl(duckdbExtensionRelativePath);
       const extPath = new URL(duckdbExtensionRelativePath, siteBaseUrl).pathname;
-      await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
-      log("Loading extension:", extUrl);
+      if (typeof db.registerFileBuffer === "function") {
+        log("Fetching extension bytes:", extUrl);
+        const response = await withTimeout(fetch(extUrl, { cache: "no-store" }), "extension fetch", extensionLoadTimeoutMs);
+        if (!response.ok) {
+          throw new Error(`extension fetch failed with HTTP ${response.status}`);
+        }
+        const bytes = new Uint8Array(await withTimeout(response.arrayBuffer(), "extension byte read", extensionLoadTimeoutMs));
+        await db.registerFileBuffer(extPath, bytes);
+        log(`Registered extension buffer: ${extPath} (${bytes.byteLength} bytes)`);
+      } else {
+        await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+        log("Registered extension URL:", extUrl);
+      }
+      log("Loading extension:", extPath);
       await withTimeout(conn.query(`LOAD '${extPath}'`), "extension load", extensionLoadTimeoutMs);
-      log("Loaded extension:", extUrl);
+      log("Loaded extension:", extPath);
       setupDone = true;
       setShellEnabled(true);
     }
