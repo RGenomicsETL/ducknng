@@ -356,7 +356,9 @@ FROM ducknng_list_servers();`,
         coiServiceWorker: "ducknng-coi-service-worker.js",
       };
       try {
-        const response = await fetch(resourceUrl("ducknng-wasm-config.json"), { cache: "no-store" });
+        const configUrl = new URL("ducknng-wasm-config.json", siteBaseUrl);
+        configUrl.searchParams.set("v", String(Date.now()));
+        const response = await fetch(configUrl, { cache: "no-store" });
         if (!response.ok) return fallback;
         return { ...fallback, ...(await response.json()) };
       } catch (_e) {
@@ -375,7 +377,9 @@ FROM ducknng_list_servers();`,
         throw new Error("wasm_threads requires cross-origin isolation; the service worker reload completed but crossOriginIsolated is still false");
       }
       log("Installing COI service worker for static hosting and reloading once...");
-      await navigator.serviceWorker.register(resourceUrl(config.coiServiceWorker ?? "ducknng-coi-service-worker.js"), {
+      const swUrl = new URL(config.coiServiceWorker ?? "ducknng-coi-service-worker.js", siteBaseUrl);
+      swUrl.searchParams.set("v", config.sourceCommit ?? String(Date.now()));
+      await navigator.serviceWorker.register(swUrl, {
         scope: resourceUrl(""),
       });
       await navigator.serviceWorker.ready;
