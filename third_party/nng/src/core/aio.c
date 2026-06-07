@@ -11,6 +11,29 @@
 #include "core/nng_impl.h"
 #include <string.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <stdio.h>
+#endif
+
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	fprintf(stderr, "[ducknng nng wasm trace] %s\n", where ? where : "(null)");
+	fflush(stderr);
+}
+#else
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	NNI_ARG_UNUSED(where);
+#if defined(__EMSCRIPTEN__)
+	__asm__ __volatile__("" ::: "memory");
+	fflush(stderr);
+#endif
+}
+#endif
+
 struct nni_aio_expire_q {
 	nni_mtx  eq_mtx;
 	nni_cv   eq_cv;
@@ -585,6 +608,7 @@ nni_aio_expire_loop(void *arg)
 	nni_aio          *expires[NNI_EXPIRE_BATCH];
 
 	nni_thr_set_name(NULL, "nng:aio:expire");
+	ducknng_nng_wasm_trace("aio: expire worker entered");
 
 	nni_mtx_lock(mtx);
 
@@ -811,11 +835,13 @@ nni_aio_expire_q_alloc(void)
 	eq->eq_next = NNI_TIME_NEVER;
 	eq->eq_exit = false;
 
+	ducknng_nng_wasm_trace("aio: expire thread init begin");
 	if (nni_thr_init(&eq->eq_thr, nni_aio_expire_loop, eq) != 0) {
 		nni_aio_expire_q_free(eq);
 		return (NULL);
 	}
 
+	ducknng_nng_wasm_trace("aio: expire thread run begin");
 	nni_thr_run(&eq->eq_thr);
 	return (eq);
 }
@@ -846,6 +872,7 @@ nni_aio_sys_init(void)
 #define NNG_NUM_EXPIRE_THREADS (nni_plat_ncpu())
 #endif
 
+	ducknng_nng_wasm_trace("aio: sysinit begin");
 	max_thr = (int) nni_init_get_param(
 	    NNG_INIT_MAX_EXPIRE_THREADS, NNG_MAX_EXPIRE_THREADS);
 
@@ -864,6 +891,7 @@ nni_aio_sys_init(void)
 	nni_aio_expire_q_cnt = num_thr;
 	for (int i = 0; i < num_thr; i++) {
 		nni_aio_expire_q *eq;
+		ducknng_nng_wasm_trace("aio: expire queue alloc begin");
 		if ((eq = nni_aio_expire_q_alloc()) == NULL) {
 			nni_aio_sys_fini();
 			return (NNG_ENOMEM);
@@ -871,5 +899,6 @@ nni_aio_sys_init(void)
 		nni_aio_expire_q_list[i] = eq;
 	}
 
+	ducknng_nng_wasm_trace("aio: sysinit returned");
 	return (0);
 }

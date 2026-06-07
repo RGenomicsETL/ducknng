@@ -4,6 +4,8 @@ configure
 .idea
 duckdb_unittest_tempdir
 /test/bin
+/.duckdb-wasm-local-artifacts/
+/.duckdb_wasm_docker_work/
 venv
 community-extensions
 /.sync/

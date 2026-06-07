@@ -15,6 +15,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	fprintf(stderr, "[ducknng nng wasm trace] %s\n", where ? where : "(null)");
+	fflush(stderr);
+}
+#else
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	NNI_ARG_UNUSED(where);
+#if defined(__EMSCRIPTEN__)
+	__asm__ __volatile__("" ::: "memory");
+	fflush(stderr);
+#endif
+}
+#endif
+
 extern int  nni_tls_sys_init(void);
 extern void nni_tls_sys_fini(void);
 
@@ -33,15 +52,17 @@ nni_init_helper(void)
 	}
 #endif
 
+	ducknng_nng_wasm_trace("init: taskq sysinit begin");
 	if (((rv = nni_taskq_sys_init()) != 0) ||
-	    ((rv = nni_reap_sys_init()) != 0) ||
-	    ((rv = nni_aio_sys_init()) != 0) ||
-	    ((rv = nni_tls_sys_init()) != 0)) {
+	    (ducknng_nng_wasm_trace("init: reap sysinit begin"), (rv = nni_reap_sys_init()) != 0) ||
+	    (ducknng_nng_wasm_trace("init: aio sysinit begin"), (rv = nni_aio_sys_init()) != 0) ||
+	    (ducknng_nng_wasm_trace("init: tls sysinit begin"), (rv = nni_tls_sys_init()) != 0)) {
 		nni_fini();
 		return (rv);
 	}
 
 	// following never fail
+	ducknng_nng_wasm_trace("init: transport sysinit begin");
 	nni_sp_tran_sys_init();
 
 	nni_inited = true;
@@ -55,6 +76,7 @@ int
 nni_init(void)
 {
 	int rv;
+	ducknng_nng_wasm_trace("init: nni_init begin");
 	if ((rv = nni_plat_init(nni_init_helper)) != 0) {
 		nng_log_err("NNG-INIT",
 		    "NNG library initialization failed: %s", nng_strerror(rv));

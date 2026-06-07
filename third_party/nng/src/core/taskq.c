@@ -10,6 +10,29 @@
 
 #include "core/nng_impl.h"
 
+#if defined(__EMSCRIPTEN__)
+#include <stdio.h>
+#endif
+
+#if defined(__EMSCRIPTEN__) && defined(DUCKNNG_WASM_TRACE) && DUCKNNG_WASM_TRACE
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	fprintf(stderr, "[ducknng nng wasm trace] %s\n", where ? where : "(null)");
+	fflush(stderr);
+}
+#else
+static void
+ducknng_nng_wasm_trace(const char *where)
+{
+	NNI_ARG_UNUSED(where);
+#if defined(__EMSCRIPTEN__)
+	__asm__ __volatile__("" ::: "memory");
+	fflush(stderr);
+#endif
+}
+#endif
+
 typedef struct nni_taskq_thr nni_taskq_thr;
 struct nni_taskq_thr {
 	nni_taskq *tqt_tq;
@@ -35,6 +58,7 @@ nni_taskq_thread(void *self)
 	nni_task      *task;
 
 	nni_thr_set_name(NULL, "nng:task");
+	ducknng_nng_wasm_trace("taskq: worker entered");
 
 	nni_mtx_lock(&tq->tq_mtx);
 	for (;;) {
@@ -71,6 +95,7 @@ nni_taskq_init(nni_taskq **tqp, int nthr)
 {
 	nni_taskq *tq;
 
+	ducknng_nng_wasm_trace("taskq: init begin");
 	if ((tq = NNI_ALLOC_STRUCT(tq)) == NULL) {
 		return (NNG_ENOMEM);
 	}
@@ -89,6 +114,7 @@ nni_taskq_init(nni_taskq **tqp, int nthr)
 	for (int i = 0; i < nthr; i++) {
 		int rv;
 		tq->tq_threads[i].tqt_tq = tq;
+		ducknng_nng_wasm_trace("taskq: worker init begin");
 		rv = nni_thr_init(&tq->tq_threads[i].tqt_thread,
 		    nni_taskq_thread, &tq->tq_threads[i]);
 		if (rv != 0) {
@@ -98,9 +124,11 @@ nni_taskq_init(nni_taskq **tqp, int nthr)
 	}
 	tq->tq_run = true;
 	for (int i = 0; i < tq->tq_nthreads; i++) {
+		ducknng_nng_wasm_trace("taskq: worker run begin");
 		nni_thr_run(&tq->tq_threads[i].tqt_thread);
 	}
 	*tqp = tq;
+	ducknng_nng_wasm_trace("taskq: init returned");
 	return (0);
 }
 
@@ -270,6 +298,7 @@ nni_taskq_sys_init(void)
 	}
 	nni_init_set_effective(NNG_INIT_NUM_TASK_THREADS, num_thr);
 
+	ducknng_nng_wasm_trace("taskq: sysinit begin");
 	return (nni_taskq_init(&nni_taskq_systq, num_thr));
 }
 
