@@ -4,7 +4,8 @@
 side-module loaded by `duckdb-wasm`. The second is a future `Rducknng` package
 built for webR/rwasm, where the package install process builds or bundles the
 extension payload. This repository now has initial infrastructure for the first
-path only.
+path only. The review checklist for the remaining browser transport matrix lives
+in `docs/wasm_browser_transport_checklist.md`.
 
 The nanonext wasm reference point is commit
 `4391bb31cf6aafe34f976feda1b03be0f9ca4acf`, which adds Emscripten link-time
