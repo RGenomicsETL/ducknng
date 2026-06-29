@@ -1,0 +1,16 @@
+{
+  "name": "ducknng-wasm-browser-test",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless Playwright smoke tests for the ducknng duckdb-wasm side module.",
+  "scripts": {
+    "test": "node run_smoke.mjs",
+    "test:load": "node run_smoke.mjs --probes=load",
+    "test:baseline": "node run_smoke.mjs --probes=load,inproc",
+    "test:http-sync": "node run_smoke.mjs --probes=load,http-sync"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0"
+  }
+}

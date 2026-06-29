@@ -513,6 +513,13 @@ FROM ducknng_list_servers();`,
           throw new Error(`URL raw rep recv payload mismatch: ${rows[0].payload_hex}`);
         }
 
+        // Let the URL-launched REQ aio run its send-complete callback and post
+        // its receive before the REP socket launches the reply. Native NNG
+        // tolerates the immediate reply, but the wasm pthread runtime can race
+        // here and block inside nng_send_aio() before that client-side receive
+        // is posted.
+        await sleep(50);
+
         rows = requireRows(await runSQL(`SELECT ducknng_send_socket_raw_aio(
           ${repId}::UBIGINT, from_hex('6f6b'), 0) AS aio`, nngSetupTimeoutMs),
           "launch URL raw rep reply send aio");
@@ -730,6 +737,16 @@ FROM ducknng_list_servers();`,
         setShellEnabled(setupDone);
       }
     }
+
+    globalThis.ducknngWasmSmoke = {
+      setup: async () => {
+        if (!setupDone) await setupDucknng();
+        return true;
+      },
+      runSmokeTests: async () => await runSmokeTests(),
+      isSetupDone: () => setupDone,
+      runtimeConfig: () => runtimeConfig,
+    };
 
     async function runShellSQL() {
       if (!conn) return;

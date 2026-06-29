@@ -3538,10 +3538,35 @@ for a service.</p>
 <span id="cb44-10"><a href="#cb44-10" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span>
 <span id="cb44-11"><a href="#cb44-11" tabindex="-1"></a>| <span class="kw">true</span>                                |</span>
 <span id="cb44-12"><a href="#cb44-12" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span></code></pre></div>
+<h2 id="browser-and-webassembly">Browser and WebAssembly</h2>
+<p>ducknng builds as a duckdb-wasm side module, but a browser sandbox
+cannot offer raw sockets, so the transport story is bounded by what the
+platform allows rather than by the extension. The currently stable
+browser proof is narrow: extension load and scalar SQL in duckdb-wasm,
+plus same-origin <code>ducknng_ncurl(...)</code> GET/POST and
+invalid-header error handling through a
+synchronous-<code>XMLHttpRequest</code> HTTP bridge compiled only for
+Emscripten (<code>src/ducknng_wasm_http_fetch.c</code>). The threaded
+<code>wasm_threads</code> <code>inproc://</code> path has passed
+individual local COOP/COEP proofs, but repeated real-browser runs still
+expose load/progress flakiness, so it is diagnostic rather than promised
+browser support. Raw <code>tcp://</code>, <code>ipc://</code>, and POSIX
+<code>tls+tcp://</code> cannot exist in the sandbox and are deliberately
+not bridged. Browser <code>ducknng_ncurl_aio(...)</code>,
+<code>ducknng_ncurl_table(...)</code>, framed HTTP RPC/session helpers,
+remote HTTPS/CORS proof, and <code>ws://</code>/<code>wss://</code>
+adapters remain future work. The browser transport matrix, the COOP/COEP
+requirements for the threaded runtime, and the smoke harness are tracked
+in <code>docs/wasm.md</code> and
+<code>docs/wasm_browser_transport_checklist.md</code>. These wasm paths
+run in a browser rather than in this R-rendered README, so they are
+documented here rather than shown as runnable chunks.</p>
 <h2 id="status">Status</h2>
-<p>Version 0.1.0. All features shown in this README are implemented,
-tested, and runnable. The extension builds against DuckDB v1.5.2 using
-the C API only.</p>
+<p>Version 0.1.0. Every feature shown as a runnable chunk in this README
+is implemented, tested, and runs at render time; the browser/WebAssembly
+paths above run in a duckdb-wasm browser runtime and are covered by
+<code>docs/wasm.md</code> and the Playwright harness instead. The
+extension builds against DuckDB v1.5.2 using the C API only.</p>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://nng.nanomsg.org/">NNG</a> — underlying messaging

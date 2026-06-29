@@ -2054,11 +2054,35 @@ SELECT ducknng_stop_server('monitor_demo');
 +-------------------------------------+
 ```
 
+## Browser and WebAssembly
+
+ducknng builds as a duckdb-wasm side module, but a browser sandbox
+cannot offer raw sockets, so the transport story is bounded by what the
+platform allows rather than by the extension. The currently stable
+browser proof is narrow: extension load and scalar SQL in duckdb-wasm,
+plus same-origin `ducknng_ncurl(...)` GET/POST and invalid-header error
+handling through a synchronous-`XMLHttpRequest` HTTP bridge compiled
+only for Emscripten (`src/ducknng_wasm_http_fetch.c`). The threaded
+`wasm_threads` `inproc://` path has passed individual local COOP/COEP
+proofs, but repeated real-browser runs still expose load/progress
+flakiness, so it is diagnostic rather than promised browser support. Raw
+`tcp://`, `ipc://`, and POSIX `tls+tcp://` cannot exist in the sandbox
+and are deliberately not bridged. Browser `ducknng_ncurl_aio(...)`,
+`ducknng_ncurl_table(...)`, framed HTTP RPC/session helpers, remote
+HTTPS/CORS proof, and `ws://`/`wss://` adapters remain future work. The
+browser transport matrix, the COOP/COEP requirements for the threaded
+runtime, and the smoke harness are tracked in `docs/wasm.md` and
+`docs/wasm_browser_transport_checklist.md`. These wasm paths run in a
+browser rather than in this R-rendered README, so they are documented
+here rather than shown as runnable chunks.
+
 ## Status
 
-Version 0.1.0. All features shown in this README are implemented,
-tested, and runnable. The extension builds against DuckDB v1.5.2 using
-the C API only.
+Version 0.1.0. Every feature shown as a runnable chunk in this README is
+implemented, tested, and runs at render time; the browser/WebAssembly
+paths above run in a duckdb-wasm browser runtime and are covered by
+`docs/wasm.md` and the Playwright harness instead. The extension builds
+against DuckDB v1.5.2 using the C API only.
 
 ## References
 
