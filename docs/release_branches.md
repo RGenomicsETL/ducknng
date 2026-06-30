@@ -19,7 +19,9 @@ The DuckDB community extension repository is not the backport distribution chann
 v<ducknng-version>-duckdb<duckdb-version>
 ```
 
-For example, `v0.1.1-duckdb1.5.2` names the `ducknng` 0.1.1 backport line built for DuckDB 1.5.2. Pushing such a tag runs `.github/workflows/ducknng-release-binaries.yml`, builds the branch's pinned Linux extension, runs the HTTP smoke test, and attaches the `.duckdb_extension`, the raw shared library, checksums, and a short load note to the GitHub Release.
+For example, `v0.1.1-duckdb1.5.2` names the `ducknng` 0.1.1 backport line built for DuckDB 1.5.2. Pushing such a tag runs `.github/workflows/ducknng-release-binaries.yml`, builds the branch's pinned release matrix, and attaches the `.duckdb_extension` artifacts, raw native libraries or wasm side module, checksums, and short load notes to the GitHub Release. The current self-published matrix is `linux_amd64`, `linux_arm64`, `osx_amd64`, `osx_arm64`, `windows_amd64_mingw` built with Rtools/MinGW, and `wasm_eh`.
+
+The release workflow runs the HTTP smoke test and verifies the synchronous side-effecting transport/service scalars are `VOLATILE` on native platforms where the matching DuckDB Python runtime can load the built artifact directly: Linux and macOS. The Windows MinGW/Rtools artifact is build-validated in this workflow; it is not loaded by the Python wheel because the Python runtime is the MSVC Windows runtime, not the MinGW/Rtools runtime. The `wasm_eh` artifact is a duckdb-wasm side module and is build-validated here; browser runtime proof remains covered by the wasm/browser workflow and tests rather than by native `LOAD`.
 
 These release assets are unsigned. A consumer must open the host DuckDB connection with `allow_unsigned_extensions = true` and then load the downloaded file explicitly:
 
@@ -27,4 +29,4 @@ These release assets are unsigned. A consumer must open the host DuckDB connecti
 LOAD '/path/to/ducknng-v0.1.1-duckdb1.5.2-linux_amd64.duckdb_extension';
 ```
 
-Community-signed builds remain loadable through the usual community extension flow when the consumer can use the community line's DuckDB target. The self-published assets are for pinned runtimes that need a backport before, or instead of, a community submission refresh.
+Community-signed builds remain loadable through the usual community extension flow when the consumer can use the community line's DuckDB target. The self-published assets are for pinned runtimes that need a backport before, or instead of, a community submission refresh. When a platform is added to or removed from the self-published matrix, update this file and re-tag the affected release branches so the release assets are regenerated from commits containing the matching workflow.
