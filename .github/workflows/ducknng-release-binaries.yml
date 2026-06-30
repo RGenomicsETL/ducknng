@@ -214,8 +214,8 @@ jobs:
           library(DBI)
           library(duckdb)
           ext <- normalizePath("build/release/ducknng.duckdb_extension", winslash = "/", mustWork = TRUE)
-          con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:",
-                           config = list(allow_unsigned_extensions = "true"))
+          drv <- duckdb::duckdb(config = list(allow_unsigned_extensions = "true"))
+          con <- dbConnect(drv, dbdir = ":memory:")
           on.exit({ dbDisconnect(con, shutdown = TRUE) }, add = TRUE)
           dbExecute(con, paste("LOAD", dbQuoteString(con, ext)))
           expected <- c(
