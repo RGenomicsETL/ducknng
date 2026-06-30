@@ -2,8 +2,10 @@ name: ducknng release binaries
 
 on:
   push:
+    branches-ignore:
+      - '**'
     tags:
-      - 'v*+duckdb*'
+      - 'v*'
   workflow_dispatch:
 
 permissions:
