@@ -28,6 +28,9 @@ jobs:
         run: |
           set -euo pipefail
           make configure
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            printf '%s\n' "${GITHUB_REF_NAME}" > configure/extension_version.txt
+          fi
           make release -j2
 
       - name: Smoke test matching DuckDB runtime
