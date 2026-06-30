@@ -2,7 +2,7 @@
 
 This document records findings from a systematic review of all `unstable_*` API groups in
 `duckdb_extension.h` and `duckdb.h`, with a recommendation per group on whether and how
-`ducknng` should use each one.
+`ducknng` should use each one. Because these APIs pin binaries to one exact DuckDB version, the operational branch and binary-release workflow is documented in `docs/release_branches.md`.
 
 ---
 
