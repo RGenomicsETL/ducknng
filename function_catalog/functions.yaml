@@ -767,7 +767,8 @@
         "This is the low-level HTTP/HTTPS client primitive; the synchronous request/RPC/session helpers also route over http:// and https:// through the HTTP carrier adapter.",
         "ok means the HTTP transport operation completed and a response was received; status carries the HTTP status code and may still be 4xx or 5xx.",
         "headers_json uses the canonical array-of-objects form such as [{\"name\":\"Content-Type\",\"value\":\"application/json\"}].",
-        "body contains the raw response body bytes and body_text is a best-effort text decoding when the payload looks textual."
+        "body contains the raw response body bytes and body_text is a best-effort text decoding when the payload looks textual.",
+        "The helper uses a volatile execution path so constant-argument HTTP calls are not reused as one cached response across recursive CTE iterations or repeated row execution."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl('http://127.0.0.1:8080/_ducknng', 'POST', '[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]', from_hex('01000000000000000000000000000000000000000000'), 2000, 0::UBIGINT);"
@@ -900,6 +901,7 @@
       "notes": [
         "HTTP status must be 2xx; use ducknng_ncurl() when you need in-band status, headers, or raw error bodies.",
         "The response Content-Type selects the provider. Missing or unknown content types fall back to raw BLOB output.",
+        "Because its result schema is inferred from the response during binding, this helper is not a lateral per-row HTTP primitive; use ducknng_ncurl() plus an explicit parse step for row-by-row retry or chunk fanout workflows.",
         "JSON parses in memory; CSV, TSV, and Parquet currently use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
         "This helper is transport-local and does not change the framed RPC method surface."
       ],
