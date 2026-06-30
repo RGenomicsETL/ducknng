@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y ninja-build rsync
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'
@@ -140,8 +140,17 @@ jobs:
             export CXX=g++
           fi
           if [ "${{ matrix.kind }}" = "wasm" ]; then
-            make release -j2
-            make move_wasm_extension
+            duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+            wasm_extension_version=""
+            if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+              wasm_extension_version="${GITHUB_REF_NAME}"
+            fi
+            DUCKDB_WASM_PLATFORM=${{ matrix.platform }} \
+              DUCKDB_WASM_DUCKDB_VERSION="${duckdb_version}" \
+              DUCKNNG_WASM_EXTENSION_VERSION="${wasm_extension_version}" \
+              DUCKNNG_WASM_BUILD_ONLY=1 \
+              DUCKNNG_WASM_SERVE=0 \
+              scripts/start_duckdb_wasm_local_test.sh
           else
             make release -j2
           fi
@@ -186,6 +195,58 @@ jobs:
           print('volatile scalar check:', sorted(expected))
           PY
 
+      - name: Smoke test Windows MinGW artifact in R
+        if: matrix.platform == 'windows_amd64_mingw'
+        shell: bash
+        run: |
+          set -euo pipefail
+          duckdb_version=$(awk -F= '/^DUCKDB_TEST_VERSION=/{print $2}' Makefile)
+          Rscript - "$duckdb_version" <<'RSCRIPT'
+          args <- commandArgs(trailingOnly = TRUE)
+          duckdb_version <- args[[1]]
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          install.packages("pak")
+          pak::pkg_install(c("DBI", paste0("duckdb@", duckdb_version)), ask = FALSE, upgrade = FALSE)
+          if (as.character(utils::packageVersion("duckdb")) != duckdb_version) {
+            stop("installed duckdb R package does not match target: ",
+                 as.character(utils::packageVersion("duckdb")), " != ", duckdb_version)
+          }
+          library(DBI)
+          library(duckdb)
+          ext <- normalizePath("build/release/ducknng.duckdb_extension", winslash = "/", mustWork = TRUE)
+          con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:",
+                           config = list(allow_unsigned_extensions = "true"))
+          on.exit({ dbDisconnect(con, shutdown = TRUE) }, add = TRUE)
+          dbExecute(con, paste("LOAD", dbQuoteString(con, ext)))
+          expected <- c(
+            "ducknng__ncurl_row",
+            "ducknng_start_server",
+            "ducknng_stop_server",
+            "ducknng_set_service_peer_allowlist",
+            "ducknng_set_service_ip_allowlist",
+            "ducknng_run_rpc_raw",
+            "ducknng_get_rpc_manifest_raw",
+            "ducknng_open_query_raw",
+            "ducknng_fetch_query_raw",
+            "ducknng_close_query_raw",
+            "ducknng_cancel_query_raw",
+            "ducknng_request_raw",
+            "ducknng_request_socket_raw"
+          )
+          names_sql <- paste(dbQuoteString(con, expected), collapse = ",")
+          rows <- dbGetQuery(con, paste0(
+            "SELECT function_name, stability FROM duckdb_functions() ",
+            "WHERE function_type = 'scalar' AND function_name IN (", names_sql, ")"
+          ))
+          bad <- rows[rows$stability != "VOLATILE", , drop = FALSE]
+          missing <- setdiff(expected, rows$function_name)
+          if (nrow(bad) || length(missing)) {
+            stop("volatile scalar check failed: bad=", paste(capture.output(print(bad)), collapse = " "),
+                 " missing=", paste(missing, collapse = ","))
+          }
+          print(rows[order(rows$function_name), , drop = FALSE])
+          RSCRIPT
+
       - name: Package release assets
         id: package
         shell: bash
@@ -197,10 +258,12 @@ jobs:
           platform=$(cat configure/platform.txt)
           asset_base="ducknng-${tag}-${platform}"
           if [ "${{ matrix.kind }}" = "wasm" ]; then
-            cp "build/${platform}/release/ducknng.duckdb_extension.wasm" \
+            cp ".duckdb-wasm-local-artifacts/build/${platform}/extension/ducknng/ducknng.duckdb_extension.wasm" \
               "dist/${asset_base}.duckdb_extension.wasm"
-            cp "build/${platform}/release/ducknng.no_metadata.wasm" \
-              "dist/${asset_base}.no_metadata.wasm"
+            raw_wasm=".duckdb_wasm_docker_work/build/${platform}/release/ducknng.no_metadata.wasm"
+            if [ -f "${raw_wasm}" ]; then
+              cp "${raw_wasm}" "dist/${asset_base}.no_metadata.wasm"
+            fi
           else
             cp build/release/ducknng.duckdb_extension \
               "dist/${asset_base}.duckdb_extension"
@@ -276,7 +339,7 @@ jobs:
             - `linux_arm64`
             - `osx_amd64`
             - `osx_arm64`
-            - `windows_amd64_mingw` built with Rtools/MinGW
+            - `windows_amd64_mingw` built with Rtools/MinGW and smoke-loaded through R
             - `wasm_eh`
 
             These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.
