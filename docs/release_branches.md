@@ -16,15 +16,15 @@ configure/venv/bin/python3 test/http_smoke.py build/release/ducknng.duckdb_exten
 The DuckDB community extension repository is not the backport distribution channel. It builds the community submission line and does not carry per-DuckDB-version fixes. Backport binaries are published from this repository as unsigned GitHub Release assets. Tag release-branch commits with a tag that pins both versions, using:
 
 ```text
-v<ducknng-version>+duckdb<duckdb-version>
+v<ducknng-version>-duckdb<duckdb-version>
 ```
 
-For example, `v0.1.1+duckdb1.5.2` names the `ducknng` 0.1.1 backport line built for DuckDB 1.5.2. Pushing such a tag runs `.github/workflows/ducknng-release-binaries.yml`, builds the branch's pinned Linux extension, runs the HTTP smoke test, and attaches the `.duckdb_extension`, the raw shared library, checksums, and a short load note to the GitHub Release.
+For example, `v0.1.1-duckdb1.5.2` names the `ducknng` 0.1.1 backport line built for DuckDB 1.5.2. Pushing such a tag runs `.github/workflows/ducknng-release-binaries.yml`, builds the branch's pinned Linux extension, runs the HTTP smoke test, and attaches the `.duckdb_extension`, the raw shared library, checksums, and a short load note to the GitHub Release.
 
 These release assets are unsigned. A consumer must open the host DuckDB connection with `allow_unsigned_extensions = true` and then load the downloaded file explicitly:
 
 ```sql
-LOAD '/path/to/ducknng-v0.1.1+duckdb1.5.2-linux_amd64.duckdb_extension';
+LOAD '/path/to/ducknng-v0.1.1-duckdb1.5.2-linux_amd64.duckdb_extension';
 ```
 
 Community-signed builds remain loadable through the usual community extension flow when the consumer can use the community line's DuckDB target. The self-published assets are for pinned runtimes that need a backport before, or instead of, a community submission refresh.
