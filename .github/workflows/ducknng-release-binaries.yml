@@ -1,0 +1,100 @@
+name: ducknng release binaries
+
+on:
+  push:
+    tags:
+      - 'v*+duckdb*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ducknng-release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux-amd64:
+    name: Build linux_amd64 extension binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build release extension
+        run: |
+          set -euo pipefail
+          make configure
+          make release -j2
+
+      - name: Smoke test matching DuckDB runtime
+        run: |
+          set -euo pipefail
+          configure/venv/bin/python3 test/http_smoke.py build/release/ducknng.duckdb_extension
+          configure/venv/bin/python3 - <<'PY'
+          import duckdb
+          con = duckdb.connect(':memory:', config={'allow_unsigned_extensions': 'true'})
+          con.execute("LOAD 'build/release/ducknng.duckdb_extension'")
+          rows = con.execute("""
+          SELECT function_type, stability
+          FROM duckdb_functions()
+          WHERE function_name = 'ducknng__ncurl_row'
+          """).fetchall()
+          if not rows or rows[0][1] != 'VOLATILE':
+              raise SystemExit(f'ducknng__ncurl_row is not VOLATILE: {rows!r}')
+          print('ducknng__ncurl_row:', rows)
+          PY
+
+      - name: Package release assets
+        id: package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tag="${GITHUB_REF_NAME:-manual}"
+          duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+          platform=$(cat configure/platform.txt)
+          asset_base="ducknng-${tag}-${platform}"
+          cp build/release/ducknng.duckdb_extension "dist/${asset_base}.duckdb_extension"
+          cp build/release/libducknng.so "dist/${asset_base}.so"
+          cat > "dist/${asset_base}.txt" <<EOF
+          ducknng self-published extension binary
+          tag: ${tag}
+          commit: ${GITHUB_SHA}
+          duckdb_version: ${duckdb_version}
+          platform: ${platform}
+
+          This binary is unsigned. Load it from a host connection opened with:
+            allow_unsigned_extensions = true
+
+          Then run:
+            LOAD '/path/to/${asset_base}.duckdb_extension';
+          EOF
+          (cd dist && sha256sum * > SHA256SUMS)
+          echo "asset_base=${asset_base}" >> "$GITHUB_OUTPUT"
+          echo "duckdb_version=${duckdb_version}" >> "$GITHUB_OUTPUT"
+          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset_base }}
+          path: dist
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ducknng ${{ github.ref_name }}
+          files: dist/*
+          body: |
+            Self-published ducknng extension binary built from `${{ github.sha }}`.
+
+            DuckDB target: `${{ steps.package.outputs.duckdb_version }}`
+            Platform: `${{ steps.package.outputs.platform }}`
+
+            These assets are unsigned and are not DuckDB community-signed extension builds. Open the host DuckDB connection with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file.
