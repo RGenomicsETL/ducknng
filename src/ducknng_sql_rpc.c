@@ -69,16 +69,6 @@ typedef struct {
 } ducknng_request_bind_data;
 
 typedef struct {
-    bool ok;
-    int32_t status;
-    char *error;
-    char *headers_json;
-    uint8_t *body;
-    idx_t body_len;
-    char *body_text;
-} ducknng_http_result_bind_data;
-
-typedef struct {
     idx_t emitted;
 } ducknng_single_row_init_data;
 static char *ducknng_dup_bytes(const uint8_t *data, size_t len) {
@@ -88,6 +78,55 @@ static char *ducknng_dup_bytes(const uint8_t *data, size_t len) {
     out[len] = '\0';
     return out;
 }
+
+static int execute_sql(duckdb_connection con, const char *sql) {
+    duckdb_result result;
+    memset(&result, 0, sizeof(result));
+    if (duckdb_query(con, sql, &result) == DuckDBError) {
+        duckdb_destroy_result(&result);
+        return 0;
+    }
+    duckdb_destroy_result(&result);
+    return 1;
+}
+
+static void ducknng_destroy_logical_types(duckdb_logical_type *types, idx_t count) {
+    idx_t i;
+    if (!types) return;
+    for (i = 0; i < count; i++) duckdb_destroy_logical_type(&types[i]);
+}
+
+static int ducknng_register_struct_row_scalar_named(duckdb_connection con,
+    ducknng_sql_context *ctx, const char *name, idx_t nparams, const duckdb_type *param_type_ids,
+    duckdb_scalar_function_t fn, idx_t nfields, const duckdb_type *field_type_ids,
+    const char **field_names) {
+    duckdb_logical_type *param_types = NULL;
+    duckdb_logical_type *fields = NULL;
+    duckdb_logical_type return_type;
+    idx_t i;
+    int ok;
+    if (!ctx || !ctx->rt || !name || !fn || (!param_type_ids && nparams > 0) ||
+        (!field_type_ids && nfields > 0) || (!field_names && nfields > 0)) return 0;
+    param_types = nparams ? (duckdb_logical_type *)duckdb_malloc(sizeof(*param_types) * nparams) : NULL;
+    fields = nfields ? (duckdb_logical_type *)duckdb_malloc(sizeof(*fields) * nfields) : NULL;
+    if ((nparams > 0 && !param_types) || (nfields > 0 && !fields)) {
+        if (param_types) duckdb_free(param_types);
+        if (fields) duckdb_free(fields);
+        return 0;
+    }
+    for (i = 0; i < nparams; i++) param_types[i] = duckdb_create_logical_type(param_type_ids[i]);
+    for (i = 0; i < nfields; i++) fields[i] = duckdb_create_logical_type(field_type_ids[i]);
+    return_type = duckdb_create_struct_type(fields, field_names, nfields);
+    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, nparams, fn, ctx,
+        param_types, return_type);
+    ducknng_destroy_logical_types(param_types, nparams);
+    ducknng_destroy_logical_types(fields, nfields);
+    if (param_types) duckdb_free(param_types);
+    if (fields) duckdb_free(fields);
+    duckdb_destroy_logical_type(&return_type);
+    return ok;
+}
+
 static const char *ducknng_rpc_type_name(uint8_t type) {
     switch (type) {
     case DUCKNNG_RPC_MANIFEST: return "manifest";
@@ -198,16 +237,6 @@ static void destroy_request_bind_data(void *ptr) {
     if (!data) return;
     if (data->error) duckdb_free(data->error);
     if (data->payload) duckdb_free(data->payload);
-    duckdb_free(data);
-}
-
-static void destroy_http_result_bind_data(void *ptr) {
-    ducknng_http_result_bind_data *data = (ducknng_http_result_bind_data *)ptr;
-    if (!data) return;
-    if (data->error) duckdb_free(data->error);
-    if (data->headers_json) duckdb_free(data->headers_json);
-    if (data->body) duckdb_free(data->body);
-    if (data->body_text) duckdb_free(data->body_text);
     duckdb_free(data);
 }
 
@@ -1860,125 +1889,107 @@ static void ducknng_request_scan(duckdb_function_info info, duckdb_data_chunk ou
     init->emitted = 1;
 }
 
-static void ducknng_ncurl_bind(duckdb_bind_info info) {
-    ducknng_http_result_bind_data *bind;
-    duckdb_logical_type type;
-    duckdb_value url_val;
-    duckdb_value method_val;
-    duckdb_value headers_val;
-    duckdb_value body_val;
-    duckdb_value timeout_val;
-    duckdb_value tls_val;
-    duckdb_blob body_blob;
-    char *url;
-    char *method;
-    char *headers_json;
-    int32_t timeout_ms;
-    uint64_t tls_config_id;
-    const ducknng_tls_opts *tls_opts = NULL;
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
-    char *errmsg = NULL;
-    uint16_t status = 0;
-    size_t body_len = 0;
-    bind = (ducknng_http_result_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    url_val = duckdb_bind_get_parameter(info, 0);
-    method_val = duckdb_bind_get_parameter(info, 1);
-    headers_val = duckdb_bind_get_parameter(info, 2);
-    body_val = duckdb_bind_get_parameter(info, 3);
-    timeout_val = duckdb_bind_get_parameter(info, 4);
-    tls_val = duckdb_bind_get_parameter(info, 5);
-    url = duckdb_is_null_value(url_val) ? NULL : duckdb_get_varchar(url_val);
-    method = duckdb_is_null_value(method_val) ? NULL : duckdb_get_varchar(method_val);
-    headers_json = duckdb_is_null_value(headers_val) ? NULL : duckdb_get_varchar(headers_val);
-    if (duckdb_is_null_value(body_val)) {
-        memset(&body_blob, 0, sizeof(body_blob));
-    } else {
-        body_blob = duckdb_get_blob(body_val);
-    }
-    timeout_ms = duckdb_get_int32(timeout_val);
-    tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
-    duckdb_destroy_value(&url_val);
-    duckdb_destroy_value(&method_val);
-    duckdb_destroy_value(&headers_val);
-    duckdb_destroy_value(&body_val);
-    duckdb_destroy_value(&timeout_val);
-    duckdb_destroy_value(&tls_val);
-    if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
-        bind->ok = false;
-        bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: tls config not found");
-        errmsg = NULL;
-    } else if (ducknng_http_transact(url, method, headers_json,
-            (const uint8_t *)body_blob.data, (size_t)body_blob.size, timeout_ms, tls_opts,
-            &status, &bind->headers_json, &bind->body, &body_len, &errmsg) != 0) {
-        bind->ok = false;
-        bind->error = errmsg ? errmsg : ducknng_strdup("ducknng: HTTP request failed");
-        errmsg = NULL;
-    } else {
-        bind->ok = true;
-        bind->status = (int32_t)status;
-        bind->body_len = (idx_t)body_len;
-        if (bind->body && bind->body_len > 0 && ducknng_sql_bytes_look_text(bind->body, (size_t)bind->body_len)) {
-            bind->body_text = ducknng_dup_bytes(bind->body, (size_t)bind->body_len);
-            if (!bind->body_text) {
-                bind->ok = false;
-                bind->error = ducknng_strdup("ducknng: out of memory copying HTTP response text");
-            }
-        }
-    }
-    if (url) duckdb_free(url);
-    if (method) duckdb_free(method);
-    if (headers_json) duckdb_free(headers_json);
-    if (body_blob.data) duckdb_free(body_blob.data);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    duckdb_bind_add_result_column(info, "ok", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
-    duckdb_bind_add_result_column(info, "status", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "error", type);
-    duckdb_bind_add_result_column(info, "headers_json", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    duckdb_bind_add_result_column(info, "body", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "body_text", type);
-    duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_http_result_bind_data);
-    duckdb_bind_set_cardinality(info, 1, true);
-}
-
-static void ducknng_ncurl_scan(duckdb_function_info info, duckdb_data_chunk output) {
-    ducknng_single_row_init_data *init = (ducknng_single_row_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_result_bind_data *bind = (ducknng_http_result_bind_data *)duckdb_function_get_bind_data(info);
+static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chunk input,
+    duckdb_vector output) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    duckdb_vector url_vec;
+    duckdb_vector method_vec;
+    duckdb_vector headers_vec;
+    duckdb_vector body_vec;
+    duckdb_vector timeout_vec;
+    duckdb_vector tls_vec;
+    duckdb_vector child_vecs[6];
     bool *ok_data;
     int32_t *status_data;
-    if (!init || !bind || init->emitted) {
-        duckdb_data_chunk_set_size(output, 0);
-        return;
+    idx_t row_count;
+    idx_t row;
+    int i;
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    url_vec = duckdb_data_chunk_get_vector(input, 0);
+    method_vec = duckdb_data_chunk_get_vector(input, 1);
+    headers_vec = duckdb_data_chunk_get_vector(input, 2);
+    body_vec = duckdb_data_chunk_get_vector(input, 3);
+    timeout_vec = duckdb_data_chunk_get_vector(input, 4);
+    tls_vec = duckdb_data_chunk_get_vector(input, 5);
+    row_count = duckdb_data_chunk_get_size(input);
+    for (i = 0; i < 6; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
+    ok_data = (bool *)duckdb_vector_get_data(child_vecs[0]);
+    status_data = (int32_t *)duckdb_vector_get_data(child_vecs[1]);
+    for (row = 0; row < row_count; row++) {
+        char *url = NULL;
+        char *method = NULL;
+        char *headers_json = NULL;
+        uint8_t *body = NULL;
+        idx_t body_len = 0;
+        int32_t timeout_ms;
+        uint64_t tls_config_id;
+        const ducknng_tls_opts *tls_opts = NULL;
+        char *errmsg = NULL;
+        char *headers_out = NULL;
+        uint8_t *body_out = NULL;
+        size_t body_out_len = 0;
+        uint16_t status = 0;
+        ok_data[row] = false;
+        if (!ctx || !ctx->rt || arg_is_null(url_vec, row) || arg_is_null(timeout_vec, row) ||
+            arg_is_null(tls_vec, row)) {
+            errmsg = ducknng_strdup("ducknng: missing HTTP request state");
+            goto emit_error;
+        }
+        url = arg_varchar_dup(url_vec, row);
+        method = arg_is_null(method_vec, row) ? NULL : arg_varchar_dup(method_vec, row);
+        headers_json = arg_is_null(headers_vec, row) ? NULL : arg_varchar_dup(headers_vec, row);
+        if (!arg_is_null(body_vec, row)) body = arg_blob_dup(body_vec, row, &body_len);
+        timeout_ms = arg_int32(timeout_vec, row, 0);
+        tls_config_id = arg_u64(tls_vec, row, 0);
+        if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) goto emit_error;
+        if (ducknng_http_transact(url, method, headers_json, body, (size_t)body_len,
+                timeout_ms, tls_opts, &status, &headers_out, &body_out, &body_out_len,
+                &errmsg) != 0) {
+            if (!errmsg) errmsg = ducknng_strdup("ducknng: HTTP request failed");
+            goto emit_error;
+        }
+        ok_data[row] = true;
+        status_data[row] = (int32_t)status;
+        set_null(child_vecs[2], row);
+        if (headers_out) duckdb_unsafe_vector_assign_string_element_len(child_vecs[3], row,
+            headers_out, (idx_t)strlen(headers_out));
+        else set_null(child_vecs[3], row);
+        if (body_out) assign_blob(child_vecs[4], row, body_out, (idx_t)body_out_len);
+        else set_null(child_vecs[4], row);
+        if (body_out && body_out_len > 0 && ducknng_sql_bytes_look_text(body_out, body_out_len)) {
+            char *body_text = ducknng_dup_bytes(body_out, body_out_len);
+            if (body_text) {
+                duckdb_unsafe_vector_assign_string_element_len(child_vecs[5], row,
+                    body_text, (idx_t)strlen(body_text));
+                duckdb_free(body_text);
+            } else {
+                ok_data[row] = false;
+                set_null(child_vecs[1], row);
+                errmsg = ducknng_strdup("ducknng: out of memory copying HTTP response text");
+                goto emit_error;
+            }
+        } else {
+            set_null(child_vecs[5], row);
+        }
+        goto cleanup_row;
+emit_error:
+        ok_data[row] = false;
+        set_null(child_vecs[1], row);
+        if (errmsg) duckdb_unsafe_vector_assign_string_element_len(child_vecs[2], row,
+            errmsg, (idx_t)strlen(errmsg));
+        else set_null(child_vecs[2], row);
+        set_null(child_vecs[3], row);
+        set_null(child_vecs[4], row);
+        set_null(child_vecs[5], row);
+cleanup_row:
+        if (url) duckdb_free(url);
+        if (method) duckdb_free(method);
+        if (headers_json) duckdb_free(headers_json);
+        if (body) duckdb_free(body);
+        if (headers_out) duckdb_free(headers_out);
+        if (body_out) duckdb_free(body_out);
+        if (errmsg) duckdb_free(errmsg);
     }
-    ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
-    status_data = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1));
-    ok_data[0] = bind->ok;
-    if (bind->ok) status_data[0] = bind->status;
-    else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 2), 0, bind->error, (idx_t)strlen(bind->error));
-    else set_null(duckdb_data_chunk_get_vector(output, 2), 0);
-    if (bind->headers_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), 0, bind->headers_json, (idx_t)strlen(bind->headers_json));
-    else set_null(duckdb_data_chunk_get_vector(output, 3), 0);
-    if (bind->body) assign_blob(duckdb_data_chunk_get_vector(output, 4), 0, bind->body, bind->body_len);
-    else set_null(duckdb_data_chunk_get_vector(output, 4), 0);
-    if (bind->body_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, bind->body_text, (idx_t)strlen(bind->body_text));
-    else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
-    duckdb_data_chunk_set_size(output, 1);
-    init->emitted = 1;
 }
 
 static int register_remote_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
@@ -2020,9 +2031,24 @@ static int register_request_socket_result_table_named(duckdb_connection con, duc
 static int register_http_result_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     duckdb_type param_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
+    duckdb_type field_types[6] = {DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_VARCHAR};
+    const char *field_names[6] = {"ok", "status", "error", "headers_json", "body", "body_text"};
+    const char *sql =
+        "CREATE OR REPLACE MACRO ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id) AS TABLE "
+        "WITH _row AS (SELECT ducknng__ncurl_row(url, method, headers_json, body, timeout_ms, tls_config_id) AS r) "
+        "SELECT struct_extract(r, 'ok') AS ok, "
+        "       struct_extract(r, 'status') AS status, "
+        "       struct_extract(r, 'error') AS error, "
+        "       struct_extract(r, 'headers_json') AS headers_json, "
+        "       struct_extract(r, 'body') AS body, "
+        "       struct_extract(r, 'body_text') AS body_text "
+        "FROM _row";
+    (void)name;
     if (!ctx || !ctx->rt) return 0;
-    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 6, param_types, ducknng_ncurl_bind,
-        ducknng_single_row_init, ducknng_ncurl_scan);
+    if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 6,
+            param_types, ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
+    return execute_sql(con, sql);
 }
 
 int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *ctx) {

@@ -10,7 +10,22 @@ import threading
 
 
 class SmokeHandler(http.server.BaseHTTPRequestHandler):
+    retry_count = 0
+    retry_lock = threading.Lock()
+
     def do_GET(self) -> None:
+        if self.path.startswith("/retry"):
+            with self.retry_lock:
+                type(self).retry_count += 1
+                call = type(self).retry_count
+            status = 503 if call <= 2 else 200
+            body = ('[{"call":%d}]' % call).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path != "/hello":
             self.send_response(404)
             self.end_headers()
@@ -70,6 +85,7 @@ def main() -> None:
             tmpdir_path = pathlib.Path(tmpdir)
             out1 = tmpdir_path / "hello.tsv"
             out2 = tmpdir_path / "echo.tsv"
+            out3 = tmpdir_path / "retry.tsv"
             sql = f"""
 LOAD '{sql_quote(str(ext_path))}';
 COPY (
@@ -87,24 +103,50 @@ COPY (
     0::UBIGINT
   )
 ) TO '{sql_quote(str(out2))}' (DELIMITER '\t', HEADER FALSE);
+COPY (
+  WITH RECURSIVE attempts(attempt, status, body_text) AS (
+    SELECT 1, status, body_text
+    FROM ducknng_ncurl('http://127.0.0.1:{port}/retry?attempt=1', 'GET', NULL, NULL, 2000, 0::UBIGINT)
+    UNION ALL
+    SELECT attempt + 1, r.status, r.body_text
+    FROM (SELECT * FROM attempts WHERE status <> 200 AND attempt < 5) a,
+         ducknng_ncurl(
+           'http://127.0.0.1:{port}/retry?attempt=' || (a.attempt + 1)::VARCHAR,
+           'GET', NULL, NULL, 2000, 0::UBIGINT
+         ) r
+  )
+  SELECT string_agg(status::VARCHAR || ':' || regexp_extract(body_text, '[0-9]+'), '|' ORDER BY attempt) AS trace,
+         max(attempt)::INTEGER AS max_attempt
+  FROM attempts
+) TO '{sql_quote(str(out3))}' (DELIMITER '\t', HEADER FALSE);
 """
-            proc = subprocess.run(
-                ["duckdb", "-unsigned"],
-                input=sql,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                sys.stderr.write(proc.stdout)
-                sys.stderr.write(proc.stderr)
-                raise SystemExit(proc.returncode)
+            try:
+                import duckdb
+            except ModuleNotFoundError:
+                proc = subprocess.run(
+                    ["duckdb", "-unsigned"],
+                    input=sql,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    sys.stderr.write(proc.stdout)
+                    sys.stderr.write(proc.stderr)
+                    raise SystemExit(proc.returncode)
+            else:
+                con = duckdb.connect(":memory:", config={"allow_unsigned_extensions": "true"})
+                con.execute(sql)
+                con.close()
 
             hello = read_tsv_line(out1)
             echo = read_tsv_line(out2)
+            retry = read_tsv_line(out3)
 
             assert hello == ["true", "200", "hello from ducknng http", "true"], hello
             assert echo == ["true", "200", "01020304", "true", "true"], echo
+            assert retry == ["503:1|503:2|200:3", "3"], retry
+            assert SmokeHandler.retry_count == 3, SmokeHandler.retry_count
             print("ducknng http smoke: ok")
     finally:
         server.shutdown()

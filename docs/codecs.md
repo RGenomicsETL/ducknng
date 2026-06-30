@@ -10,7 +10,7 @@ SELECT * FROM ducknng_parse_body(body, content_type);
 SELECT * FROM ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id);
 ```
 
-`ducknng_parse_body(...)` parses an existing `BLOB` using the supplied content type. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx response status, extracts the response `Content-Type`, and parses the response body into a DuckDB table. Use `ducknng_ncurl(...)` instead when you need to inspect non-2xx responses, response headers, or raw bytes.
+`ducknng_parse_body(...)` parses an existing `BLOB` using the supplied content type. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx response status, extracts the response `Content-Type`, and parses the response body into a DuckDB table. Its schema is inferred from the response at bind time, so it cannot be used as a lateral per-row HTTP call or as the retry primitive inside a recursive CTE. Use `ducknng_ncurl(...)` instead when you need volatile row-by-row HTTP execution, non-2xx status inspection, response headers, or raw bytes, then parse the body explicitly once the response you want has been selected.
 
 Format-specific functions are also available for formats where DuckDB's own readers provide better type inference and dialect detection than the built-in codec:
 
