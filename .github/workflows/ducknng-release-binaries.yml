@@ -14,45 +14,181 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-linux-amd64:
-    name: Build linux_amd64 extension binary
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.platform }} extension binary
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux_amd64
+            runner: ubuntu-24.04
+            kind: native
+            raw_ext: so
+            smoke: true
+          - platform: linux_arm64
+            runner: ubuntu-24.04-arm
+            kind: native
+            raw_ext: so
+            smoke: true
+          - platform: osx_amd64
+            runner: macos-13
+            kind: native
+            raw_ext: dylib
+            smoke: true
+          - platform: osx_arm64
+            runner: macos-14-arm64
+            kind: native
+            raw_ext: dylib
+            smoke: true
+          - platform: windows_amd64_mingw
+            runner: windows-latest
+            kind: native
+            raw_ext: dll
+            smoke: false
+          - platform: wasm_eh
+            runner: ubuntu-24.04
+            kind: wasm
+            raw_ext: no_metadata.wasm
+            smoke: false
+    env:
+      DUCKDB_PLATFORM: ${{ matrix.platform }}
+      GEN: ninja
+      PYTHON_BIN: python
     steps:
+      - name: Keep LF line endings on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Build release extension
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja
+
+      - name: Set up Windows Rtools MinGW
+        if: matrix.platform == 'windows_amd64_mingw'
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'devel'
+          update-rtools: true
+          rtools-version: '42'
+
+      - name: Install Windows build tools
+        if: matrix.platform == 'windows_amd64_mingw'
+        shell: powershell
+        run: |
+          choco install ninja -y
+          echo "C:\rtools42\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\rtools42\x86_64-w64-mingw32.static.posix\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\gcc.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-gcc.exe -Force
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\g++.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-g++.exe -Force
+          Copy-Item C:\rtools42\x86_64-w64-mingw32.static.posix\bin\gfortran.exe C:\rtools42\x86_64-w64-mingw32.static.posix\bin\x86_64-w64-mingw32-gfortran.exe -Force
+
+      - name: Set up Emscripten
+        if: matrix.kind == 'wasm'
+        uses: mymindstorm/setup-emsdk@v13
+        with:
+          version: 3.1.71
+
+      - name: Configure release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "windows_amd64_mingw" ]; then
+            export CC=gcc
+            export CXX=g++
+          fi
           make configure
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
             printf '%s\n' "${GITHUB_REF_NAME}" > configure/extension_version.txt
           fi
-          make release -j2
+          printf 'configured platform: '
+          cat configure/platform.txt
+          printf 'extension version: '
+          cat configure/extension_version.txt
 
-      - name: Smoke test matching DuckDB runtime
+      - name: Build release extension
+        shell: bash
         run: |
           set -euo pipefail
-          configure/venv/bin/python3 test/http_smoke.py build/release/ducknng.duckdb_extension
-          configure/venv/bin/python3 - <<'PY'
+          if [ "${{ matrix.platform }}" = "windows_amd64_mingw" ]; then
+            export CC=gcc
+            export CXX=g++
+          fi
+          if [ "${{ matrix.kind }}" = "wasm" ]; then
+            make release -j2
+            make move_wasm_extension
+          else
+            make release -j2
+          fi
+
+      - name: Smoke test matching DuckDB runtime
+        if: matrix.smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=configure/venv/bin/python3
+          "$py" test/http_smoke.py build/release/ducknng.duckdb_extension
+          "$py" - <<'PY'
           import duckdb
           con = duckdb.connect(':memory:', config={'allow_unsigned_extensions': 'true'})
           con.execute("LOAD 'build/release/ducknng.duckdb_extension'")
-          rows = con.execute("""
-          SELECT function_type, stability
+          expected = {
+              'ducknng__ncurl_row',
+              'ducknng_start_server',
+              'ducknng_stop_server',
+              'ducknng_set_service_peer_allowlist',
+              'ducknng_set_service_ip_allowlist',
+              'ducknng_run_rpc_raw',
+              'ducknng_get_rpc_manifest_raw',
+              'ducknng_open_query_raw',
+              'ducknng_fetch_query_raw',
+              'ducknng_close_query_raw',
+              'ducknng_cancel_query_raw',
+              'ducknng_request_raw',
+              'ducknng_request_socket_raw',
+          }
+          names_sql = ','.join("'" + name + "'" for name in sorted(expected))
+          rows = con.execute(f"""
+          SELECT function_name, stability
           FROM duckdb_functions()
-          WHERE function_name = 'ducknng__ncurl_row'
+          WHERE function_type = 'scalar'
+            AND function_name IN ({names_sql})
           """).fetchall()
-          if not rows or rows[0][1] != 'VOLATILE':
-              raise SystemExit(f'ducknng__ncurl_row is not VOLATILE: {rows!r}')
-          print('ducknng__ncurl_row:', rows)
+          bad = [(name, stability) for name, stability in rows if stability != 'VOLATILE']
+          missing = sorted(expected - {name for name, _ in rows})
+          if bad or missing:
+              raise SystemExit(f'volatile scalar check failed: bad={bad!r} missing={missing!r}')
+          print('volatile scalar check:', sorted(expected))
           PY
 
       - name: Package release assets
         id: package
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -60,8 +196,17 @@ jobs:
           duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
           platform=$(cat configure/platform.txt)
           asset_base="ducknng-${tag}-${platform}"
-          cp build/release/ducknng.duckdb_extension "dist/${asset_base}.duckdb_extension"
-          cp build/release/libducknng.so "dist/${asset_base}.so"
+          if [ "${{ matrix.kind }}" = "wasm" ]; then
+            cp "build/${platform}/release/ducknng.duckdb_extension.wasm" \
+              "dist/${asset_base}.duckdb_extension.wasm"
+            cp "build/${platform}/release/ducknng.no_metadata.wasm" \
+              "dist/${asset_base}.no_metadata.wasm"
+          else
+            cp build/release/ducknng.duckdb_extension \
+              "dist/${asset_base}.duckdb_extension"
+            cp "build/release/libducknng.${{ matrix.raw_ext }}" \
+              "dist/${asset_base}.${{ matrix.raw_ext }}"
+          fi
           cat > "dist/${asset_base}.txt" <<EOF
           ducknng self-published extension binary
           tag: ${tag}
@@ -69,35 +214,69 @@ jobs:
           duckdb_version: ${duckdb_version}
           platform: ${platform}
 
-          This binary is unsigned. Load it from a host connection opened with:
-            allow_unsigned_extensions = true
-
-          Then run:
-            LOAD '/path/to/${asset_base}.duckdb_extension';
+          These binaries are unsigned and are not DuckDB community-signed extension builds.
+          Native DuckDB hosts must be opened with allow_unsigned_extensions = true before LOAD.
+          The wasm_eh asset is a duckdb-wasm side module for the wasm_eh runtime, not a native LOAD target.
           EOF
-          (cd dist && sha256sum * > SHA256SUMS)
           echo "asset_base=${asset_base}" >> "$GITHUB_OUTPUT"
-          echo "duckdb_version=${duckdb_version}" >> "$GITHUB_OUTPUT"
-          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload workflow artifact
+      - name: Upload platform release artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.asset_base }}
-          path: dist
+          path: dist/*
           if-no-files-found: error
 
+  publish:
+    name: Publish GitHub Release assets
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Assemble release directory
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find downloaded-artifacts -maxdepth 3 -type f -print -exec cp {} dist/ \;
+          (cd dist && sha256sum * > SHA256SUMS)
+          duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
+          echo "duckdb_version=${duckdb_version}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'assets<<EOF'
+            find dist -maxdepth 1 -type f | sort
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release assets
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ducknng ${{ github.ref_name }}
+          overwrite_files: true
           files: dist/*
           body: |
-            Self-published ducknng extension binary built from `${{ github.sha }}`.
+            Self-published ducknng extension binaries built from `${{ github.sha }}`.
 
-            DuckDB target: `${{ steps.package.outputs.duckdb_version }}`
-            Platform: `${{ steps.package.outputs.platform }}`
+            DuckDB target: `${{ steps.release.outputs.duckdb_version }}`
 
-            These assets are unsigned and are not DuckDB community-signed extension builds. Open the host DuckDB connection with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file.
+            Included platforms:
+            - `linux_amd64`
+            - `linux_arm64`
+            - `osx_amd64`
+            - `osx_arm64`
+            - `windows_amd64_mingw` built with Rtools/MinGW
+            - `wasm_eh`
+
+            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.
