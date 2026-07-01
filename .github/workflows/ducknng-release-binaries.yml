@@ -32,15 +32,17 @@ jobs:
             raw_ext: so
             smoke: true
           - platform: osx_amd64
-            runner: macos-13
+            runner: macos-latest
             kind: native
             raw_ext: dylib
-            smoke: true
+            osx_arch: x86_64
+            smoke: false
           - platform: osx_arm64
-            runner: macos-14-arm64
+            runner: macos-latest
             kind: native
             raw_ext: dylib
-            smoke: true
+            osx_arch: arm64
+            smoke: false
           - platform: windows_amd64_mingw
             runner: windows-latest
             kind: native
@@ -122,6 +124,9 @@ jobs:
             export CC=gcc
             export CXX=g++
           fi
+          if [ -n "${{ matrix.osx_arch }}" ]; then
+            export CMAKE_EXTRA_BUILD_FLAGS="${CMAKE_EXTRA_BUILD_FLAGS:-} -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }} -DOSX_BUILD_ARCH=${{ matrix.osx_arch }}"
+          fi
           make configure
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
             printf '%s\n' "${GITHUB_REF_NAME}" > configure/extension_version.txt
@@ -138,6 +143,9 @@ jobs:
           if [ "${{ matrix.platform }}" = "windows_amd64_mingw" ]; then
             export CC=gcc
             export CXX=g++
+          fi
+          if [ -n "${{ matrix.osx_arch }}" ]; then
+            export CMAKE_EXTRA_BUILD_FLAGS="${CMAKE_EXTRA_BUILD_FLAGS:-} -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }} -DOSX_BUILD_ARCH=${{ matrix.osx_arch }}"
           fi
           if [ "${{ matrix.kind }}" = "wasm" ]; then
             duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
@@ -342,4 +350,4 @@ jobs:
             - `windows_amd64_mingw` built with Rtools/MinGW and smoke-loaded through R
             - `wasm_eh`
 
-            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.
+            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. Linux and Windows artifacts are smoke-loaded in the workflow; macOS artifacts are target-architecture build artifacts. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.
