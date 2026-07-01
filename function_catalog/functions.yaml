@@ -264,6 +264,25 @@
       ]
     },
     {
+      "name": "ducknng_nng_stats",
+      "kind": "table",
+      "category": "Introspection",
+      "signature": "ducknng_nng_stats()",
+      "returns": "TABLE(scope VARCHAR, name VARCHAR, type VARCHAR, unit VARCHAR, value UBIGINT, svalue VARCHAR, description VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Snapshot of NNG's native statistics tree, flattened into rows.",
+      "notes": [
+        "Each leaf statistic becomes a row: scope is the dotted path of enclosing scope names, type is one of scope/level/counter/string/boolean/id, and unit is one of none/bytes/messages/millis/events.",
+        "value carries the numeric value; booleans are represented as 0 or 1, and string statistics use svalue.",
+        "Returns an empty snapshot rather than erroring when NNG statistics are unavailable in the linked NNG build.",
+        "Process-wide: reflects all sockets in the runtime, not a single named service. Filter by scope or name in SQL to focus on one statistic family."
+      ],
+      "examples": [
+        "SELECT scope, name, value FROM ducknng_nng_stats() WHERE name = 'rx_bytes';"
+      ]
+    },
+    {
       "name": "ducknng_log_entries",
       "kind": "table",
       "category": "Introspection",

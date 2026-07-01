@@ -3,6 +3,7 @@
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include "ducknng_runtime.h"
+#include "ducknng_nng_compat.h"
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
@@ -11,6 +12,7 @@ static int register_monitor_table(duckdb_connection con, ducknng_sql_context *ct
 static int register_monitor_status_table(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_pipes_table(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_log_entries_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_nng_stats_table(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_enable_log_capture_scalar(duckdb_connection con, ducknng_sql_context *ctx);
 
 typedef struct {
@@ -544,6 +546,7 @@ int ducknng_register_sql_monitor(duckdb_connection con, ducknng_sql_context *ctx
     if (!register_monitor_status_table(con, ctx)) return 0;
     if (!register_pipes_table(con, ctx)) return 0;
     if (!register_log_entries_table(con, ctx)) return 0;
+    if (!register_nng_stats_table(con, ctx)) return 0;
     if (!register_enable_log_capture_scalar(con, ctx)) return 0;
     return 1;
 }
@@ -646,6 +649,98 @@ static int register_log_entries_table(duckdb_connection con, ducknng_sql_context
     if (!ctx || !ctx->rt) return 0;
     return DUCKNNG_REGISTER_TABLE(con, "ducknng_log_entries", ctx, 0, NULL,
         ducknng_log_entries_bind, ducknng_read_monitor_init, ducknng_log_entries_scan);
+}
+
+/* ---------------------------------------------------------------------------
+ * ducknng_nng_stats() — flattened snapshot of NNG's native statistics tree
+ * --------------------------------------------------------------------------- */
+
+typedef struct {
+    ducknng_nng_stat_row *rows;
+    size_t row_count;
+} ducknng_nng_stats_bind_data;
+
+static void destroy_nng_stats_bind_data(void *ptr) {
+    ducknng_nng_stats_bind_data *data = (ducknng_nng_stats_bind_data *)ptr;
+    if (!data) return;
+    ducknng_nng_stats_free(data->rows, data->row_count);
+    duckdb_free(data);
+}
+
+static void ducknng_nng_stats_bind(duckdb_bind_info info) {
+    ducknng_nng_stats_bind_data *bind = NULL;
+    ducknng_nng_stat_row *rows = NULL;
+    size_t count = 0;
+    char *errmsg = NULL;
+    duckdb_logical_type type;
+
+    if (ducknng_nng_stats_snapshot(&rows, &count, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to snapshot nng stats");
+        if (errmsg) duckdb_free(errmsg);
+        return;
+    }
+    bind = (ducknng_nng_stats_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        ducknng_nng_stats_free(rows, count);
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    bind->rows = rows;
+    bind->row_count = count;
+
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "scope", type);
+    duckdb_bind_add_result_column(info, "name", type);
+    duckdb_bind_add_result_column(info, "type", type);
+    duckdb_bind_add_result_column(info, "unit", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_bind_add_result_column(info, "value", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "svalue", type);
+    duckdb_bind_add_result_column(info, "description", type);
+    duckdb_destroy_logical_type(&type);
+
+    duckdb_bind_set_bind_data(info, bind, destroy_nng_stats_bind_data);
+    duckdb_bind_set_cardinality(info, (idx_t)bind->row_count, true);
+}
+
+static void ducknng_nng_stats_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_monitor_init_data *init = (ducknng_monitor_init_data *)duckdb_function_get_init_data(info);
+    ducknng_nng_stats_bind_data *bind = (ducknng_nng_stats_bind_data *)duckdb_function_get_bind_data(info);
+    idx_t remaining, chunk_size, i;
+    if (!init || !bind || init->offset >= (idx_t)bind->row_count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    remaining = (idx_t)bind->row_count - init->offset;
+    chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
+    for (i = 0; i < chunk_size; i++) {
+        ducknng_nng_stat_row *row = &bind->rows[init->offset + i];
+        duckdb_vector v;
+        v = duckdb_data_chunk_get_vector(output, 0);
+        if (row->scope) duckdb_unsafe_vector_assign_string_element_len(v, i, row->scope, (idx_t)strlen(row->scope)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 1);
+        if (row->name) duckdb_unsafe_vector_assign_string_element_len(v, i, row->name, (idx_t)strlen(row->name)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 2);
+        if (row->type) duckdb_unsafe_vector_assign_string_element_len(v, i, row->type, (idx_t)strlen(row->type)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 3);
+        if (row->unit) duckdb_unsafe_vector_assign_string_element_len(v, i, row->unit, (idx_t)strlen(row->unit)); else set_null(v, i);
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4)))[i] = row->value;
+        v = duckdb_data_chunk_get_vector(output, 5);
+        if (row->svalue) duckdb_unsafe_vector_assign_string_element_len(v, i, row->svalue, (idx_t)strlen(row->svalue)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 6);
+        if (row->desc) duckdb_unsafe_vector_assign_string_element_len(v, i, row->desc, (idx_t)strlen(row->desc)); else set_null(v, i);
+    }
+    init->offset += chunk_size;
+    duckdb_data_chunk_set_size(output, chunk_size);
+}
+
+static int register_nng_stats_table(duckdb_connection con, ducknng_sql_context *ctx) {
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_nng_stats", ctx, 0, NULL,
+        ducknng_nng_stats_bind, ducknng_read_monitor_init, ducknng_nng_stats_scan);
 }
 
 /* ---------------------------------------------------------------------------

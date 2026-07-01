@@ -6,6 +6,7 @@ DUCKDB_EXTENSION_GLOBAL
 
 #include "ducknng_quack.h"
 #include "ducknng_transport.h"
+#include "ducknng_util.h"
 #include "ducknng_wire.h"
 
 #include "greatest.h"
@@ -264,6 +265,166 @@ static struct theft_type_info prop_frame_info = {
     },
 };
 
+struct prop_two_sizes {
+    uint64_t a;
+    uint64_t b;
+};
+
+static enum theft_alloc_res
+prop_two_sizes_alloc(struct theft *t, void *env, void **instance)
+{
+    struct prop_two_sizes *out;
+
+    (void)env;
+    out = (struct prop_two_sizes *)malloc(sizeof(*out));
+    if (!out) return THEFT_ALLOC_ERROR;
+    out->a = ((uint64_t)theft_random_bits(t, 32) << 32) | (uint64_t)theft_random_bits(t, 32);
+    out->b = ((uint64_t)theft_random_bits(t, 32) << 32) | (uint64_t)theft_random_bits(t, 32);
+    switch (theft_random_bits(t, 3)) {
+    case 0: out->a = (uint64_t)SIZE_MAX; break;
+    case 1: out->b = (uint64_t)SIZE_MAX - (out->a & 0xffu); break;
+    case 2: out->a = ((uint64_t)SIZE_MAX / 2u) + (out->a & 0xffffu); break;
+    default: break;
+    }
+    *instance = out;
+    return THEFT_ALLOC_OK;
+}
+
+static void
+prop_two_sizes_free(void *instance, void *env)
+{
+    (void)env;
+    free(instance);
+}
+
+static void
+prop_two_sizes_print(FILE *f, const void *instance, void *env)
+{
+    const struct prop_two_sizes *in = (const struct prop_two_sizes *)instance;
+
+    (void)env;
+    fprintf(f, "a=%" PRIu64 " b=%" PRIu64 "\n", in->a, in->b);
+}
+
+static struct theft_type_info prop_two_sizes_info = {
+    .alloc = prop_two_sizes_alloc,
+    .free = prop_two_sizes_free,
+    .print = prop_two_sizes_print,
+    .autoshrink_config = {
+        .enable = true,
+    },
+};
+
+static enum theft_trial_res
+prop_size_arith_invariants(struct theft *t, void *arg1)
+{
+    const struct prop_two_sizes *in = (const struct prop_two_sizes *)arg1;
+    size_t a = (size_t)in->a;
+    size_t b = (size_t)in->b;
+    size_t out;
+    const size_t sentinel = (size_t)0x5a5a5a5au;
+
+    (void)t;
+    out = sentinel;
+    if (b > SIZE_MAX - a) {
+        if (ducknng_size_add(a, b, &out) != -1) return THEFT_TRIAL_FAIL;
+        if (out != sentinel) return THEFT_TRIAL_FAIL;
+    } else {
+        if (ducknng_size_add(a, b, &out) != 0) return THEFT_TRIAL_FAIL;
+        if (out != a + b) return THEFT_TRIAL_FAIL;
+    }
+
+    out = sentinel;
+    if (a != 0 && b > SIZE_MAX / a) {
+        if (ducknng_size_mul(a, b, &out) != -1) return THEFT_TRIAL_FAIL;
+        if (out != sentinel) return THEFT_TRIAL_FAIL;
+    } else {
+        if (ducknng_size_mul(a, b, &out) != 0) return THEFT_TRIAL_FAIL;
+        if (out != a * b) return THEFT_TRIAL_FAIL;
+    }
+
+    out = 0;
+    if (ducknng_grow_capacity(a, b, 256, &out) != 0) return THEFT_TRIAL_FAIL;
+    if (out < a) return THEFT_TRIAL_FAIL;
+
+    return THEFT_TRIAL_PASS;
+}
+
+#define DUCKNNG_PROP_MAX_PATH_SEG 48u
+
+struct prop_two_strings {
+    char a[DUCKNNG_PROP_MAX_PATH_SEG + 1];
+    char b[DUCKNNG_PROP_MAX_PATH_SEG + 1];
+};
+
+static enum theft_alloc_res
+prop_two_strings_alloc(struct theft *t, void *env, void **instance)
+{
+    struct prop_two_strings *out;
+    size_t la, lb, i;
+
+    (void)env;
+    out = (struct prop_two_strings *)malloc(sizeof(*out));
+    if (!out) return THEFT_ALLOC_ERROR;
+    la = (size_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_PATH_SEG + 1u);
+    lb = (size_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_PATH_SEG + 1u);
+    for (i = 0; i < la; i++) out->a[i] = (char)(0x21u + (theft_random_bits(t, 8) % 0x5eu));
+    out->a[la] = '\0';
+    for (i = 0; i < lb; i++) out->b[i] = (char)(0x21u + (theft_random_bits(t, 8) % 0x5eu));
+    out->b[lb] = '\0';
+    *instance = out;
+    return THEFT_ALLOC_OK;
+}
+
+static void
+prop_two_strings_free(void *instance, void *env)
+{
+    (void)env;
+    free(instance);
+}
+
+static void
+prop_two_strings_print(FILE *f, const void *instance, void *env)
+{
+    const struct prop_two_strings *in = (const struct prop_two_strings *)instance;
+
+    (void)env;
+    fprintf(f, "a=\"%s\" b=\"%s\"\n", in->a, in->b);
+}
+
+static struct theft_type_info prop_two_strings_info = {
+    .alloc = prop_two_strings_alloc,
+    .free = prop_two_strings_free,
+    .print = prop_two_strings_print,
+    .autoshrink_config = {
+        .enable = true,
+    },
+};
+
+static enum theft_trial_res
+prop_join_dotted_path_invariants(struct theft *t, void *arg1)
+{
+    const struct prop_two_strings *in = (const struct prop_two_strings *)arg1;
+    size_t pa = strlen(in->a);
+    size_t pb = strlen(in->b);
+    char *r;
+    enum theft_trial_res res = THEFT_TRIAL_PASS;
+
+    (void)t;
+    r = ducknng_join_dotted_path(in->a, in->b);
+    if (!r) return THEFT_TRIAL_FAIL;
+    if (pa == 0) {
+        if (strcmp(r, in->b) != 0) res = THEFT_TRIAL_FAIL;
+    } else if (strlen(r) != pa + 1 + pb) {
+        res = THEFT_TRIAL_FAIL;
+    } else if (memcmp(r, in->a, pa) != 0 || r[pa] != '.' ||
+               (pb && memcmp(r + pa + 1, in->b, pb) != 0)) {
+        res = THEFT_TRIAL_FAIL;
+    }
+    free(r);
+    return res;
+}
+
 static enum theft_run_res
 prop_run_one(const char *name, theft_propfun1 *prop, const struct theft_type_info *info)
 {
@@ -474,6 +635,111 @@ TEST quack_rejects_or_scans_random_zero_column_payloads(void)
     PASS();
 }
 
+TEST size_add_rejects_overflow_keeps_valid_sums(void)
+{
+    size_t out = 0;
+
+    ASSERT_EQ(0, ducknng_size_add(10, 20, &out));
+    ASSERT_EQ((size_t)30, out);
+
+    out = 0;
+    ASSERT_EQ(0, ducknng_size_add(SIZE_MAX - 1, 1, &out));
+    ASSERT_EQ(SIZE_MAX, out);
+
+    out = 0xabcd;
+    ASSERT_EQ(-1, ducknng_size_add(SIZE_MAX, 1, &out));
+    ASSERT_EQ((size_t)0xabcd, out);
+
+    out = 0xabcd;
+    ASSERT_EQ(-1, ducknng_size_add(SIZE_MAX - 4, 5, &out));
+    ASSERT_EQ((size_t)0xabcd, out);
+    PASS();
+}
+
+TEST size_mul_rejects_overflow_keeps_valid_products(void)
+{
+    size_t out = 0xabcd;
+
+    ASSERT_EQ(0, ducknng_size_mul(6, 7, &out));
+    ASSERT_EQ((size_t)42, out);
+
+    out = 0xabcd;
+    ASSERT_EQ(0, ducknng_size_mul(0, SIZE_MAX, &out));
+    ASSERT_EQ((size_t)0, out);
+
+    out = 0xabcd;
+    ASSERT_EQ(-1, ducknng_size_mul(SIZE_MAX, 2, &out));
+    ASSERT_EQ((size_t)0xabcd, out);
+
+    out = 0xabcd;
+    ASSERT_EQ(-1, ducknng_size_mul((SIZE_MAX / 4) + 1, 4, &out));
+    ASSERT_EQ((size_t)0xabcd, out);
+    PASS();
+}
+
+TEST grow_capacity_meets_need_without_overflow(void)
+{
+    size_t cap = 0;
+
+    ASSERT_EQ(0, ducknng_grow_capacity(1, 0, 256, &cap));
+    ASSERT_EQ((size_t)256, cap);
+
+    ASSERT_EQ(0, ducknng_grow_capacity(300, 256, 256, &cap));
+    ASSERT(cap >= 300);
+    ASSERT_EQ((size_t)512, cap);
+
+    ASSERT_EQ(0, ducknng_grow_capacity(100, 256, 256, &cap));
+    ASSERT_EQ((size_t)256, cap);
+
+    ASSERT_EQ(0, ducknng_grow_capacity(SIZE_MAX, SIZE_MAX / 2 + 8, 256, &cap));
+    ASSERT_EQ(SIZE_MAX, cap);
+    PASS();
+}
+
+TEST size_arith_invariants_hold_for_random_pairs(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("size arithmetic invariants", prop_size_arith_invariants,
+            &prop_two_sizes_info));
+    PASS();
+}
+
+TEST join_dotted_path_handles_edges(void)
+{
+    char *r;
+
+    r = ducknng_join_dotted_path("", "x");   ASSERT(r); ASSERT_STR_EQ("x", r);   free(r);
+    r = ducknng_join_dotted_path(NULL, "x"); ASSERT(r); ASSERT_STR_EQ("x", r);   free(r);
+    r = ducknng_join_dotted_path("a", "b");  ASSERT(r); ASSERT_STR_EQ("a.b", r); free(r);
+    r = ducknng_join_dotted_path("a.b", "c");ASSERT(r); ASSERT_STR_EQ("a.b.c", r); free(r);
+    r = ducknng_join_dotted_path("a", "");   ASSERT(r); ASSERT_STR_EQ("a.", r);  free(r);
+    r = ducknng_join_dotted_path("a", NULL); ASSERT(r); ASSERT_STR_EQ("a.", r);  free(r);
+    r = ducknng_join_dotted_path("", "");    ASSERT(r); ASSERT_STR_EQ("", r);    free(r);
+    PASS();
+}
+
+TEST join_dotted_path_invariants_hold_for_random_pairs(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("join dotted path invariants", prop_join_dotted_path_invariants,
+            &prop_two_strings_info));
+    PASS();
+}
+
+SUITE(size_checked_properties)
+{
+    RUN_TEST(size_add_rejects_overflow_keeps_valid_sums);
+    RUN_TEST(size_mul_rejects_overflow_keeps_valid_products);
+    RUN_TEST(grow_capacity_meets_need_without_overflow);
+    RUN_TEST(size_arith_invariants_hold_for_random_pairs);
+}
+
+SUITE(string_path_properties)
+{
+    RUN_TEST(join_dotted_path_handles_edges);
+    RUN_TEST(join_dotted_path_invariants_hold_for_random_pairs);
+}
+
 SUITE(wire_properties)
 {
     RUN_TEST(wire_rejects_or_decodes_random_bytes);
@@ -498,6 +764,8 @@ main(int argc, char **argv)
 {
     prop_init_duckdb_api();
     GREATEST_MAIN_BEGIN();
+    RUN_SUITE(size_checked_properties);
+    RUN_SUITE(string_path_properties);
     RUN_SUITE(wire_properties);
     RUN_SUITE(transport_properties);
     RUN_SUITE(quack_properties);

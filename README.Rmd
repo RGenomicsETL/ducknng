@@ -1224,6 +1224,26 @@ ORDER BY ts
 LIMIT 5;
 ```
 
+### NNG statistics
+
+`ducknng_nng_stats()` exposes NNG's process-wide statistics tree as rows. It is a low-level observability primitive: filter by statistic name, unit, or scope to inspect socket counters without making NNG types part of the public RPC method surface.
+
+```{duckdb include=FALSE}
+SELECT ducknng_start_server('stats_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
+```
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT name, unit, count(*) AS rows
+FROM ducknng_nng_stats()
+WHERE name IN ('tx_bytes', 'rx_bytes', 'tx_msgs', 'rx_msgs')
+GROUP BY name, unit
+ORDER BY name, unit;
+```
+
+```{duckdb include=FALSE}
+SELECT ducknng_stop_server('stats_demo');
+```
+
 ### Pipe-event monitor
 
 Each running service maintains a bounded ring of NNG pipe events (ADD_PRE, ADD_POST, REM_POST). `ducknng_read_monitor(name, after_seq, max_events)` pages through the ring. `ducknng_monitor_status(name)` returns ring and active-pipe counters.

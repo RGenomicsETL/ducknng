@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:42641 |
+| tls+tcp://127.0.0.1:35261 |
 +---------------------------+
 
 +--------+
@@ -489,6 +489,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_read_monitor`       | table  | `name, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                     | Read the bounded per-service NNG pipe monitor event stream.                                                                                                                                                                                             |
 | `ducknng_monitor_status`     | table  | `name`                        | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Return pipe monitor ring status and active-pipe counters for a running service.                                                                                                                                                                         |
 | `ducknng_list_pipes`         | table  | `name`                        | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                               | List currently active NNG pipes for a running service.                                                                                                                                                                                                  |
+| `ducknng_nng_stats`          | table  |                               | `TABLE(scope VARCHAR, name VARCHAR, type VARCHAR, unit VARCHAR, value UBIGINT, svalue VARCHAR, description VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Snapshot of NNG’s native statistics tree, flattened into rows.                                                                                                                                                                                          |
 | `ducknng_log_entries`        | table  |                               | `TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring.                                                                                                                                                               |
 | `ducknng_enable_log_capture` | scalar |                               | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Wire the ducknng log ring into DuckDB’s internal logger so that DuckDB log entries are captured and visible through ducknng_log_entries(). Returns TRUE if capture is active after the call, FALSE if registration failed. Safe to call multiple times. |
 
@@ -1986,6 +1987,29 @@ ORDER BY ts
 LIMIT 5;
 ```
 
+### NNG statistics
+
+`ducknng_nng_stats()` exposes NNG’s process-wide statistics tree as
+rows. It is a low-level observability primitive: filter by statistic
+name, unit, or scope to inspect socket counters without making NNG types
+part of the public RPC method surface.
+
+``` sql
+SELECT name, unit, count(*) AS rows
+FROM ducknng_nng_stats()
+WHERE name IN ('tx_bytes', 'rx_bytes', 'tx_msgs', 'rx_msgs')
+GROUP BY name, unit
+ORDER BY name, unit;
++----------+----------+------+
+|   name   |   unit   | rows |
++----------+----------+------+
+| rx_bytes | bytes    | 1    |
+| rx_msgs  | messages | 1    |
+| tx_bytes | bytes    | 1    |
+| tx_msgs  | messages | 1    |
++----------+----------+------+
+```
+
 ### Pipe-event monitor
 
 Each running service maintains a bounded ring of NNG pipe events
@@ -2035,7 +2059,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +-----------+---------------+-----------------+---------------+
 |  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
 +-----------+---------------+-----------------+---------------+
-| 924190260 | 1779031836353 | 127.0.0.1:58058 | NULL          |
+| 197677521 | 1782893241085 | 127.0.0.1:45534 | NULL          |
 +-----------+---------------+-----------------+---------------+
 ```
 

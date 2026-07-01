@@ -632,3 +632,132 @@ void ducknng_aio_wait(nng_aio *aio) { nng_aio_wait(aio); }
 void ducknng_aio_set_msg(nng_aio *aio, nng_msg *msg) { nng_aio_set_msg(aio, msg); }
 nng_msg *ducknng_aio_get_msg(nng_aio *aio) { return nng_aio_get_msg(aio); }
 const char *ducknng_nng_strerror(int err) { return nng_strerror(err); }
+
+static const char *ducknng_nng_stat_type_name(int type) {
+    switch (type) {
+    case NNG_STAT_SCOPE: return "scope";
+    case NNG_STAT_LEVEL: return "level";
+    case NNG_STAT_COUNTER: return "counter";
+    case NNG_STAT_STRING: return "string";
+    case NNG_STAT_BOOLEAN: return "boolean";
+    case NNG_STAT_ID: return "id";
+    default: return "unknown";
+    }
+}
+
+static const char *ducknng_nng_stat_unit_name(int unit) {
+    switch (unit) {
+    case NNG_UNIT_BYTES: return "bytes";
+    case NNG_UNIT_MESSAGES: return "messages";
+    case NNG_UNIT_MILLIS: return "millis";
+    case NNG_UNIT_EVENTS: return "events";
+    case NNG_UNIT_NONE:
+    default: return "none";
+    }
+}
+
+static void ducknng_nng_stat_row_reset(ducknng_nng_stat_row *row) {
+    if (!row) return;
+    if (row->scope) duckdb_free(row->scope);
+    if (row->name) duckdb_free(row->name);
+    if (row->type) duckdb_free(row->type);
+    if (row->unit) duckdb_free(row->unit);
+    if (row->svalue) duckdb_free(row->svalue);
+    if (row->desc) duckdb_free(row->desc);
+    memset(row, 0, sizeof(*row));
+}
+
+#define DUCKNNG_NNG_STAT_MAX_DEPTH 32
+
+static int ducknng_nng_stat_walk(nng_stat *parent, const char *scope, int depth,
+    ducknng_nng_stat_row **rows, size_t *count, size_t *cap) {
+    nng_stat *child;
+    if (depth > DUCKNNG_NNG_STAT_MAX_DEPTH) return 0;
+    for (child = nng_stat_child(parent); child; child = nng_stat_next(child)) {
+        int type = nng_stat_type(child);
+        const char *cname = nng_stat_name(child);
+        if (!cname) cname = "";
+        if (type == NNG_STAT_SCOPE) {
+            char *child_scope = ducknng_join_dotted_path(scope, cname);
+            if (!child_scope) return -1;
+            if (ducknng_nng_stat_walk(child, child_scope, depth + 1, rows, count, cap) != 0) {
+                duckdb_free(child_scope);
+                return -1;
+            }
+            duckdb_free(child_scope);
+        } else {
+            ducknng_nng_stat_row *row;
+            if (*count == *cap) {
+                size_t newcap;
+                ducknng_nng_stat_row *next;
+                if (ducknng_grow_capacity(*count + 1, *cap, 16, &newcap) != 0) return -1;
+                next = (ducknng_nng_stat_row *)duckdb_malloc(sizeof(*next) * newcap);
+                if (!next) return -1;
+                memset(next, 0, sizeof(*next) * newcap);
+                if (*rows && *count) memcpy(next, *rows, sizeof(*next) * (*count));
+                if (*rows) duckdb_free(*rows);
+                *rows = next;
+                *cap = newcap;
+            }
+            row = &(*rows)[*count];
+            memset(row, 0, sizeof(*row));
+            row->scope = ducknng_strdup(scope);
+            row->name = ducknng_strdup(cname);
+            row->type = ducknng_strdup(ducknng_nng_stat_type_name(type));
+            row->unit = ducknng_strdup(ducknng_nng_stat_unit_name(nng_stat_unit(child)));
+            {
+                const char *d = nng_stat_desc(child);
+                row->desc = ducknng_strdup(d ? d : "");
+            }
+            if (type == NNG_STAT_STRING) {
+                const char *s = nng_stat_string(child);
+                row->svalue = ducknng_strdup(s ? s : "");
+            } else if (type == NNG_STAT_BOOLEAN) {
+                row->value = nng_stat_bool(child) ? 1u : 0u;
+                row->svalue = ducknng_strdup("");
+            } else {
+                row->value = nng_stat_value(child);
+                row->svalue = ducknng_strdup("");
+            }
+            if (!row->scope || !row->name || !row->type || !row->unit || !row->desc || !row->svalue) {
+                ducknng_nng_stat_row_reset(row);
+                return -1;
+            }
+            (*count)++;
+        }
+    }
+    return 0;
+}
+
+int ducknng_nng_stats_snapshot(ducknng_nng_stat_row **out_rows, size_t *out_count, char **errmsg) {
+    nng_stat *root = NULL;
+    ducknng_nng_stat_row *rows = NULL;
+    size_t count = 0;
+    size_t cap = 0;
+    int rv;
+    if (out_rows) *out_rows = NULL;
+    if (out_count) *out_count = 0;
+    if (!out_rows || !out_count) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: nng stats snapshot requires output pointers");
+        return -1;
+    }
+    rv = nng_stats_get(&root);
+    if (rv != 0 || !root) return 0;
+    if (ducknng_nng_stat_walk(root, "", 0, &rows, &count, &cap) != 0) {
+        nng_stats_free(root);
+        ducknng_nng_stats_free(rows, count);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory snapshotting nng stats");
+        return -1;
+    }
+    nng_stats_free(root);
+    *out_rows = rows;
+    *out_count = count;
+    return 0;
+}
+
+void ducknng_nng_stats_free(ducknng_nng_stat_row *rows, size_t count) {
+    size_t i;
+    if (!rows) return;
+    for (i = 0; i < count; i++) ducknng_nng_stat_row_reset(&rows[i]);
+    duckdb_free(rows);
+}

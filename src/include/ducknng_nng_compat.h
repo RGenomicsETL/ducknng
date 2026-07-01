@@ -15,6 +15,16 @@
 #include <nng/protocol/survey0/survey.h>
 #include <nng/supplemental/tls/tls.h>
 
+typedef struct ducknng_nng_stat_row {
+    char *scope;
+    char *name;
+    char *type;
+    char *unit;
+    uint64_t value;
+    char *svalue;
+    char *desc;
+} ducknng_nng_stat_row;
+
 typedef struct ducknng_tls_opts {
     int enabled;
     char *cert_key_file;
@@ -77,3 +87,6 @@ void ducknng_aio_wait(nng_aio *aio);
 void ducknng_aio_set_msg(nng_aio *aio, nng_msg *msg);
 nng_msg *ducknng_aio_get_msg(nng_aio *aio);
 const char *ducknng_nng_strerror(int err);
+
+int ducknng_nng_stats_snapshot(ducknng_nng_stat_row **out_rows, size_t *out_count, char **errmsg);
+void ducknng_nng_stats_free(ducknng_nng_stat_row *rows, size_t count);
