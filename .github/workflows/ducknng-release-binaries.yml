@@ -95,7 +95,7 @@ jobs:
         if: matrix.platform == 'windows_amd64_mingw'
         uses: r-lib/actions/setup-r@v2
         with:
-          r-version: 'release'
+          r-version: '4.5.3'
           update-rtools: true
           rtools-version: '42'
 
@@ -206,6 +206,8 @@ jobs:
       - name: Smoke test Windows MinGW artifact in R
         if: matrix.platform == 'windows_amd64_mingw'
         shell: bash
+        env:
+          GITHUB_PAT: ${{ github.token }}
         run: |
           set -euo pipefail
           duckdb_version=$(awk -F= '/^DUCKDB_TEST_VERSION=/{print $2}' Makefile)
@@ -213,8 +215,29 @@ jobs:
           args <- commandArgs(trailingOnly = TRUE)
           duckdb_version <- args[[1]]
           options(repos = c(CRAN = "https://cloud.r-project.org"))
-          install.packages("pak")
-          pak::pkg_install(paste0("duckdb@", duckdb_version), ask = FALSE, upgrade = FALSE)
+          install.packages(c("DBI", "remotes"))
+          install_duckdb <- function(version) {
+            tryCatch(
+              remotes::install_version(
+                "duckdb",
+                version = version,
+                repos = "https://cloud.r-project.org",
+                dependencies = NA,
+                upgrade = "never",
+                quiet = FALSE
+              ),
+              error = function(e) {
+                message("CRAN install_version failed for duckdb ", version, ": ", conditionMessage(e))
+                remotes::install_github(
+                  paste0("duckdb/duckdb-r@v", version),
+                  dependencies = NA,
+                  upgrade = "never",
+                  quiet = FALSE
+                )
+              }
+            )
+          }
+          install_duckdb(duckdb_version)
           if (as.character(utils::packageVersion("duckdb")) != duckdb_version) {
             stop("installed duckdb R package does not match target: ",
                  as.character(utils::packageVersion("duckdb")), " != ", duckdb_version)
