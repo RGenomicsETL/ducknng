@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:35261</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:40827</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -1233,6 +1233,33 @@ running service.</td>
 <td>Snapshot of NNG’s native statistics tree, flattened into rows.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_monitor_socket</code></td>
+<td>scalar</td>
+<td><code>socket_id</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Opt a client socket into pipe-event monitoring. Subsequent pipe
+add/remove events are captured into a per-socket ring readable with
+ducknng_read_socket_monitor().</td>
+</tr>
+<tr class="odd">
+<td><code>ducknng_read_socket_monitor</code></td>
+<td>table</td>
+<td><code>socket_id, after_seq, max_events</code></td>
+<td><code>TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, event VARCHAR, dropped UBIGINT)</code></td>
+<td>Read captured pipe events for a monitored client socket. event is
+‘add’ or ‘remove’; dropped is the running count of events evicted from
+the ring.</td>
+</tr>
+<tr class="even">
+<td><code>ducknng_socket_monitor_wait</code></td>
+<td>scalar</td>
+<td><code>socket_id, after_seq, timeout_ms</code></td>
+<td><code>UBIGINT</code></td>
+<td>Block until a monitored socket records a pipe event newer than
+after_seq, or until timeout_ms elapses; returns the current newest event
+seq.</td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_log_entries</code></td>
 <td>table</td>
 <td></td>
@@ -1240,7 +1267,7 @@ running service.</td>
 <td>Return a snapshot of the most recent DuckDB log entries captured by
 the ducknng log ring.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_enable_log_capture</code></td>
 <td>scalar</td>
 <td></td>
@@ -3546,11 +3573,11 @@ and active-pipe counters.</p>
 for a service.</p>
 <div class="sourceCode" id="cb44"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
 <span id="cb44-2"><a href="#cb44-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
-<span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
-<span id="cb44-4"><a href="#cb44-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
-<span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
-<span id="cb44-6"><a href="#cb44-6" tabindex="-1"></a>| <span class="dv">197677521</span> | <span class="dv">1782893241085</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:45534</span> | <span class="kw">NULL</span>          |</span>
-<span id="cb44-7"><a href="#cb44-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
+<span id="cb44-3"><a href="#cb44-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
+<span id="cb44-4"><a href="#cb44-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
+<span id="cb44-5"><a href="#cb44-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
+<span id="cb44-6"><a href="#cb44-6" tabindex="-1"></a>| <span class="dv">2090315504</span> | <span class="dv">1782893483257</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:60852</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb44-7"><a href="#cb44-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb45"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb45-1"><a href="#cb45-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb45-2"><a href="#cb45-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
 <span id="cb45-3"><a href="#cb45-3" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------------------------------------------------------------------------------------------+</span></span>
@@ -3563,6 +3590,34 @@ for a service.</p>
 <span id="cb45-10"><a href="#cb45-10" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span>
 <span id="cb45-11"><a href="#cb45-11" tabindex="-1"></a>| <span class="kw">true</span>                                |</span>
 <span id="cb45-12"><a href="#cb45-12" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------+</span></span></code></pre></div>
+<p>Client sockets can also opt into their own pipe-event ring. Enable
+monitoring before the socket listens or dials if you need to capture the
+first add event.</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb46-1"><a href="#cb46-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_monitor_socket(getvariable(<span class="st">&#39;socket_mon_a&#39;</span>):<span class="ch">:UBIGINT</span>) <span class="kw">AS</span> monitoring_enabled;</span>
+<span id="cb46-2"><a href="#cb46-2" tabindex="-1"></a><span class="op">+</span><span class="co">--------------------+</span></span>
+<span id="cb46-3"><a href="#cb46-3" tabindex="-1"></a>| monitoring_enabled |</span>
+<span id="cb46-4"><a href="#cb46-4" tabindex="-1"></a><span class="op">+</span><span class="co">--------------------+</span></span>
+<span id="cb46-5"><a href="#cb46-5" tabindex="-1"></a>| <span class="kw">true</span>               |</span>
+<span id="cb46-6"><a href="#cb46-6" tabindex="-1"></a><span class="op">+</span><span class="co">--------------------+</span></span></code></pre></div>
+<div class="sourceCode" id="cb47"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb47-1"><a href="#cb47-1" tabindex="-1"></a><span class="kw">SELECT</span> event, <span class="fu">count</span>(<span class="op">*</span>) <span class="kw">AS</span> <span class="kw">events</span></span>
+<span id="cb47-2"><a href="#cb47-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_read_socket_monitor(getvariable(<span class="st">&#39;socket_mon_a&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb47-3"><a href="#cb47-3" tabindex="-1"></a>                                 <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb47-4"><a href="#cb47-4" tabindex="-1"></a>                                 <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
+<span id="cb47-5"><a href="#cb47-5" tabindex="-1"></a><span class="kw">GROUP</span> <span class="kw">BY</span> event</span>
+<span id="cb47-6"><a href="#cb47-6" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> event;</span>
+<span id="cb47-7"><a href="#cb47-7" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_socket_monitor_wait(getvariable(<span class="st">&#39;socket_mon_a&#39;</span>):<span class="ch">:UBIGINT</span>,</span>
+<span id="cb47-8"><a href="#cb47-8" tabindex="-1"></a>                                   <span class="dv">0</span>:<span class="ch">:UBIGINT</span>,</span>
+<span id="cb47-9"><a href="#cb47-9" tabindex="-1"></a>                                   <span class="dv">1000</span>:<span class="ch">:UBIGINT</span>) <span class="op">&gt;=</span> <span class="dv">1</span> <span class="kw">AS</span> saw_event;</span>
+<span id="cb47-10"><a href="#cb47-10" tabindex="-1"></a><span class="op">+</span><span class="co">-------+--------+</span></span>
+<span id="cb47-11"><a href="#cb47-11" tabindex="-1"></a>| event | <span class="kw">events</span> |</span>
+<span id="cb47-12"><a href="#cb47-12" tabindex="-1"></a><span class="op">+</span><span class="co">-------+--------+</span></span>
+<span id="cb47-13"><a href="#cb47-13" tabindex="-1"></a>| <span class="kw">add</span>   | <span class="dv">1</span>      |</span>
+<span id="cb47-14"><a href="#cb47-14" tabindex="-1"></a><span class="op">+</span><span class="co">-------+--------+</span></span>
+<span id="cb47-15"><a href="#cb47-15" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+</span></span>
+<span id="cb47-16"><a href="#cb47-16" tabindex="-1"></a>| saw_event |</span>
+<span id="cb47-17"><a href="#cb47-17" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+</span></span>
+<span id="cb47-18"><a href="#cb47-18" tabindex="-1"></a>| <span class="kw">true</span>      |</span>
+<span id="cb47-19"><a href="#cb47-19" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+</span></span></code></pre></div>
 <h2 id="browser-and-webassembly">Browser and WebAssembly</h2>
 <p>ducknng builds as a duckdb-wasm side module, but a browser sandbox
 cannot offer raw sockets, so the transport story is bounded by what the

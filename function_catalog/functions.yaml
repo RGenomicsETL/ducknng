@@ -283,6 +283,63 @@
       ]
     },
     {
+      "name": "ducknng_monitor_socket",
+      "kind": "scalar",
+      "category": "Introspection",
+      "signature": "ducknng_monitor_socket(socket_id)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Opt a client socket into pipe-event monitoring. Subsequent pipe add/remove events are captured into a per-socket ring readable with ducknng_read_socket_monitor().",
+      "notes": [
+        "Idempotent: enabling monitoring on an already monitored socket is a no-op success.",
+        "Enable monitoring before the pipe forms to capture its add event; events that occur before enabling are not recorded.",
+        "Captures NNG ADD_POST and REM_POST events for sockets opened with ducknng_open_socket(); service-side pipe monitoring remains available through ducknng_read_monitor()."
+      ],
+      "examples": [
+        "SELECT ducknng_monitor_socket((ducknng_open_socket('pair')).socket_id);"
+      ],
+      "parameters": "socket_id"
+    },
+    {
+      "name": "ducknng_read_socket_monitor",
+      "kind": "table",
+      "category": "Introspection",
+      "signature": "ducknng_read_socket_monitor(socket_id, after_seq, max_events)",
+      "returns": "TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, event VARCHAR, dropped UBIGINT)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Read captured pipe events for a monitored client socket. event is 'add' or 'remove'; dropped is the running count of events evicted from the ring.",
+      "notes": [
+        "Pass after_seq to read only events newer than a previously seen seq; 0 reads from the start. Pass max_events to cap the batch; 0 returns all available.",
+        "The socket must first be enabled with ducknng_monitor_socket(); reading an unmonitored socket is an error.",
+        "Events are retained in a bounded per-socket ring; when it overflows, the oldest events are dropped and counted in the dropped column."
+      ],
+      "examples": [
+        "SELECT seq, pipe_id, event FROM ducknng_read_socket_monitor(1, 0, 0);"
+      ],
+      "parameters": "socket_id, after_seq, max_events"
+    },
+    {
+      "name": "ducknng_socket_monitor_wait",
+      "kind": "scalar",
+      "category": "Introspection",
+      "signature": "ducknng_socket_monitor_wait(socket_id, after_seq, timeout_ms)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Block until a monitored socket records a pipe event newer than after_seq, or until timeout_ms elapses; returns the current newest event seq.",
+      "notes": [
+        "Returns immediately when an event with seq > after_seq is already present; otherwise waits up to timeout_ms and returns the unchanged seq on timeout.",
+        "Compare the returned seq to after_seq to tell whether a new event arrived, then read it with ducknng_read_socket_monitor(socket_id, after_seq, ...).",
+        "The socket must first be enabled with ducknng_monitor_socket()."
+      ],
+      "examples": [
+        "SELECT ducknng_socket_monitor_wait(1, 0, 1000);"
+      ],
+      "parameters": "socket_id, after_seq, timeout_ms"
+    },
+    {
       "name": "ducknng_log_entries",
       "kind": "table",
       "category": "Introspection",

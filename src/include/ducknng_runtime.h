@@ -28,6 +28,13 @@ typedef struct ducknng_log_ring {
     int mu_initialized;
 } ducknng_log_ring;
 
+typedef struct ducknng_socket_pipe_event {
+    uint64_t seq;
+    uint64_t ts_ms;
+    uint64_t pipe_id;
+    int added;
+} ducknng_socket_pipe_event;
+
 typedef struct ducknng_client_socket {
     uint64_t socket_id;
     char *protocol;
@@ -52,6 +59,13 @@ typedef struct ducknng_client_socket {
     size_t pending_request_len;
     uint8_t *pending_reply;
     size_t pending_reply_len;
+    int monitor_enabled;
+    ducknng_socket_pipe_event *mon_events;
+    size_t mon_start;
+    size_t mon_count;
+    size_t mon_cap;
+    uint64_t mon_next_seq;
+    uint64_t mon_dropped;
 } ducknng_client_socket;
 
 typedef struct ducknng_tls_config {
@@ -179,6 +193,12 @@ int ducknng_runtime_add_service(ducknng_runtime *rt, ducknng_service *svc, char 
 ducknng_service *ducknng_runtime_remove_service(ducknng_runtime *rt, const char *name);
 ducknng_client_socket *ducknng_runtime_find_client_socket(ducknng_runtime *rt, uint64_t socket_id);
 ducknng_client_socket *ducknng_runtime_acquire_client_socket(ducknng_runtime *rt, uint64_t socket_id);
+int ducknng_runtime_socket_monitor_enable(ducknng_runtime *rt, uint64_t socket_id, char **errmsg);
+int ducknng_runtime_socket_monitor_snapshot(ducknng_runtime *rt, uint64_t socket_id,
+    uint64_t after_seq, uint64_t max_events, ducknng_socket_pipe_event **out_events,
+    size_t *out_count, uint64_t *out_dropped, char **errmsg);
+int ducknng_runtime_socket_monitor_wait(ducknng_runtime *rt, uint64_t socket_id,
+    uint64_t after_seq, uint64_t timeout_ms, uint64_t *out_seq, char **errmsg);
 void ducknng_runtime_release_client_socket(ducknng_client_socket *sock);
 void ducknng_client_socket_destroy(ducknng_client_socket *sock);
 int ducknng_runtime_add_client_socket(ducknng_runtime *rt, ducknng_client_socket *sock, char **errmsg);

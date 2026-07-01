@@ -633,6 +633,12 @@ void ducknng_aio_set_msg(nng_aio *aio, nng_msg *msg) { nng_aio_set_msg(aio, msg)
 nng_msg *ducknng_aio_get_msg(nng_aio *aio) { return nng_aio_get_msg(aio); }
 const char *ducknng_nng_strerror(int err) { return nng_strerror(err); }
 
+int ducknng_socket_monitor_notify(nng_socket sock, void (*cb)(nng_pipe, nng_pipe_ev, void *), void *arg) {
+    int rv = nng_pipe_notify(sock, NNG_PIPE_EV_ADD_POST, cb, arg);
+    if (rv != 0) return rv;
+    return nng_pipe_notify(sock, NNG_PIPE_EV_REM_POST, cb, arg);
+}
+
 static const char *ducknng_nng_stat_type_name(int type) {
     switch (type) {
     case NNG_STAT_SCOPE: return "scope";

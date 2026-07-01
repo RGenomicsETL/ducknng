@@ -198,11 +198,158 @@ void ducknng_runtime_release_client_socket(ducknng_client_socket *sock) {
     ducknng_mutex_unlock(&sock->mu);
 }
 
+static void ducknng_client_socket_pipe_cb(nng_pipe pipe, nng_pipe_ev ev, void *arg) {
+    ducknng_client_socket *cs = (ducknng_client_socket *)arg;
+    int added;
+    size_t idx;
+    if (!cs) return;
+    if (ev == NNG_PIPE_EV_ADD_POST) added = 1;
+    else if (ev == NNG_PIPE_EV_REM_POST) added = 0;
+    else return;
+    if (cs->mu_initialized) ducknng_mutex_lock(&cs->mu);
+    if (cs->monitor_enabled) {
+        if (!cs->mon_events) {
+            cs->mon_cap = 256;
+            cs->mon_events = (ducknng_socket_pipe_event *)duckdb_malloc(sizeof(*cs->mon_events) * cs->mon_cap);
+            cs->mon_start = 0;
+            cs->mon_count = 0;
+        }
+        if (cs->mon_events && cs->mon_cap > 0) {
+            if (cs->mon_count < cs->mon_cap) {
+                idx = (cs->mon_start + cs->mon_count) % cs->mon_cap;
+                cs->mon_count++;
+            } else {
+                idx = cs->mon_start;
+                cs->mon_start = (cs->mon_start + 1) % cs->mon_cap;
+                cs->mon_dropped++;
+            }
+            cs->mon_events[idx].seq = ++cs->mon_next_seq;
+            cs->mon_events[idx].ts_ms = ducknng_now_ms();
+            cs->mon_events[idx].pipe_id = (uint64_t)nng_pipe_id(pipe);
+            cs->mon_events[idx].added = added;
+            if (cs->cv_initialized) ducknng_cond_broadcast(&cs->cv);
+        }
+    }
+    if (cs->mu_initialized) ducknng_mutex_unlock(&cs->mu);
+}
+
+int ducknng_runtime_socket_monitor_enable(ducknng_runtime *rt, uint64_t socket_id, char **errmsg) {
+    ducknng_client_socket *cs;
+    int already;
+    int rv = 0;
+    if (!rt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime");
+        return -1;
+    }
+    cs = ducknng_runtime_acquire_client_socket(rt, socket_id);
+    if (!cs) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket not found");
+        return -1;
+    }
+    ducknng_mutex_lock(&cs->mu);
+    already = cs->monitor_enabled;
+    cs->monitor_enabled = 1;
+    ducknng_mutex_unlock(&cs->mu);
+    if (!already) {
+        rv = ducknng_socket_monitor_notify(cs->sock, ducknng_client_socket_pipe_cb, cs);
+        if (rv != 0 && errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    }
+    ducknng_runtime_release_client_socket(cs);
+    return rv == 0 ? 0 : -1;
+}
+
+int ducknng_runtime_socket_monitor_snapshot(ducknng_runtime *rt, uint64_t socket_id,
+    uint64_t after_seq, uint64_t max_events, ducknng_socket_pipe_event **out_events,
+    size_t *out_count, uint64_t *out_dropped, char **errmsg) {
+    ducknng_client_socket *cs;
+    ducknng_socket_pipe_event *out = NULL;
+    size_t n = 0;
+    size_t cap_events = max_events > (uint64_t)SIZE_MAX ? SIZE_MAX : (size_t)max_events;
+    size_t i;
+    if (out_events) *out_events = NULL;
+    if (out_count) *out_count = 0;
+    if (out_dropped) *out_dropped = 0;
+    if (!rt || !out_events || !out_count) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket monitor snapshot requires output pointers");
+        return -1;
+    }
+    cs = ducknng_runtime_acquire_client_socket(rt, socket_id);
+    if (!cs) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket not found");
+        return -1;
+    }
+    ducknng_mutex_lock(&cs->mu);
+    if (!cs->monitor_enabled) {
+        ducknng_mutex_unlock(&cs->mu);
+        ducknng_runtime_release_client_socket(cs);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket is not monitored; call ducknng_monitor_socket() first");
+        return -1;
+    }
+    if (out_dropped) *out_dropped = cs->mon_dropped;
+    if (cs->mon_count > 0) {
+        out = (ducknng_socket_pipe_event *)duckdb_malloc(sizeof(*out) * cs->mon_count);
+        if (!out) {
+            ducknng_mutex_unlock(&cs->mu);
+            ducknng_runtime_release_client_socket(cs);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory snapshotting socket monitor");
+            return -1;
+        }
+        for (i = 0; i < cs->mon_count; i++) {
+            ducknng_socket_pipe_event ev = cs->mon_events[(cs->mon_start + i) % cs->mon_cap];
+            if (ev.seq <= after_seq) continue;
+            if (max_events > 0 && n >= cap_events) break;
+            out[n++] = ev;
+        }
+    }
+    ducknng_mutex_unlock(&cs->mu);
+    ducknng_runtime_release_client_socket(cs);
+    *out_events = out;
+    *out_count = n;
+    return 0;
+}
+
+int ducknng_runtime_socket_monitor_wait(ducknng_runtime *rt, uint64_t socket_id,
+    uint64_t after_seq, uint64_t timeout_ms, uint64_t *out_seq, char **errmsg) {
+    ducknng_client_socket *cs;
+    uint64_t deadline;
+    if (out_seq) *out_seq = 0;
+    if (!rt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime");
+        return -1;
+    }
+    cs = ducknng_runtime_acquire_client_socket(rt, socket_id);
+    if (!cs) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket not found");
+        return -1;
+    }
+    ducknng_mutex_lock(&cs->mu);
+    if (!cs->monitor_enabled) {
+        ducknng_mutex_unlock(&cs->mu);
+        ducknng_runtime_release_client_socket(cs);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: socket is not monitored; call ducknng_monitor_socket() first");
+        return -1;
+    }
+    {
+        uint64_t now = ducknng_now_ms();
+        deadline = timeout_ms > UINT64_MAX - now ? UINT64_MAX : now + timeout_ms;
+    }
+    while (cs->mon_next_seq <= after_seq && !cs->closing && cs->cv_initialized) {
+        uint64_t now = ducknng_now_ms();
+        if (now >= deadline) break;
+        if (ducknng_cond_timedwait_ms(&cs->cv, &cs->mu, deadline - now) < 0) break;
+    }
+    if (out_seq) *out_seq = cs->mon_next_seq;
+    ducknng_mutex_unlock(&cs->mu);
+    ducknng_runtime_release_client_socket(cs);
+    return 0;
+}
+
 void ducknng_client_socket_destroy(ducknng_client_socket *sock) {
     if (!sock) return;
     if (sock->mu_initialized) {
         ducknng_mutex_lock(&sock->mu);
         sock->closing = 1;
+        if (sock->cv_initialized) ducknng_cond_broadcast(&sock->cv);
         while (sock->refcount > 0 && sock->cv_initialized) {
             ducknng_cond_wait(&sock->cv, &sock->mu);
         }
@@ -216,6 +363,7 @@ void ducknng_client_socket_destroy(ducknng_client_socket *sock) {
     if (sock->listen_url) duckdb_free(sock->listen_url);
     if (sock->pending_request) duckdb_free(sock->pending_request);
     if (sock->pending_reply) duckdb_free(sock->pending_reply);
+    if (sock->mon_events) duckdb_free(sock->mon_events);
     if (sock->cv_initialized) ducknng_cond_destroy(&sock->cv);
     if (sock->mu_initialized) ducknng_mutex_destroy(&sock->mu);
     duckdb_free(sock);

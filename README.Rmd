@@ -1277,6 +1277,46 @@ SELECT ducknng_close_socket(getvariable('monitor_req')::UBIGINT);
 SELECT ducknng_stop_server('monitor_demo');
 ```
 
+Client sockets can also opt into their own pipe-event ring. Enable monitoring before the socket listens or dials if you need to capture the first add event.
+
+```{duckdb include=FALSE}
+SET VARIABLE socket_mon_a = (ducknng_open_socket('pair')).socket_id;
+```
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_monitor_socket(getvariable('socket_mon_a')::UBIGINT) AS monitoring_enabled;
+```
+
+```{duckdb include=FALSE}
+SELECT (ducknng_listen_socket(getvariable('socket_mon_a')::UBIGINT,
+                              'inproc://ducknng_readme_socket_monitor',
+                              1048576,
+                              0::UBIGINT)).ok;
+SET VARIABLE socket_mon_b = (ducknng_open_socket('pair')).socket_id;
+SELECT (ducknng_dial_socket(getvariable('socket_mon_b')::UBIGINT,
+                            'inproc://ducknng_readme_socket_monitor',
+                            1000,
+                            0::UBIGINT)).ok;
+```
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT event, count(*) AS events
+FROM ducknng_read_socket_monitor(getvariable('socket_mon_a')::UBIGINT,
+                                 0::UBIGINT,
+                                 0::UBIGINT)
+GROUP BY event
+ORDER BY event;
+
+SELECT ducknng_socket_monitor_wait(getvariable('socket_mon_a')::UBIGINT,
+                                   0::UBIGINT,
+                                   1000::UBIGINT) >= 1 AS saw_event;
+```
+
+```{duckdb include=FALSE}
+SELECT (ducknng_close_socket(getvariable('socket_mon_a')::UBIGINT)).ok;
+SELECT (ducknng_close_socket(getvariable('socket_mon_b')::UBIGINT)).ok;
+```
+
 ## Browser and WebAssembly
 
 ducknng builds as a duckdb-wasm side module, but a browser sandbox cannot offer raw sockets, so the transport story is bounded by what the platform allows rather than by the extension. The currently stable browser proof is narrow: extension load and scalar SQL in duckdb-wasm, plus same-origin `ducknng_ncurl(...)` GET/POST and invalid-header error handling through a synchronous-`XMLHttpRequest` HTTP bridge compiled only for Emscripten (`src/ducknng_wasm_http_fetch.c`). The threaded `wasm_threads` `inproc://` path has passed individual local COOP/COEP proofs, but repeated real-browser runs still expose load/progress flakiness, so it is diagnostic rather than promised browser support. Raw `tcp://`, `ipc://`, and POSIX `tls+tcp://` cannot exist in the sandbox and are deliberately not bridged. Browser `ducknng_ncurl_aio(...)`, `ducknng_ncurl_table(...)`, framed HTTP RPC/session helpers, remote HTTPS/CORS proof, and `ws://`/`wss://` adapters remain future work. The browser transport matrix, the COOP/COEP requirements for the threaded runtime, and the smoke harness are tracked in `docs/wasm.md` and `docs/wasm_browser_transport_checklist.md`. These wasm paths run in a browser rather than in this R-rendered README, so they are documented here rather than shown as runnable chunks.
