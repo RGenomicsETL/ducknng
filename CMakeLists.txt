@@ -177,6 +177,16 @@ target_include_directories(${EXTENSION_NAME} PRIVATE
 
 target_compile_definitions(${EXTENSION_NAME} PRIVATE
     NANOARROW_NAMESPACE=DucknngNanoarrow
+    # Bound the vendored flatcc flatbuffer verifier's recursion budget. The
+    # verifier's work on a maliciously/accidentally deep nested Arrow schema is
+    # exponential in the remaining ttl, so the upstream default of 100 lets a
+    # ~2KB depth-48 LIST<...> schema spin effectively forever during decode
+    # verification. Capping at 40 keeps legitimate nesting (depth up to ~16)
+    # verifying instantly while turning anything deeper into a bounded (~8 ms)
+    # clean "max nesting level reached" error instead of a hang. Producers also
+    # reject over-deep results early (ducknng_ipc_out.c); this is the decode-side
+    # backstop for untrusted peers. See docs/types.md.
+    FLATCC_VERIFIER_MAX_LEVELS=40
 )
 
 find_package(Threads REQUIRED)

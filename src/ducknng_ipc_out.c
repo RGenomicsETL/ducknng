@@ -168,6 +168,64 @@ cleanup:
  * Build an Arrow schema from a DuckDB result using DuckDB's own conversion.
  * ---------------------------------------------------------------------- */
 
+/*
+ * Maximum nesting depth of a result column we will serialize to Arrow IPC.
+ *
+ * The Arrow IPC schema is a FlatBuffer whose Field tables nest once per
+ * LIST/STRUCT/MAP/ARRAY/UNION level. The vendored flatcc verifier the decoder
+ * runs is exponential in its remaining recursion budget on a deep chain, so an
+ * over-deep schema would stall the peer's decode-side verification. We cap the
+ * producer well under the flatcc budget (FLATCC_VERIFIER_MAX_LEVELS, see
+ * CMakeLists.txt) so legitimate nesting always round-trips and anything deeper
+ * fails fast with a clear error here rather than spinning on the consumer. */
+#define DUCKNNG_ARROW_PRODUCE_MAX_NESTING 16
+
+/* Nesting depth of a DuckDB logical type (a scalar is depth 0). Bounded by a
+ * cap so a pathologically deep type cannot itself overrun the C stack while we
+ * measure it; once the cap is exceeded we stop and report the cap + 1. */
+static int ducknng_logical_type_nesting_depth(duckdb_logical_type type, int cap) {
+    duckdb_type id;
+    if (!type || cap < 0) return 0;
+    id = duckdb_get_type_id(type);
+    switch (id) {
+    case DUCKDB_TYPE_LIST:
+    case DUCKDB_TYPE_ARRAY: {
+        duckdb_logical_type child = (id == DUCKDB_TYPE_LIST)
+            ? duckdb_list_type_child_type(type) : duckdb_array_type_child_type(type);
+        int d = 1 + ducknng_logical_type_nesting_depth(child, cap - 1);
+        if (child) duckdb_destroy_logical_type(&child);
+        return d;
+    }
+    case DUCKDB_TYPE_MAP: {
+        duckdb_logical_type key = duckdb_map_type_key_type(type);
+        duckdb_logical_type val = duckdb_map_type_value_type(type);
+        int dk = ducknng_logical_type_nesting_depth(key, cap - 1);
+        int dv = ducknng_logical_type_nesting_depth(val, cap - 1);
+        if (key) duckdb_destroy_logical_type(&key);
+        if (val) duckdb_destroy_logical_type(&val);
+        return 1 + (dk > dv ? dk : dv);
+    }
+    case DUCKDB_TYPE_STRUCT:
+    case DUCKDB_TYPE_UNION: {
+        idx_t n = (id == DUCKDB_TYPE_STRUCT)
+            ? duckdb_struct_type_child_count(type) : duckdb_union_type_member_count(type);
+        idx_t i;
+        int max_child = 0;
+        for (i = 0; i < n; i++) {
+            duckdb_logical_type child = (id == DUCKDB_TYPE_STRUCT)
+                ? duckdb_struct_type_child_type(type, i) : duckdb_union_type_member_type(type, i);
+            int d = ducknng_logical_type_nesting_depth(child, cap - 1);
+            if (child) duckdb_destroy_logical_type(&child);
+            if (d > max_child) max_child = d;
+            if (max_child >= cap) break;
+        }
+        return 1 + max_child;
+    }
+    default:
+        return 0;
+    }
+}
+
 static int ducknng_result_to_arrow_schema(duckdb_result *result,
     duckdb_arrow_options opts, struct ArrowSchema *out_schema, char **errmsg) {
     idx_t ncols = duckdb_column_count(result);
@@ -187,6 +245,16 @@ static int ducknng_result_to_arrow_schema(duckdb_result *result,
     for (col = 0; col < ncols; col++) {
         types[col] = duckdb_column_logical_type(result, col);
         names[col] = duckdb_column_name(result, col);
+    }
+    for (col = 0; col < ncols; col++) {
+        int depth = ducknng_logical_type_nesting_depth(types[col],
+            DUCKNNG_ARROW_PRODUCE_MAX_NESTING + 1);
+        if (depth > DUCKNNG_ARROW_PRODUCE_MAX_NESTING) {
+            if (errmsg) *errmsg = ducknng_strdup(
+                "ducknng: result column nesting is too deep to serialize to Arrow IPC "
+                "(exceeds the supported nesting limit)");
+            goto cleanup;
+        }
     }
     err = duckdb_to_arrow_schema(opts, types, names, ncols, out_schema);
     if (duckdb_error_data_has_error(err)) {
@@ -450,6 +518,16 @@ int ducknng_prepared_schema_to_ipc(duckdb_connection con, duckdb_prepared_statem
         for (col = 0; col < ncols; col++) {
             types[col] = duckdb_prepared_statement_column_logical_type(stmt, col);
             names[col] = duckdb_prepared_statement_column_name(stmt, col);
+        }
+        for (col = 0; col < ncols; col++) {
+            int depth = ducknng_logical_type_nesting_depth(types[col],
+                DUCKNNG_ARROW_PRODUCE_MAX_NESTING + 1);
+            if (depth > DUCKNNG_ARROW_PRODUCE_MAX_NESTING) {
+                if (errmsg) *errmsg = ducknng_strdup(
+                    "ducknng: result column nesting is too deep to serialize to Arrow IPC "
+                    "(exceeds the supported nesting limit)");
+                goto cleanup;
+            }
         }
     }
 

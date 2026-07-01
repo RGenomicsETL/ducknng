@@ -5,6 +5,27 @@
 
 DUCKDB_EXTENSION_EXTERN
 
+/*
+ * Wire header layout (little-endian), pinned at compile time so the hard-coded
+ * encode/decode offsets below cannot silently drift from the declared header
+ * length or the field widths they assume:
+ *   [0]   version   u8
+ *   [1]   type      u8
+ *   [2]   flags     u32   (offset 2)
+ *   [6]   name_len  u32   (offset 2 + 4)
+ *   [10]  error_len u32   (offset 6 + 4)
+ *   [14]  payload_len u64 (offset 10 + 4); header ends at 14 + 8 = 22
+ */
+_Static_assert(DUCKNNG_WIRE_HEADER_LEN == 1u + 1u + 4u + 4u + 4u + 8u,
+    "ducknng wire header length must match its u8+u8+u32+u32+u32+u64 field layout");
+_Static_assert(sizeof(uint8_t) == 1 && sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
+    "ducknng wire encoding assumes 8/32/64-bit fixed-width integers");
+_Static_assert(DUCKNNG_WIRE_VERSION <= 0xffu &&
+    DUCKNNG_RPC_EVENT <= 0xff && DUCKNNG_STATUS_DISABLED <= 0xff,
+    "ducknng wire version/type/status ids must each fit in their single header byte");
+_Static_assert(DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH <= 0xffffffffu,
+    "ducknng rpc flags must fit in the u32 flags field");
+
 int ducknng_decode_frame_bytes(const uint8_t *data, size_t len, ducknng_frame *out) {
     uint32_t name_len;
     uint32_t flags;

@@ -4,6 +4,19 @@
 
 DUCKDB_EXTENSION_EXTERN
 
+/*
+ * Decoded remote Arrow schemas and arrays are external input. Bound the nesting
+ * depth of type conversion, value assignment, and nested-null marking so a
+ * hostile or pathological deeply nested schema produces a DuckDB-visible error
+ * instead of unbounded recursion (a stack-exhaustion crash). DuckDB's practical
+ * nesting is far below this; the limit only rejects abuse. It is a design
+ * invariant, hence the compile-time check.
+ */
+#define DUCKNNG_ARROW_MAX_NESTING_DEPTH 64
+_Static_assert(DUCKNNG_ARROW_MAX_NESTING_DEPTH > 0 &&
+    DUCKNNG_ARROW_MAX_NESTING_DEPTH <= 1024,
+    "ducknng Arrow nesting depth limit must be a small positive bound");
+
 static void ducknng_sql_arrow_set_null(duckdb_vector vec, idx_t row) {
     uint64_t *validity;
     duckdb_vector_ensure_validity_writable(vec);
@@ -25,21 +38,28 @@ static int64_t ducknng_sql_arrow_floor_div_i64(int64_t value, int64_t divisor) {
 
 static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
     struct ArrowArrayView *col_view, const struct ArrowSchema *col_schema,
-    idx_t src_offset, idx_t dst_offset, idx_t count, char **errmsg);
+    idx_t src_offset, idx_t dst_offset, idx_t count, int depth, char **errmsg);
+
+static int ducknng_sql_arrow_schema_to_logical_type_depth(const struct ArrowSchema *schema,
+    duckdb_logical_type *out_type, int depth, char **errmsg);
 
 static int ducknng_sql_arrow_set_nested_null(duckdb_vector vec,
-    const struct ArrowSchema *schema, idx_t index) {
+    const struct ArrowSchema *schema, idx_t index, int depth) {
     struct ArrowSchemaView schema_view;
     struct ArrowError error;
     idx_t child;
     memset(&schema_view, 0, sizeof(schema_view));
     memset(&error, 0, sizeof(error));
     ducknng_sql_arrow_set_null(vec, index);
+    /* Best-effort null marking: stop descending past the bound rather than
+     * recursing without limit. Over-deep schemas are already rejected at bind
+     * time by the type-conversion path, so this branch is defensive. */
+    if (depth > DUCKNNG_ARROW_MAX_NESTING_DEPTH) return 0;
     if (!schema || ArrowSchemaViewInit(&schema_view, schema, &error) != NANOARROW_OK) return 0;
     if (schema_view.type == NANOARROW_TYPE_STRUCT) {
         for (child = 0; child < (idx_t)schema->n_children; child++) {
             duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
-            (void)ducknng_sql_arrow_set_nested_null(child_vec, schema->children[child], index);
+            (void)ducknng_sql_arrow_set_nested_null(child_vec, schema->children[child], index, depth + 1);
         }
     } else if (schema_view.type == NANOARROW_TYPE_DENSE_UNION ||
                schema_view.type == NANOARROW_TYPE_SPARSE_UNION) {
@@ -94,8 +114,8 @@ static int ducknng_sql_arrow_assign_decimal(duckdb_vector vec, idx_t dst_index,
     }
 }
 
-int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
-    duckdb_logical_type *out_type, char **errmsg) {
+static int ducknng_sql_arrow_schema_to_logical_type_depth(const struct ArrowSchema *schema,
+    duckdb_logical_type *out_type, int depth, char **errmsg) {
     struct ArrowSchemaView schema_view;
     struct ArrowError error;
     memset(&schema_view, 0, sizeof(schema_view));
@@ -103,6 +123,10 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
     if (out_type) *out_type = NULL;
     if (!schema || !out_type) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing Arrow schema");
+        return -1;
+    }
+    if (depth > DUCKNNG_ARROW_MAX_NESTING_DEPTH) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: Arrow schema nesting exceeds supported depth");
         return -1;
     }
     if (ArrowSchemaViewInit(&schema_view, schema, &error) != NANOARROW_OK) {
@@ -199,7 +223,7 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
             member_names[i2] = schema->children[i2] && schema->children[i2]->name
                 ? schema->children[i2]->name : "";
             ok = schema->children[i2] &&
-                ducknng_sql_arrow_schema_to_logical_type(schema->children[i2], &member_types[i2], errmsg) == 0;
+                ducknng_sql_arrow_schema_to_logical_type_depth(schema->children[i2], &member_types[i2], depth + 1, errmsg) == 0;
         }
         if (ok) *out_type = duckdb_create_union_type(member_types, member_names, nmembers);
         ok = ok && *out_type;
@@ -231,7 +255,7 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
     case NANOARROW_TYPE_LARGE_LIST: {
         duckdb_logical_type child_type = NULL;
         int ok = schema->n_children == 1 && schema->children && schema->children[0] &&
-            ducknng_sql_arrow_schema_to_logical_type(schema->children[0], &child_type, errmsg) == 0 &&
+            ducknng_sql_arrow_schema_to_logical_type_depth(schema->children[0], &child_type, depth + 1, errmsg) == 0 &&
             child_type;
         if (ok) *out_type = duckdb_create_list_type(child_type);
         if (child_type) duckdb_destroy_logical_type(&child_type);
@@ -242,9 +266,9 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
         duckdb_logical_type value_type = NULL;
         int ok = schema->n_children == 1 && schema->children && schema->children[0] &&
             schema->children[0]->n_children == 2 &&
-            ducknng_sql_arrow_schema_to_logical_type(schema->children[0]->children[0], &key_type, errmsg) == 0 &&
+            ducknng_sql_arrow_schema_to_logical_type_depth(schema->children[0]->children[0], &key_type, depth + 1, errmsg) == 0 &&
             key_type &&
-            ducknng_sql_arrow_schema_to_logical_type(schema->children[0]->children[1], &value_type, errmsg) == 0 &&
+            ducknng_sql_arrow_schema_to_logical_type_depth(schema->children[0]->children[1], &value_type, depth + 1, errmsg) == 0 &&
             value_type;
         if (ok) *out_type = duckdb_create_map_type(key_type, value_type);
         if (key_type) duckdb_destroy_logical_type(&key_type);
@@ -267,7 +291,7 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
         for (i = 0; ok && i < nchildren; i++) {
             child_names[i] = schema->children[i] && schema->children[i]->name ? schema->children[i]->name : "";
             ok = schema->children[i] &&
-                ducknng_sql_arrow_schema_to_logical_type(schema->children[i], &child_types[i], errmsg) == 0;
+                ducknng_sql_arrow_schema_to_logical_type_depth(schema->children[i], &child_types[i], depth + 1, errmsg) == 0;
         }
         if (ok) *out_type = duckdb_create_struct_type(child_types, child_names, nchildren);
         ok = ok && *out_type;
@@ -285,6 +309,11 @@ int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
             "ducknng: remote unary row replies support BOOLEAN, numeric/date/time/timestamp/decimal scalars, VARCHAR, BLOB, LARGE_STRING, LARGE_BINARY, FIXED_SIZE_BINARY, DURATION, LIST, MAP, STRUCT, DENSE_UNION, and SPARSE_UNION");
         return -1;
     }
+}
+
+int ducknng_sql_arrow_schema_to_logical_type(const struct ArrowSchema *schema,
+    duckdb_logical_type *out_type, char **errmsg) {
+    return ducknng_sql_arrow_schema_to_logical_type_depth(schema, out_type, 0, errmsg);
 }
 
 int ducknng_sql_arrow_bind_result_columns(duckdb_bind_info info,
@@ -313,12 +342,16 @@ int ducknng_sql_arrow_bind_result_columns(duckdb_bind_info info,
 
 static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
     struct ArrowArrayView *col_view, const struct ArrowSchema *col_schema,
-    idx_t src_offset, idx_t dst_offset, idx_t count, char **errmsg) {
+    idx_t src_offset, idx_t dst_offset, idx_t count, int depth, char **errmsg) {
     struct ArrowSchemaView schema_view;
     struct ArrowError error;
     idx_t i;
     memset(&schema_view, 0, sizeof(schema_view));
     memset(&error, 0, sizeof(error));
+    if (depth > DUCKNNG_ARROW_MAX_NESTING_DEPTH) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: Arrow value nesting exceeds supported depth");
+        return -1;
+    }
     if (ArrowSchemaViewInit(&schema_view, col_schema, &error) != NANOARROW_OK) {
         if (errmsg) *errmsg = ducknng_strdup(error.message);
         return -1;
@@ -568,7 +601,7 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
             entries[dst].offset = child_size;
             entries[dst].length = child_len;
             if (child_len > 0 && ducknng_sql_arrow_assign_column_at(child_vec, col_view->children[0],
-                    col_schema->children[0], (idx_t)child_start, child_size, child_len, errmsg) != 0) {
+                    col_schema->children[0], (idx_t)child_start, child_size, child_len, depth + 1, errmsg) != 0) {
                 return -1;
             }
             child_size += child_len;
@@ -581,13 +614,13 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
         for (child = 0; child < nchildren; child++) {
             duckdb_vector child_vec = duckdb_struct_vector_get_child(vec, child);
             if (ducknng_sql_arrow_assign_column_at(child_vec, col_view->children[child],
-                    col_schema->children[child], src_offset, dst_offset, count, errmsg) != 0) {
+                    col_schema->children[child], src_offset, dst_offset, count, depth + 1, errmsg) != 0) {
                 return -1;
             }
         }
         for (i = 0; i < count; i++) {
             if (ArrowArrayViewIsNull(col_view, src_offset + i)) {
-                (void)ducknng_sql_arrow_set_nested_null(vec, col_schema, dst_offset + i);
+                (void)ducknng_sql_arrow_set_nested_null(vec, col_schema, dst_offset + i, depth + 1);
             }
         }
         return 0;
@@ -626,7 +659,7 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
                     if (ducknng_sql_arrow_assign_column_at(member_vec,
                             col_view->children[child_index],
                             col_schema->children[child_index],
-                            (idx_t)child_offset, dst, 1, errmsg) != 0)
+                            (idx_t)child_offset, dst, 1, depth + 1, errmsg) != 0)
                         return -1;
                 } else {
                     ducknng_sql_arrow_set_null(member_vec, dst);
@@ -734,7 +767,7 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
 
 int ducknng_sql_arrow_assign_column(duckdb_vector vec, struct ArrowArrayView *col_view,
     const struct ArrowSchema *col_schema, idx_t src_offset, idx_t count, char **errmsg) {
-    return ducknng_sql_arrow_assign_column_at(vec, col_view, col_schema, src_offset, 0, count, errmsg);
+    return ducknng_sql_arrow_assign_column_at(vec, col_view, col_schema, src_offset, 0, count, 0, errmsg);
 }
 
 int ducknng_sql_arrow_scan_table(duckdb_data_chunk output, const struct ArrowSchema *schema,

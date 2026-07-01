@@ -54,7 +54,7 @@ Nullability is part of the contract rather than an afterthought. Methods must de
 
 ## Nested types
 
-Structs and lists are in scope and tested. Nesting depth is unrestricted in principle. Deeply nested `MAP` or `UNION` combinations are not tested beyond single-level examples and should not be claimed as supported until tests exist.
+Structs and lists are in scope and tested. Nesting depth is bounded rather than unrestricted: a result column whose `LIST`/`STRUCT`/`MAP`/`ARRAY`/`UNION` nesting exceeds the producer's limit (`DUCKNNG_ARROW_PRODUCE_MAX_NESTING`, currently 16) is rejected with a clear error instead of being serialized. This bound exists because the Arrow IPC schema is a FlatBuffer, and the vendored flatcc verifier the consumer runs is exponential in nesting depth — an unbounded deep schema would stall the peer's decode-side verification rather than fail cleanly. The decoder additionally caps the flatcc verifier's recursion budget (`FLATCC_VERIFIER_MAX_LEVELS`, set in `CMakeLists.txt`) so an over-deep schema from an untrusted peer fails fast with a bounded "max nesting level reached" error rather than hanging. The `ducknng_quack_batch` codec does not use FlatBuffers and is not subject to the flatcc bound, though it enforces its own `DUCKNNG_QUACK_MAX_NESTING` depth cap. Deeply nested `MAP` or `UNION` combinations are not tested beyond single-level examples and should not be claimed as supported until tests exist.
 
 ## Method schemas
 
