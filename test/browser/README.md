@@ -2,7 +2,7 @@
 
 This directory contains the local Playwright test runner for the `duckdb-wasm` side-module smoke page. It is intentionally separate from the static smoke page itself: the page lives under `scripts/`, while this runner starts a local header-capable HTTP server and drives that page in real Chromium.
 
-The runner proves only the probes requested on the command line. The default `load` probe starts DuckDB wasm, loads the `ducknng` extension, verifies `crossOriginIsolated` under local COOP/COEP headers, and runs one SQL shell query through the loaded extension. Transport probes such as `inproc` and `http-sync` are opt-in so an artifact does not accidentally claim transport support before that path is present.
+The runner proves only the probes requested on the command line. The default `load` probe starts DuckDB wasm, loads the `ducknng` extension, verifies `crossOriginIsolated` under local COOP/COEP headers, and runs one SQL shell query through the loaded extension. Transport probes such as `inproc`, `http-sync`, `http-aio`, `http-table`, `https-cors`, and `http-rpc` are opt-in so an artifact does not accidentally claim transport support before that path is present.
 
 ## Setup
 
@@ -63,19 +63,31 @@ node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site --probes=load,
 
 The `inproc` probe is diagnostic for `wasm_threads` on a real COOP/COEP local server. It has passed individual local proofs, but repeated headless Chromium runs currently expose extension-load and NNG progress flakiness. For non-threaded runtimes, an unavailable `inproc://` result is reported as acceptable rather than as transport support.
 
-To exercise the synchronous browser HTTP client path after building an artifact that includes the browser HTTP bridge:
+To exercise the release-supported `wasm_eh` browser HTTP lane after staging an EH site:
 
 ```sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site --probes=load,http-sync
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
 ```
 
-The `http-sync` probe starts same-origin local test endpoints and calls them through `ducknng_ncurl(...)` from the page's SQL shell. It proves GET, POST body round-trip, and an invalid `headers_json` in-band error for the browser HTTP bridge. It does not prove `ducknng_ncurl_aio(...)`, `ducknng_ncurl_table(...)`, framed HTTP RPC/session helpers, HTTPS against a real remote origin, or WebSocket support.
+The HTTP probes start local test endpoints and call them through the page's SQL shell. They prove same-origin `ducknng_ncurl(...)` GET/POST and invalid-header error behavior, terminal `ducknng_ncurl_aio(...)` collect/status/cancel/drop behavior, `ducknng_ncurl_table(...)` JSON/text/CSV parsing, HTTPS CORS table parsing, and framed raw/RPC/session helper routing over browser HTTP. They do not prove browser `ipc://`, raw `tcp://`, native POSIX-style `tls+tcp://`, or WebSocket support.
+
+The threaded lane is diagnostic rather than release-blocking:
+
+```sh
+DUCKNNG_WASM_SERVE=0 DUCKDB_WASM_PLATFORM=wasm_threads \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load,http-sync,http-aio,http-table,https-cors,http-rpc
+```
+
+Repeated `wasm_threads` runs can still expose extension-load timeouts, NNG `inproc://` progress timeouts, or DuckDB-wasm JSON extension autoload failures. Use those results for diagnosis, not as the release support gate.
 
 Useful environment variables:
 
 ```sh
 BROWSER_DEBUG=1
-DUCKNNG_BROWSER_PROBES=load,http-sync
+DUCKNNG_BROWSER_PROBES=load,http-sync,http-aio,http-table,https-cors,http-rpc
 ```
 
 A successful run prints:

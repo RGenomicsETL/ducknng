@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:42447 |
+| tls+tcp://127.0.0.1:37833 |
 +---------------------------+
 
 +--------+
@@ -2115,7 +2115,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +-----------+---------------+-----------------+---------------+
 |  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
 +-----------+---------------+-----------------+---------------+
-| 334461177 | 1782894238477 | 127.0.0.1:57248 | NULL          |
+| 453587804 | 1782896296199 | 127.0.0.1:53230 | NULL          |
 +-----------+---------------+-----------------+---------------+
 ```
 
@@ -2173,31 +2173,64 @@ SELECT ducknng_socket_monitor_wait(getvariable('socket_mon_a')::UBIGINT,
 
 ducknng builds as a duckdb-wasm side module, but a browser sandbox
 cannot offer raw sockets, so the transport story is bounded by what the
-platform allows rather than by the extension. The currently stable
-browser proof is narrow: extension load and scalar SQL in duckdb-wasm,
-plus same-origin `ducknng_ncurl(...)` GET/POST and invalid-header error
-handling through a synchronous-`XMLHttpRequest` HTTP bridge compiled
-only for Emscripten (`src/ducknng_wasm_http_fetch.c`). The threaded
-`wasm_threads` `inproc://` path has passed individual local COOP/COEP
-proofs, but repeated real-browser runs still expose load/progress
-flakiness, so it is diagnostic rather than promised browser support. Raw
-`tcp://`, `ipc://`, and POSIX `tls+tcp://` cannot exist in the sandbox
-and are deliberately not bridged. Browser `ducknng_ncurl_aio(...)`,
-`ducknng_ncurl_table(...)`, framed HTTP RPC/session helpers, remote
-HTTPS/CORS proof, and `ws://`/`wss://` adapters remain future work. The
-browser transport matrix, the COOP/COEP requirements for the threaded
-runtime, and the smoke harness are tracked in `docs/wasm.md` and
-`docs/wasm_browser_transport_checklist.md`. These wasm paths run in a
-browser rather than in this R-rendered README, so they are documented
-here rather than shown as runnable chunks.
+platform allows rather than by the extension. The release-supported
+browser lane is the `wasm_eh` duckdb-wasm runtime: extension load and
+scalar SQL, browser HTTP(S) client calls through the Emscripten-only
+synchronous-XHR bridge, terminal HTTP AIO handles, table parsing,
+HTTPS/CORS, and framed HTTP RPC/session helper routing. Raw `tcp://`,
+`ipc://`, native POSIX-style `tls+tcp://`, and browser WebSocket
+adapters are not supported.
+
+The browser checks are not run during README rendering because they
+require Docker, a staged duckdb-wasm site, and real Chromium. They are
+still literate, executable chunks; run them from the repository root
+when validating a wasm/browser change.
+
+``` bash
+DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+```
+
+``` bash
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
+```
+
+The threaded runtime remains diagnostic rather than release-blocking. It
+can build and individual HTTP probes can pass, but repeated headless
+runs still expose extension-load, `inproc://` progress, and DuckDB-wasm
+JSON-autoload instability.
+
+``` bash
+DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load,http-sync,http-aio,http-table,https-cors,http-rpc
+```
+
+Self-published unsigned release assets are built by the dedicated
+release workflow. Push release tags one at a time using
+`v<ducknng-version>-duckdb<duckdb-version>` so GitHub runs the binary
+matrix for each pinned DuckDB runtime.
+
+``` bash
+gh workflow run ducknng-release-binaries.yml --ref main
+gh run list --workflow "ducknng release binaries" --limit 5
+```
+
+The browser transport matrix, the COOP/COEP requirements for the
+threaded runtime, and the smoke harness are tracked in `docs/wasm.md`,
+`docs/wasm_browser_transport_checklist.md`, and
+`test/browser/README.md`.
 
 ## Status
 
-Version 0.1.0. Every feature shown as a runnable chunk in this README is
-implemented, tested, and runs at render time; the browser/WebAssembly
-paths above run in a duckdb-wasm browser runtime and are covered by
-`docs/wasm.md` and the Playwright harness instead. The extension builds
-against DuckDB v1.5.2 using the C API only.
+Version 0.1.0. Every DuckDB chunk shown as runnable in this README is
+implemented, tested, and runs at render time. Browser/WebAssembly and
+release-matrix checks require external runtimes, so their exact commands
+are shown above and covered by the Playwright and GitHub Actions
+harnesses. The extension builds against DuckDB v1.5.2 using the C API
+only.
 
 ## References
 

@@ -72,6 +72,8 @@ The matching stop and introspection path remains generic rather than adding HTTP
 
 `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` are transport-local and not manifest-derived. They are meant for generic HTTP interactions, adapter debugging, and future interoperability helpers. They are not the only route to `ducknng` RPC over HTTP because the higher-level synchronous helpers already use the same carrier automatically.
 
+In browser wasm builds, HTTP/HTTPS client operations use the browser-safe adapter behind the same transport boundary. Same-origin requests work directly; cross-origin requests require the remote origin to allow CORS under the browser's normal rules. HTTPS trust is browser-managed, so nonzero ducknng TLS config handles are rejected in browser mode instead of being silently ignored. The current browser AIO path performs the XHR transaction at launch and records an immediate terminal handle, preserving SQL-visible collect/status/drop lifecycle without claiming cancellable background Fetch semantics.
+
 ## Companion route framework
 
 HTTP and HTTPS services can now also register additional routes beside the framed RPC mount:

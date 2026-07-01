@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:42447</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:37833</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -3634,7 +3634,7 @@ for a service.</p>
 <span id="cb46-3"><a href="#cb46-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
 <span id="cb46-4"><a href="#cb46-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
 <span id="cb46-5"><a href="#cb46-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
-<span id="cb46-6"><a href="#cb46-6" tabindex="-1"></a>| <span class="dv">334461177</span> | <span class="dv">1782894238477</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:57248</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb46-6"><a href="#cb46-6" tabindex="-1"></a>| <span class="dv">453587804</span> | <span class="dv">1782896296199</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:53230</span> | <span class="kw">NULL</span>          |</span>
 <span id="cb46-7"><a href="#cb46-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb47"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb47-1"><a href="#cb47-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb47-2"><a href="#cb47-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
@@ -3679,32 +3679,48 @@ first add event.</p>
 <h2 id="browser-and-webassembly">Browser and WebAssembly</h2>
 <p>ducknng builds as a duckdb-wasm side module, but a browser sandbox
 cannot offer raw sockets, so the transport story is bounded by what the
-platform allows rather than by the extension. The currently stable
-browser proof is narrow: extension load and scalar SQL in duckdb-wasm,
-plus same-origin <code>ducknng_ncurl(...)</code> GET/POST and
-invalid-header error handling through a
-synchronous-<code>XMLHttpRequest</code> HTTP bridge compiled only for
-Emscripten (<code>src/ducknng_wasm_http_fetch.c</code>). The threaded
-<code>wasm_threads</code> <code>inproc://</code> path has passed
-individual local COOP/COEP proofs, but repeated real-browser runs still
-expose load/progress flakiness, so it is diagnostic rather than promised
-browser support. Raw <code>tcp://</code>, <code>ipc://</code>, and POSIX
-<code>tls+tcp://</code> cannot exist in the sandbox and are deliberately
-not bridged. Browser <code>ducknng_ncurl_aio(...)</code>,
-<code>ducknng_ncurl_table(...)</code>, framed HTTP RPC/session helpers,
-remote HTTPS/CORS proof, and <code>ws://</code>/<code>wss://</code>
-adapters remain future work. The browser transport matrix, the COOP/COEP
-requirements for the threaded runtime, and the smoke harness are tracked
-in <code>docs/wasm.md</code> and
-<code>docs/wasm_browser_transport_checklist.md</code>. These wasm paths
-run in a browser rather than in this R-rendered README, so they are
-documented here rather than shown as runnable chunks.</p>
+platform allows rather than by the extension. The release-supported
+browser lane is the <code>wasm_eh</code> duckdb-wasm runtime: extension
+load and scalar SQL, browser HTTP(S) client calls through the
+Emscripten-only synchronous-XHR bridge, terminal HTTP AIO handles, table
+parsing, HTTPS/CORS, and framed HTTP RPC/session helper routing. Raw
+<code>tcp://</code>, <code>ipc://</code>, native POSIX-style
+<code>tls+tcp://</code>, and browser WebSocket adapters are not
+supported.</p>
+<p>The browser checks are not run during README rendering because they
+require Docker, a staged duckdb-wasm site, and real Chromium. They are
+still literate, executable chunks; run them from the repository root
+when validating a wasm/browser change.</p>
+<div class="sourceCode" id="cb50"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb50-1"><a href="#cb50-1" tabindex="-1"></a><span class="va">DUCKDB_WASM_PLATFORM</span><span class="op">=</span>wasm_eh <span class="va">DUCKNNG_WASM_SERVE</span><span class="op">=</span>0 <span class="dt">\</span></span>
+<span id="cb50-2"><a href="#cb50-2" tabindex="-1"></a>  <span class="ex">scripts/start_duckdb_wasm_local_test.sh</span></span></code></pre></div>
+<div class="sourceCode" id="cb51"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb51-1"><a href="#cb51-1" tabindex="-1"></a><span class="ex">node</span> test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site <span class="dt">\</span></span>
+<span id="cb51-2"><a href="#cb51-2" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc</span></code></pre></div>
+<p>The threaded runtime remains diagnostic rather than release-blocking.
+It can build and individual HTTP probes can pass, but repeated headless
+runs still expose extension-load, <code>inproc://</code> progress, and
+DuckDB-wasm JSON-autoload instability.</p>
+<div class="sourceCode" id="cb52"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb52-1"><a href="#cb52-1" tabindex="-1"></a><span class="va">DUCKDB_WASM_PLATFORM</span><span class="op">=</span>wasm_threads <span class="va">DUCKNNG_WASM_SERVE</span><span class="op">=</span>0 <span class="dt">\</span></span>
+<span id="cb52-2"><a href="#cb52-2" tabindex="-1"></a>  <span class="ex">scripts/start_duckdb_wasm_local_test.sh</span></span>
+<span id="cb52-3"><a href="#cb52-3" tabindex="-1"></a><span class="ex">node</span> test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site <span class="dt">\</span></span>
+<span id="cb52-4"><a href="#cb52-4" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>load,http-sync,http-aio,http-table,https-cors,http-rpc</span></code></pre></div>
+<p>Self-published unsigned release assets are built by the dedicated
+release workflow. Push release tags one at a time using
+<code>v&lt;ducknng-version&gt;-duckdb&lt;duckdb-version&gt;</code> so
+GitHub runs the binary matrix for each pinned DuckDB runtime.</p>
+<div class="sourceCode" id="cb53"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb53-1"><a href="#cb53-1" tabindex="-1"></a><span class="ex">gh</span> workflow run ducknng-release-binaries.yml <span class="at">--ref</span> main</span>
+<span id="cb53-2"><a href="#cb53-2" tabindex="-1"></a><span class="ex">gh</span> run list <span class="at">--workflow</span> <span class="st">&quot;ducknng release binaries&quot;</span> <span class="at">--limit</span> 5</span></code></pre></div>
+<p>The browser transport matrix, the COOP/COEP requirements for the
+threaded runtime, and the smoke harness are tracked in
+<code>docs/wasm.md</code>,
+<code>docs/wasm_browser_transport_checklist.md</code>, and
+<code>test/browser/README.md</code>.</p>
 <h2 id="status">Status</h2>
-<p>Version 0.1.0. Every feature shown as a runnable chunk in this README
-is implemented, tested, and runs at render time; the browser/WebAssembly
-paths above run in a duckdb-wasm browser runtime and are covered by
-<code>docs/wasm.md</code> and the Playwright harness instead. The
-extension builds against DuckDB v1.5.2 using the C API only.</p>
+<p>Version 0.1.0. Every DuckDB chunk shown as runnable in this README is
+implemented, tested, and runs at render time. Browser/WebAssembly and
+release-matrix checks require external runtimes, so their exact commands
+are shown above and covered by the Playwright and GitHub Actions
+harnesses. The extension builds against DuckDB v1.5.2 using the C API
+only.</p>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://nng.nanomsg.org/">NNG</a> — underlying messaging

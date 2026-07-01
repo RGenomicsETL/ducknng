@@ -19,14 +19,18 @@ The local Playwright runner under `test/browser/` and the smoke-page API in `scr
 - `load` loads DuckDB wasm, loads the extension, verifies `crossOriginIsolated`, and runs one SQL shell query.
 - `inproc` runs the page's scalar/codec/`inproc://` AIO proof.
 - `http-sync` starts same-origin GET/POST endpoints and calls them through `ducknng_ncurl(...)` from the SQL shell, then checks that invalid `headers_json` returns an in-band error row.
+- `http-aio` launches `ducknng_ncurl_aio(...)`, inspects status/wait/cancel semantics for a terminal browser handle, collects the HTTP-shaped result, and drops the handle.
+- `http-table` parses same-origin JSON, text, and CSV responses through `ducknng_ncurl_table(...)`.
+- `https-cors` parses a CORS-permissive response from a separate local HTTPS origin.
+- `http-rpc` routes raw framed requests plus structured manifest/exec/session helpers over browser HTTP against a local ducknng-frame responder.
 
 Observed local results for the browser HTTP claim:
 
-- [x] Fresh `wasm_eh` staged site, real Chromium, `load,inproc,http-sync`: 3/3 passes. `inproc://` is reported unavailable and is not claimed for EH.
-- [~] Fresh `wasm_threads` staged site, real Chromium, `load,http-sync`: HTTP sync passes when extension load succeeds, but repeated immediate launches have produced `LOAD` timeouts.
+- [x] Fresh `wasm_eh` staged site, real Chromium, `load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc`: pass. `inproc://` is reported unavailable and is not claimed for EH.
+- [~] Fresh `wasm_threads` staged site, real Chromium, `load,http-sync,http-aio,http-table,https-cors,http-rpc`: individual `load`, `http-sync`, and `http-aio` runs can pass, but repeated runs have produced extension-load timeouts and DuckDB-wasm JSON extension autoload failures during `http-table`.
 - [~] Fresh `wasm_threads` staged site, real Chromium, `load,inproc`: repeated runs have produced both passes and `inproc://` timeouts. Trace builds tend to pass, which points to a scheduling/progress race.
 
-These results are proof that the browser harness is catching real browser behavior, not proof that the whole threaded browser matrix is stable.
+These results are proof that the browser harness is catching real browser behavior. The release-supported browser lane is `wasm_eh`; the threaded browser matrix remains diagnostic.
 
 ## Explicit browser non-goals unless a new design is approved
 
@@ -41,32 +45,32 @@ These results are proof that the browser harness is catching real browser behavi
 - [x] Choose the implementation route. The current implementation uses synchronous `XMLHttpRequest` via `EM_ASM` inside the duckdb-wasm worker, mirroring the DuckHTS browser I/O pattern and requiring no extra stock-runtime imports.
 - [x] Do not rely on C-only `emscripten_fetch()` in the stock runtime unless the missing imports are provided and tested. The current implementation avoids those imports.
 - [x] Keep the browser HTTP implementation behind the HTTP transport adapter boundary, not in the RPC method layer. The current implementation routes inside `ducknng_http_transact()` under `__EMSCRIPTEN__`.
-- [~] Implement browser `ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)` over browser-safe HTTP APIs for `http://` and `https://`. Same-origin `http://` GET/POST and invalid-header error handling are proven locally in Chromium for `wasm_eh`; `wasm_threads` remains affected by runtime load/progress flakiness.
+- [x] Implement browser `ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)` over browser-safe HTTP APIs for `http://` and `https://`. Same-origin `http://` GET/POST and invalid-header error handling are proven locally in Chromium for `wasm_eh`; `wasm_threads` remains diagnostic because of runtime load/progress and DuckDB-wasm extension-autoload flakiness.
 - [x] Return the existing in-band result shape: `ok`, `status`, `error`, `headers_json`, `body`, and `body_text`.
 - [x] Preserve the canonical response header JSON contract using the browser-exposed response header block.
 - [x] Map CORS, COEP, network, abort, and setup failures to `ok = false` rows with clear `error` text.
 - [x] Reject nonzero `tls_config_id` in browser mode with an explicit error instead of ignoring it; browser HTTPS uses browser-managed TLS.
-- [ ] Add timeout and cancellation behavior that does not leave leaked browser requests or stale SQL-visible handles. The synchronous XHR path cannot honor a timeout; async/cancellable Fetch belongs with `ducknng_ncurl_aio(...)`.
-- [~] Add browser smoke probes for same-origin HTTP GET, POST, and invalid `headers_json` error handling. Add real HTTPS/CORS proof separately.
+- [~] Add timeout and cancellation behavior that does not leave leaked browser requests or stale SQL-visible handles. The current browser path is synchronous XHR, so `ducknng_ncurl_aio(...)` creates a terminal handle at launch; async/cancellable Fetch remains future work.
+- [x] Add browser smoke probes for same-origin HTTP GET, POST, and invalid `headers_json` error handling, plus a local HTTPS/CORS proof.
 
 ## Priority 2: browser HTTP(S) async and table helpers
 
-- [ ] Implement browser `ducknng_ncurl_aio(...)` over the same browser HTTP adapter.
-- [ ] Implement or adapt `ducknng_ncurl_aio_collect(...)` so terminal browser HTTP operations return the existing HTTP-shaped result rows.
-- [ ] Keep `ducknng_aio_status(...)`, `ducknng_aio_wait(...)`, `ducknng_aio_cancel(...)`, and `ducknng_aio_drop(...)` behavior coherent for browser HTTP handles.
-- [ ] Represent expected launch failures as terminal error handles when a runtime exists, matching the native AIO contract.
-- [ ] Implement browser `ducknng_ncurl_table(...)` by reusing the browser HTTP result and the existing body codec layer.
-- [ ] Prove JSON and at least one text or CSV response through `ducknng_ncurl_table(...)` in the smoke page.
+- [x] Implement browser `ducknng_ncurl_aio(...)` over the same browser HTTP adapter as a terminal-at-launch handle.
+- [x] Implement or adapt `ducknng_ncurl_aio_collect(...)` so terminal browser HTTP operations return the existing HTTP-shaped result rows.
+- [x] Keep `ducknng_aio_status(...)`, `ducknng_aio_wait(...)`, `ducknng_aio_cancel(...)`, and `ducknng_aio_drop(...)` behavior coherent for browser HTTP handles.
+- [x] Represent expected launch failures as terminal error handles when a runtime exists, matching the native AIO contract.
+- [x] Implement browser `ducknng_ncurl_table(...)` by reusing the browser HTTP result and the existing body codec layer.
+- [x] Prove JSON, text, and CSV responses through `ducknng_ncurl_table(...)` in the smoke page for `wasm_eh`.
 
 ## Priority 3: framed RPC/session helpers over browser HTTP(S)
 
-- [ ] Route URL-based raw request helpers over the browser HTTP adapter for `http://` and `https://`.
-- [ ] Route structured helpers over the same adapter: manifest, exec/query, query open, fetch, close, and cancel.
-- [ ] Preserve the existing ducknng frame and method contracts; do not add parallel `http_exec`, `http_fetch`, or similar methods.
-- [ ] Preserve Arrow IPC and `ducknng_quack_batch` payload behavior; do not substitute ad hoc JSON row serialization.
-- [ ] Preserve session ownership and lifecycle semantics across the HTTP carrier.
-- [ ] Add smoke-page probes for HTTP framed manifest and at least one small SQL request.
-- [ ] Add a local test endpoint strategy for browser HTTP RPC proof, such as a local header-capable server or proxy, without requiring browser listener support.
+- [x] Route URL-based raw request helpers over the browser HTTP adapter for `http://` and `https://`.
+- [x] Route structured helpers over the same adapter: manifest, exec/query, query open, fetch, close, and cancel.
+- [x] Preserve the existing ducknng frame and method contracts; do not add parallel `http_exec`, `http_fetch`, or similar methods.
+- [x] Preserve Arrow IPC and `ducknng_quack_batch` payload behavior; do not substitute ad hoc JSON row serialization.
+- [x] Preserve session ownership and lifecycle semantics across the HTTP carrier.
+- [x] Add smoke-page probes for HTTP framed manifest and at least one small SQL request.
+- [x] Add a local test endpoint strategy for browser HTTP RPC proof without requiring browser listener support. The Playwright harness provides a local ducknng-frame responder.
 
 ## Priority 4: browser WebSocket adapter
 
@@ -86,7 +90,7 @@ These results are proof that the browser harness is catching real browser behavi
 
 ## Hosting and proof requirements
 
-- [ ] Keep GitHub Pages proof limited to extension load, scalars, codecs, and SQL shell unless the host provides real COOP/COEP headers.
+- [x] Keep GitHub Pages proof limited to extension load, scalars, codecs, and SQL shell unless the host provides real COOP/COEP headers; browser HTTP proof lives in the local Playwright harness.
 - [ ] Use a local no-cache header-serving page or another real-header host for full `wasm_threads` `inproc://` proof.
 - [ ] Treat proof PNGs as validation only when the text log says `status=Passed` or the relevant status fields show success.
 - [ ] Add separate proof logs for HTTP(S) and WS/WSS rather than reusing the `inproc://` proof.
@@ -101,7 +105,7 @@ These results are proof that the browser harness is catching real browser behavi
 
 ## Documentation and regression checks
 
-- [ ] Update `docs/wasm.md` when a checklist item becomes supported behavior.
+- [x] Update `docs/wasm.md` when a checklist item becomes supported behavior.
 - [ ] Update `docs/transports.md` and `docs/http.md` before changing public transport semantics.
 - [ ] Add or update README examples for new user-visible wasm workflows only when they are runnable and not misleading.
 - [ ] Keep `.github/workflows/MainDistributionPipeline.yml` unchanged unless that workflow change is explicitly requested.
