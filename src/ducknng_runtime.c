@@ -7,7 +7,13 @@
 
 DUCKDB_EXTENSION_EXTERN
 
-#define DUCKNNG_EXECUTION_POOL_SIZE 8
+#define DUCKNNG_EXECUTION_POOL_INITIAL 8
+#define DUCKNNG_EXECUTION_POOL_DEFAULT_MAX 64
+#define DUCKNNG_EXECUTION_POOL_HARD_MAX 1024
+_Static_assert(DUCKNNG_EXECUTION_POOL_INITIAL > 0 &&
+    DUCKNNG_EXECUTION_POOL_INITIAL <= DUCKNNG_EXECUTION_POOL_DEFAULT_MAX &&
+    DUCKNNG_EXECUTION_POOL_DEFAULT_MAX <= DUCKNNG_EXECUTION_POOL_HARD_MAX,
+    "execution pool sizes must be positive and ordered initial <= default max <= hard max");
 
 typedef struct {
     duckdb_database db;
@@ -142,17 +148,23 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         return 0;
     }
     rt->execution_pool_mu_initialized = 1;
-    rt->execution_pool = (duckdb_connection *)duckdb_malloc(sizeof(*rt->execution_pool) * DUCKNNG_EXECUTION_POOL_SIZE);
-    rt->execution_pool_busy = (int *)duckdb_malloc(sizeof(*rt->execution_pool_busy) * DUCKNNG_EXECUTION_POOL_SIZE);
+    if (ducknng_cond_init(&rt->execution_pool_cv) == 0) rt->execution_pool_cv_initialized = 1;
+    rt->execution_pool_capacity = DUCKNNG_EXECUTION_POOL_HARD_MAX;
+    rt->execution_pool_max = DUCKNNG_EXECUTION_POOL_DEFAULT_MAX;
+    rt->execution_pool = (duckdb_connection *)duckdb_malloc(sizeof(*rt->execution_pool) * rt->execution_pool_capacity);
+    rt->execution_pool_busy = (int *)duckdb_malloc(sizeof(*rt->execution_pool_busy) * rt->execution_pool_capacity);
     if (rt->execution_pool && rt->execution_pool_busy) {
         size_t pi;
-        memset(rt->execution_pool, 0, sizeof(*rt->execution_pool) * DUCKNNG_EXECUTION_POOL_SIZE);
-        memset(rt->execution_pool_busy, 0, sizeof(*rt->execution_pool_busy) * DUCKNNG_EXECUTION_POOL_SIZE);
-        for (pi = 0; pi < DUCKNNG_EXECUTION_POOL_SIZE; pi++) {
+        memset(rt->execution_pool, 0, sizeof(*rt->execution_pool) * rt->execution_pool_capacity);
+        memset(rt->execution_pool_busy, 0, sizeof(*rt->execution_pool_busy) * rt->execution_pool_capacity);
+        for (pi = 0; pi < DUCKNNG_EXECUTION_POOL_INITIAL; pi++) {
             duckdb_connection pool_con = NULL;
             if (duckdb_connect(db, &pool_con) == DuckDBError || !pool_con) break;
             rt->execution_pool[rt->execution_pool_count++] = pool_con;
         }
+    } else {
+        rt->execution_pool_capacity = 0;
+        rt->execution_pool_max = 0;
     }
     if (ducknng_cond_init(&rt->aio_cv) == 0) rt->aio_cv_initialized = 1;
     ducknng_log_ring_init(&rt->log_ring);
@@ -168,6 +180,7 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
         }
         if (rt->execution_pool_busy) duckdb_free(rt->execution_pool_busy);
         if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
+        if (rt->execution_pool_cv_initialized) ducknng_cond_destroy(&rt->execution_pool_cv);
         if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
         if (rt->codec_con) duckdb_disconnect(&rt->codec_con);
         if (rt->codec_con_mu_initialized) ducknng_mutex_destroy(&rt->codec_con_mu);
@@ -474,6 +487,7 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->execution_pool_busy = NULL;
     }
     if (rt->aio_cv_initialized) ducknng_cond_destroy(&rt->aio_cv);
+    if (rt->execution_pool_cv_initialized) ducknng_cond_destroy(&rt->execution_pool_cv);
     if (rt->init_con) duckdb_disconnect(&rt->init_con);
     if (rt->codec_con) duckdb_disconnect(&rt->codec_con);
     if (rt->execution_pool_mu_initialized) ducknng_mutex_destroy(&rt->execution_pool_mu);
@@ -490,6 +504,34 @@ duckdb_connection ducknng_runtime_execution_connection(ducknng_runtime *rt) {
 const char *ducknng_runtime_execution_model(ducknng_runtime *rt) {
     (void)rt;
     return DUCKNNG_EXECUTION_MODEL_SHARED_SERIALIZED_CONNECTION;
+}
+
+uint64_t ducknng_runtime_execution_pool_max(ducknng_runtime *rt) {
+    uint64_t value;
+    if (!rt || !rt->execution_pool_mu_initialized) return 0;
+    ducknng_mutex_lock(&rt->execution_pool_mu);
+    value = (uint64_t)rt->execution_pool_max;
+    ducknng_mutex_unlock(&rt->execution_pool_mu);
+    return value;
+}
+
+int ducknng_runtime_set_execution_pool_max(ducknng_runtime *rt, uint64_t requested,
+    uint64_t *out_effective, char **errmsg) {
+    size_t effective;
+    if (out_effective) *out_effective = 0;
+    if (!rt || !rt->execution_pool_mu_initialized) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: runtime execution pool is not available");
+        return -1;
+    }
+    ducknng_mutex_lock(&rt->execution_pool_mu);
+    if (requested < 1) effective = 1;
+    else if (requested > (uint64_t)rt->execution_pool_capacity) effective = rt->execution_pool_capacity;
+    else effective = (size_t)requested;
+    rt->execution_pool_max = effective;
+    if (rt->execution_pool_cv_initialized) ducknng_cond_broadcast(&rt->execution_pool_cv);
+    ducknng_mutex_unlock(&rt->execution_pool_mu);
+    if (out_effective) *out_effective = (uint64_t)effective;
+    return 0;
 }
 
 void ducknng_runtime_execution_lane_lock(ducknng_runtime *rt) {

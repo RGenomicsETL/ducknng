@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:40827 |
+| tls+tcp://127.0.0.1:35461 |
 +---------------------------+
 
 +--------+
@@ -480,6 +480,8 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN` | Stop a named ducknng service.                                                                                                                      |
 | `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT` | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
 | `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
+| `ducknng_set_execution_pool_max`      | scalar | `n`                                                                                           | `UBIGINT` | Set the runtime execution-connection pool grow ceiling and return the effective value.                                                             |
+| `ducknng_execution_pool_max`          | scalar |                                                                                               | `UBIGINT` | Return the current execution-connection pool grow ceiling.                                                                                         |
 
 ## Introspection
 
@@ -1688,6 +1690,38 @@ before traffic arrives. The subscriber gateway walkthrough in
 shows all three services sharing one DuckDB runtime without deadlocking
 because each uses `service_serialized_connection`.
 
+The runtime execution-connection pool opens a warm minimum and grows on
+demand up to a deterministic ceiling. Use the SQL controls below when a
+workload intentionally holds many query sessions or nested `query_rpc`
+scans at once.
+
+``` sql
+SELECT ducknng_execution_pool_max() AS current_pool_max;
+SELECT ducknng_set_execution_pool_max(96) AS effective_pool_max;
+SELECT ducknng_execution_pool_max() AS updated_pool_max;
+SELECT ducknng_set_execution_pool_max(64) AS reset_pool_max;
++------------------+
+| current_pool_max |
++------------------+
+| 64               |
++------------------+
++--------------------+
+| effective_pool_max |
++--------------------+
+| 96                 |
++--------------------+
++------------------+
+| updated_pool_max |
++------------------+
+| 96               |
++------------------+
++----------------+
+| reset_pool_max |
++----------------+
+| 64             |
++----------------+
+```
+
 ### Chunked streaming routes (SSE)
 
 `ducknng_add_stream_route` registers a route that responds with HTTP
@@ -2062,7 +2096,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 2090315504 | 1782893483257 | 127.0.0.1:60852 | NULL          |
+| 1098283916 | 1782893817888 | 127.0.0.1:49936 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 

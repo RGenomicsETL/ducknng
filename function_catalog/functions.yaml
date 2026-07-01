@@ -701,6 +701,43 @@
       "parameters": "name, model"
     },
     {
+      "name": "ducknng_set_execution_pool_max",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_set_execution_pool_max(n)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Set the runtime execution-connection pool grow ceiling and return the effective value.",
+      "notes": [
+        "The execution-connection pool opens a warm minimum at extension initialization, then grows on demand up to this ceiling, reusing and resetting connections between holders.",
+        "The requested value is clamped to [1, a compiled hard maximum]; the clamped value is returned.",
+        "Raising the ceiling lets more query sessions and nested query_rpc calls run concurrently; lowering it caps further growth without dropping connections already in use.",
+        "This is a runtime-wide setting, not per-service. Pool size is a deliberate, deterministic control rather than an environment variable."
+      ],
+      "examples": [
+        "SELECT ducknng_set_execution_pool_max(128);"
+      ],
+      "parameters": "n"
+    },
+    {
+      "name": "ducknng_execution_pool_max",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_execution_pool_max()",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return the current execution-connection pool grow ceiling.",
+      "notes": [
+        "Reflects the most recent ducknng_set_execution_pool_max value, or the compiled default if it has not been changed."
+      ],
+      "examples": [
+        "SELECT ducknng_execution_pool_max();"
+      ],
+      "parameters": ""
+    },
+    {
       "name": "ducknng_auth_context",
       "kind": "table",
       "category": "Transport Security",

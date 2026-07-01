@@ -142,7 +142,9 @@ typedef struct ducknng_runtime {
     ducknng_mutex init_con_mu;
     ducknng_mutex codec_con_mu;    /* serializes codec_con queries */
     ducknng_mutex execution_pool_mu;
+    ducknng_cond execution_pool_cv;
     ducknng_cond aio_cv;
+    int execution_pool_cv_initialized;
     int aio_cv_initialized;
     int init_con_mu_initialized;
     int codec_con_mu_initialized;  /* 1 after codec_con_mu is ready */
@@ -150,6 +152,8 @@ typedef struct ducknng_runtime {
     duckdb_connection *execution_pool;
     int *execution_pool_busy;
     size_t execution_pool_count;
+    size_t execution_pool_capacity;
+    size_t execution_pool_max;
     ducknng_service **services;
     size_t service_count;
     size_t service_cap;
@@ -211,6 +215,9 @@ int ducknng_runtime_add_tls_config(ducknng_runtime *rt, ducknng_tls_config *cfg,
 ducknng_tls_config *ducknng_runtime_remove_tls_config(ducknng_runtime *rt, uint64_t tls_config_id);
 duckdb_connection ducknng_runtime_execution_connection(ducknng_runtime *rt);
 const char *ducknng_runtime_execution_model(ducknng_runtime *rt);
+uint64_t ducknng_runtime_execution_pool_max(ducknng_runtime *rt);
+int ducknng_runtime_set_execution_pool_max(ducknng_runtime *rt, uint64_t requested,
+    uint64_t *out_effective, char **errmsg);
 void ducknng_runtime_execution_lane_lock(ducknng_runtime *rt);
 void ducknng_runtime_execution_lane_unlock(ducknng_runtime *rt);
 void ducknng_runtime_init_con_lock(ducknng_runtime *rt);

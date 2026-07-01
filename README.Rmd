@@ -1011,6 +1011,15 @@ SELECT ducknng_stop_server('http_routes');
 
 Route handlers run on the `shared_serialized_connection` lane by default. Switch to `service_serialized_connection` or `request_connection` with `ducknng_set_service_execution_model(...)` before traffic arrives. The subscriber gateway walkthrough in `demo/subscriber_gateway.Rmd` (and `docs/subscriber_gateway_demo.md`) shows all three services sharing one DuckDB runtime without deadlocking because each uses `service_serialized_connection`.
 
+The runtime execution-connection pool opens a warm minimum and grows on demand up to a deterministic ceiling. Use the SQL controls below when a workload intentionally holds many query sessions or nested `query_rpc` scans at once.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_execution_pool_max() AS current_pool_max;
+SELECT ducknng_set_execution_pool_max(96) AS effective_pool_max;
+SELECT ducknng_execution_pool_max() AS updated_pool_max;
+SELECT ducknng_set_execution_pool_max(64) AS reset_pool_max;
+```
+
 ### Chunked streaming routes (SSE)
 
 `ducknng_add_stream_route` registers a route that responds with HTTP chunked transfer encoding. The SQL query must return a `chunk` column; each non-null row is written to the client as a separate chunk before the terminator. `ducknng_format_sse(data, event, id, retry)` formats a single Server-Sent Events event string.

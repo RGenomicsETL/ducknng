@@ -135,34 +135,120 @@ static int ducknng_execution_model_parse(const char *model, int *out_model) {
     return 0;
 }
 
+#define DUCKNNG_EXECUTION_POOL_ACQUIRE_TIMEOUT_MS 10000u
+
 static int ducknng_service_acquire_execution_connection(ducknng_service *svc,
     duckdb_connection *out_con, size_t *out_index, char **errmsg) {
+    ducknng_runtime *rt;
     size_t i;
+    uint64_t start;
+    uint64_t deadline;
     if (out_con) *out_con = NULL;
     if (out_index) *out_index = (size_t)-1;
     if (!svc || !svc->rt || !out_con || !out_index || !svc->rt->execution_pool_mu_initialized) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB execution connection pool");
         return -1;
     }
-    ducknng_mutex_lock(&svc->rt->execution_pool_mu);
-    for (i = 0; i < svc->rt->execution_pool_count; i++) {
-        if (!svc->rt->execution_pool_busy[i] && svc->rt->execution_pool[i]) {
-            svc->rt->execution_pool_busy[i] = 1;
-            *out_con = svc->rt->execution_pool[i];
-            *out_index = i;
-            ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
-            return 0;
+    rt = svc->rt;
+    start = ducknng_now_ms();
+    deadline = DUCKNNG_EXECUTION_POOL_ACQUIRE_TIMEOUT_MS > UINT64_MAX - start ?
+        UINT64_MAX : start + DUCKNNG_EXECUTION_POOL_ACQUIRE_TIMEOUT_MS;
+    ducknng_mutex_lock(&rt->execution_pool_mu);
+    for (;;) {
+        uint64_t now;
+        for (i = 0; i < rt->execution_pool_count; i++) {
+            if (!rt->execution_pool_busy[i] && rt->execution_pool[i]) {
+                rt->execution_pool_busy[i] = 1;
+                *out_con = rt->execution_pool[i];
+                *out_index = i;
+                ducknng_mutex_unlock(&rt->execution_pool_mu);
+                return 0;
+            }
         }
+        if (rt->execution_pool_count < rt->execution_pool_max && rt->db) {
+            duckdb_connection con = NULL;
+            size_t idx = rt->execution_pool_count;
+            if (duckdb_connect(rt->db, &con) != DuckDBError && con) {
+                rt->execution_pool[idx] = con;
+                rt->execution_pool_busy[idx] = 1;
+                rt->execution_pool_count++;
+                *out_con = con;
+                *out_index = idx;
+                ducknng_mutex_unlock(&rt->execution_pool_mu);
+                return 0;
+            }
+        }
+        if (!rt->execution_pool_cv_initialized) break;
+        now = ducknng_now_ms();
+        if (now >= deadline) break;
+        if (ducknng_cond_timedwait_ms(&rt->execution_pool_cv, &rt->execution_pool_mu,
+                deadline - now) < 0) break;
     }
-    ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
+    ducknng_mutex_unlock(&rt->execution_pool_mu);
     if (errmsg) *errmsg = ducknng_strdup("ducknng: DuckDB execution connection pool exhausted");
     return -1;
 }
 
+static void ducknng_service_reset_pool_connection(ducknng_runtime *rt, size_t index) {
+    static const char *build_sql =
+        "SELECT coalesce(string_agg(stmt, '; '), '') FROM ("
+        "SELECT 'DROP TABLE IF EXISTS \"' || replace(schema_name,'\"','\"\"') || "
+        "'\".\"' || replace(table_name,'\"','\"\"') || '\"' AS stmt "
+        "FROM duckdb_tables() WHERE temporary AND NOT internal "
+        "UNION ALL "
+        "SELECT 'DROP VIEW IF EXISTS \"' || replace(schema_name,'\"','\"\"') || "
+        "'\".\"' || replace(view_name,'\"','\"\"') || '\"' "
+        "FROM duckdb_views() WHERE temporary AND NOT internal)";
+    duckdb_connection con;
+    duckdb_result res;
+    char *script = NULL;
+    if (!rt || index >= rt->execution_pool_count) return;
+    con = rt->execution_pool[index];
+    if (!con) return;
+    memset(&res, 0, sizeof(res));
+    if (duckdb_query(con, build_sql, &res) == DuckDBError) {
+        duckdb_destroy_result(&res);
+        return;
+    }
+    {
+        duckdb_data_chunk chunk = duckdb_fetch_chunk(res);
+        if (chunk) {
+            if (duckdb_data_chunk_get_size(chunk) >= 1 &&
+                duckdb_data_chunk_get_column_count(chunk) >= 1) {
+                duckdb_vector vec = duckdb_data_chunk_get_vector(chunk, 0);
+                uint64_t *validity = duckdb_vector_get_validity(vec);
+                if (!validity || duckdb_validity_row_is_valid(validity, 0)) {
+                    duckdb_string_t *strs = (duckdb_string_t *)duckdb_vector_get_data(vec);
+                    const char *src = duckdb_string_t_data(&strs[0]);
+                    uint32_t len = duckdb_string_t_length(strs[0]);
+                    if (len) {
+                        script = (char *)duckdb_malloc((size_t)len + 1);
+                        if (script) {
+                            memcpy(script, src, len);
+                            script[len] = '\0';
+                        }
+                    }
+                }
+            }
+            duckdb_destroy_data_chunk(&chunk);
+        }
+    }
+    duckdb_destroy_result(&res);
+    if (script && script[0]) {
+        duckdb_result drop_res;
+        memset(&drop_res, 0, sizeof(drop_res));
+        (void)duckdb_query(con, script, &drop_res);
+        duckdb_destroy_result(&drop_res);
+    }
+    if (script) duckdb_free(script);
+}
+
 static void ducknng_service_release_execution_connection(ducknng_service *svc, size_t index) {
     if (!svc || !svc->rt || index == (size_t)-1 || !svc->rt->execution_pool_mu_initialized) return;
+    ducknng_service_reset_pool_connection(svc->rt, index);
     ducknng_mutex_lock(&svc->rt->execution_pool_mu);
     if (index < svc->rt->execution_pool_count) svc->rt->execution_pool_busy[index] = 0;
+    if (svc->rt->execution_pool_cv_initialized) ducknng_cond_signal(&svc->rt->execution_pool_cv);
     ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
 }
 

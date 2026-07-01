@@ -118,6 +118,15 @@ If you need to stop work early, use:
 
 but treat `cancel` as best-effort control, not as a universal destructor guarantee. The normal session cleanup path is still explicit close unless the server clearly reports otherwise.
 
+### Execution connection pool
+
+Sessionful query methods and `request_connection` execution scopes use a runtime-owned pool of DuckDB connections. The pool opens a warm minimum eagerly, grows on demand up to a soft ceiling, and waits only a bounded time at the ceiling before returning a visible "pool exhausted" error. The ceiling is controlled through SQL:
+
+- `ducknng_set_execution_pool_max(n)` sets the ceiling, clamped to the compiled range, and returns the effective value.
+- `ducknng_execution_pool_max()` returns the current ceiling.
+
+Raising the ceiling lets more concurrent query sessions or nested `query_rpc` table functions hold connections at once. Lowering it caps future growth without dropping connections already in use. A released pooled connection is reset before reuse by dropping connection-local temporary tables and views. This prevents the common temp-object leakage between sessions while keeping the connection handle stable; temp macros and session settings are not reset by this cleanup pass.
+
 ## 4. What runtime teardown still does for you
 
 `ducknng` runtime teardown is still important, and recent hardening work improved it substantially.

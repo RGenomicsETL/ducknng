@@ -464,6 +464,42 @@ static void ducknng_nng_version_scalar(duckdb_function_info info, duckdb_data_ch
     }
 }
 
+static void ducknng_set_execution_pool_max_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: runtime is not available");
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        uint64_t requested = arg_u64(duckdb_data_chunk_get_vector(input, 0), row, 0);
+        uint64_t effective = 0;
+        char *errmsg = NULL;
+        if (ducknng_runtime_set_execution_pool_max(ctx->rt, requested, &effective, &errmsg) != 0) {
+            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to set execution pool max");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        out[row] = effective;
+    }
+}
+
+static void ducknng_execution_pool_max_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: runtime is not available");
+        return;
+    }
+    for (row = 0; row < count; row++) out[row] = ducknng_runtime_execution_pool_max(ctx->rt);
+}
+
 int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx) {
     duckdb_type service_limits_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     duckdb_type service_limits_extended_types[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
@@ -487,6 +523,11 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 7, ducknng_set_service_limits_scalar, ctx, service_limits_principal7_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 8, ducknng_set_service_limits_scalar, ctx, service_limits_principal8_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_execution_model", 2, ducknng_set_service_execution_model_scalar, ctx, execution_model_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    {
+        duckdb_type pool_max_types[1] = {DUCKDB_TYPE_UBIGINT};
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_execution_pool_max", 1, ducknng_set_execution_pool_max_scalar, ctx, pool_max_types, DUCKDB_TYPE_UBIGINT)) return 0;
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_execution_pool_max", 0, ducknng_execution_pool_max_scalar, ctx, NULL, DUCKDB_TYPE_UBIGINT)) return 0;
+    }
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_servers", ctx, 0, NULL,
             ducknng_servers_bind, ducknng_servers_init, ducknng_servers_scan)) return 0;
     return 1;
