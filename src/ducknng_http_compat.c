@@ -1605,6 +1605,7 @@ int ducknng_http_frame_transact(const char *url, const uint8_t *frame, size_t fr
 struct ducknng_http_frame_client {
     nng_url *url;
     nng_http_client *client;
+    char *url_text;
 };
 
 int ducknng_http_frame_client_open(const char *url, const ducknng_tls_opts *tls_opts,
@@ -1620,16 +1621,34 @@ int ducknng_http_frame_client_open(const char *url, const ducknng_tls_opts *tls_
     }
     if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
     if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
+#ifdef __EMSCRIPTEN__
+    if (ducknng_http_tls_requested(tls_opts)) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
+        return -1;
+    }
+#else
     if (ducknng_http_tls_requested(tls_opts) && !parsed.uses_tls) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: TLS configuration requires an https:// URL");
         return -1;
     }
+#endif
     fc = (ducknng_http_frame_client *)duckdb_malloc(sizeof(*fc));
     if (!fc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating HTTP frame client");
         return -1;
     }
     memset(fc, 0, sizeof(*fc));
+#ifdef __EMSCRIPTEN__
+    fc->url_text = ducknng_strdup(url);
+    if (!fc->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying browser HTTP frame URL");
+        ducknng_http_frame_client_close(fc);
+        return -1;
+    }
+    *out_client = fc;
+    return 0;
+#endif
     rv = nng_url_parse(&fc->url, url);
     if (rv != 0) goto fail;
     rv = nng_http_client_alloc(&fc->client, fc->url);
@@ -1665,6 +1684,14 @@ int ducknng_http_frame_client_transact(ducknng_http_frame_client *client,
     int rv;
     if (out_frame) *out_frame = NULL;
     if (out_frame_len) *out_frame_len = 0;
+#ifdef __EMSCRIPTEN__
+    if (!client || !client->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    return ducknng_http_frame_transact(client->url_text, frame, frame_len, timeout_ms,
+        NULL, out_frame, out_frame_len, errmsg);
+#endif
     if (!client || !client->client || !client->url) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
         return -1;
@@ -1740,6 +1767,30 @@ int ducknng_http_frame_client_transact_msg(ducknng_http_frame_client *client,
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame message output");
         return -1;
     }
+#ifdef __EMSCRIPTEN__
+    if (!client || !client->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    {
+        uint8_t *out_frame = NULL;
+        size_t out_frame_len = 0;
+        if (ducknng_http_frame_client_transact(client, frame, frame_len, timeout_ms,
+                &out_frame, &out_frame_len, errmsg) != 0) {
+            return -1;
+        }
+        rv = nng_msg_alloc(&msg, out_frame_len);
+        if (rv != 0) {
+            if (out_frame) duckdb_free(out_frame);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+            return -1;
+        }
+        if (out_frame_len) memcpy(nng_msg_body(msg), out_frame, out_frame_len);
+        if (out_frame) duckdb_free(out_frame);
+        *out_msg = msg;
+        return 0;
+    }
+#endif
     if (!client || !client->client || !client->url) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
         return -1;
@@ -1794,6 +1845,7 @@ void ducknng_http_frame_client_close(ducknng_http_frame_client *client) {
     if (!client) return;
     if (client->client) nng_http_client_free(client->client);
     if (client->url) nng_url_free(client->url);
+    if (client->url_text) duckdb_free(client->url_text);
     duckdb_free(client);
 }
 
