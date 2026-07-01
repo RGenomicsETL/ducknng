@@ -8,20 +8,31 @@
 //
 // Usage:
 //   node test/browser/run_smoke.mjs [siteDir]
-//   node test/browser/run_smoke.mjs [siteDir] --probes=load,inproc,http-sync
+//   node test/browser/run_smoke.mjs [siteDir] --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
 //
 // Environment:
 //   DUCKNNG_BROWSER_PROBES=load,http-sync
 //   BROWSER_DEBUG=1
 
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { readFile, stat } from "node:fs/promises";
-import { resolve, extname, sep } from "node:path";
+import { dirname, resolve, extname, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const DEFAULT_SITE_DIR = ".duckdb-wasm-local-artifacts/site";
 const SMOKE_PATH = "/scripts/duckdb-wasm-local-test.html";
-const KNOWN_PROBES = new Set(["load", "inproc", "http-sync"]);
+const KNOWN_PROBES = new Set([
+  "load",
+  "inproc",
+  "http-sync",
+  "http-aio",
+  "http-table",
+  "https-cors",
+  "http-rpc",
+]);
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -83,7 +94,7 @@ function parseProbes(raw) {
 }
 
 function printUsage() {
-  console.log(`Usage: node test/browser/run_smoke.mjs [siteDir] [--probes=load,inproc,http-sync]
+  console.log(`Usage: node test/browser/run_smoke.mjs [siteDir] [--probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc]
 
 Probes:
   load       Load DuckDB wasm, LOAD the ducknng extension, verify local
@@ -97,6 +108,16 @@ Probes:
              against same-origin local GET/POST test endpoints plus an invalid
              headers_json error case. Enable only for artifacts expected to
              contain the browser HTTP bridge.
+  http-aio   Launch ducknng_ncurl_aio against the same-origin endpoint, then
+             verify aio_status, aio_wait, ducknng_ncurl_aio_collect, cancel,
+             and drop behavior. Browser XHR aio handles are terminal at launch.
+  http-table Exercise ducknng_ncurl_table over same-origin JSON, text, and CSV
+             response bodies.
+  https-cors Exercise ducknng_ncurl_table against a separate HTTPS origin with
+             permissive CORS headers. The runner uses a local test certificate
+             and launches Chromium with HTTPS errors ignored for this probe.
+  http-rpc   Exercise framed raw/RPC/session helper routing over browser HTTP
+             against a small local ducknng-frame responder.
 
 Alias:
   baseline   Expands to load,inproc.
@@ -108,6 +129,79 @@ function setIsolationHeaders(res) {
   res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader("Cache-Control", "no-store");
+}
+
+function setCorsProbeHeaders(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("Cache-Control", "no-store");
+}
+
+function writeU32LE(buf, offset, value) {
+  buf.writeUInt32LE(value >>> 0, offset);
+}
+
+function buildDucknngFrame(type, name, flags, payload) {
+  const nameBuf = Buffer.from(name || "", "utf8");
+  const payloadBuf = Buffer.from(payload || "", "utf8");
+  const header = Buffer.alloc(22);
+  header[0] = 1;
+  header[1] = type & 0xff;
+  writeU32LE(header, 2, flags >>> 0);
+  writeU32LE(header, 6, nameBuf.length);
+  writeU32LE(header, 10, 0);
+  header.writeBigUInt64LE(BigInt(payloadBuf.length), 14);
+  return Buffer.concat([header, nameBuf, payloadBuf]);
+}
+
+function decodeDucknngFrame(buf) {
+  if (!buf || buf.length < 22 || buf[0] !== 1) return null;
+  const nameLen = buf.readUInt32LE(6);
+  const errorLen = buf.readUInt32LE(10);
+  const payloadLen = Number(buf.readBigUInt64LE(14));
+  const nameStart = 22;
+  const errorStart = nameStart + nameLen;
+  const payloadStart = errorStart + errorLen;
+  if (nameLen > 128 || payloadStart + payloadLen > buf.length) return null;
+  return {
+    type: buf[1],
+    flags: buf.readUInt32LE(2),
+    name: buf.subarray(nameStart, errorStart).toString("utf8"),
+    payload: buf.subarray(payloadStart, payloadStart + payloadLen),
+  };
+}
+
+function ducknngFrameResponseFor(reqBody) {
+  const frame = decodeDucknngFrame(reqBody);
+  const payloadJson = (text) => buildDucknngFrame(2, frame?.name || "manifest", 4, text);
+  if (!frame) {
+    return buildDucknngFrame(3, "transport", 0, "");
+  }
+  if (frame.type === 0) {
+    return buildDucknngFrame(2, "manifest", 4, '{"browser_manifest":"ok","methods":[]}');
+  }
+  switch (frame.name) {
+    case "manifest":
+      return payloadJson('{"browser_manifest":"ok","methods":[]}');
+    case "exec":
+      return buildDucknngFrame(2, "exec", 4, '{"rows_changed":0,"statement_type":0,"result_type":0}');
+    case "query_open":
+      return buildDucknngFrame(2, "query_open", 4 | 32,
+        '{"session_id":1,"session_token":"browser-token","result_handle":"browser-result",' +
+        '"state":"open","next_method":"fetch","serialization_mode":"arrow_ipc_stream",' +
+        '"ducknng_protocol_version":1,"row_schema_version":1,"fetch_batch_chunks":1,' +
+        '"idle_timeout_ms":300000}');
+    case "fetch":
+      return buildDucknngFrame(2, "fetch", 4 | 16, '{"state":"exhausted","batch_index":0}');
+    case "close":
+      return buildDucknngFrame(2, "close", 4 | 64, '{"state":"closed"}');
+    case "cancel":
+      return buildDucknngFrame(2, "cancel", 4 | 128, '{"state":"cancelled"}');
+    default:
+      return buildDucknngFrame(3, frame.name || "unknown", 0, "");
+  }
 }
 
 function readBody(req) {
@@ -128,10 +222,35 @@ async function handleProbe(req, res, pathname) {
     return;
   }
 
+  if (pathname === "/probe/json" && req.method === "GET") {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end('[{"a":1,"b":"x"},{"a":2,"b":"y"}]');
+    return;
+  }
+
+  if (pathname === "/probe/text" && req.method === "GET") {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("ducknng text table ok");
+    return;
+  }
+
+  if (pathname === "/probe/csv" && req.method === "GET") {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.end("a,b\n1,x\n2,y\n");
+    return;
+  }
+
   if (pathname === "/probe/echo" && req.method === "POST") {
     const body = await readBody(req);
     res.setHeader("Content-Type", "application/octet-stream");
     res.end(body);
+    return;
+  }
+
+  if (pathname === "/probe/rpc" && req.method === "POST") {
+    const body = await readBody(req);
+    res.setHeader("Content-Type", "application/vnd.ducknng.frame");
+    res.end(ducknngFrameResponseFor(body));
     return;
   }
 
@@ -175,6 +294,47 @@ function startServer(root) {
     }
   });
 
+  return new Promise((resolveServer) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolveServer({ server, port: server.address().port });
+    });
+  });
+}
+
+
+async function handleHttpsCorsProbe(req, res, pathname) {
+  setCorsProbeHeaders(res);
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+  if (pathname === "/probe/https-json" && req.method === "GET") {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end('[{"a":10},{"a":32}]');
+    return;
+  }
+  res.statusCode = 404;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("https probe not found");
+}
+
+async function startHttpsProbeServer() {
+  const [key, cert] = await Promise.all([
+    readFile(resolve(REPO_ROOT, "test/certs/loopback-key.pem")),
+    readFile(resolve(REPO_ROOT, "test/certs/loopback-cert.pem")),
+  ]);
+  const server = createHttpsServer({ key, cert }, async (req, res) => {
+    try {
+      const url = new URL(req.url || "/", "https://localhost");
+      await handleHttpsCorsProbe(req, res, url.pathname);
+    } catch {
+      setCorsProbeHeaders(res);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("https probe failure");
+    }
+  });
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
       resolveServer({ server, port: server.address().port });
@@ -293,6 +453,172 @@ async function runHttpSyncProbe(page, base) {
   }
 }
 
+
+async function runHttpAioProbe(page, base) {
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_aio", 10000);
+  const launch = await runShell(page,
+    `CREATE TEMP TABLE browser_http_aio AS ` +
+    `SELECT ducknng_ncurl_aio('${base}/probe/hello', 'GET', NULL, NULL, 5000, 0::UBIGINT) AS aio`,
+    30000);
+  if (/error/i.test(launch.meta)) fail(`http-aio launch errored: ${launch.table}`);
+
+  const waited = await runShell(page,
+    `SELECT ducknng_aio_cancel(aio) AS cancelled, ` +
+    `ducknng_aio_wait(list_value(aio), 5000) AS waited FROM browser_http_aio`,
+    30000);
+  if (/error/i.test(waited.meta) || !/false/i.test(waited.table) || !/true/i.test(waited.table)) {
+    fail(`http-aio wait/cancel did not match terminal browser handle semantics: "${waited.table}"`);
+  }
+
+  const status = await runShell(page,
+    `SELECT kind, state, phase, terminal ` +
+    `FROM ducknng_aio_status((SELECT aio FROM browser_http_aio))`,
+    30000);
+  if (/error/i.test(status.meta) || !/ncurl/i.test(status.table) || !/ready/i.test(status.table) ||
+      !/http/i.test(status.table) || !/true/i.test(status.table)) {
+    fail(`http-aio status did not report a ready ncurl/http handle: "${status.table}"`);
+  }
+
+  const collected = await runShell(page,
+    `SELECT ok, status, body_text FROM ducknng_ncurl_aio_collect(` +
+    `(SELECT list_value(aio) FROM browser_http_aio), 5000)`,
+    30000);
+  if (/error/i.test(collected.meta) || !/true/i.test(collected.table) ||
+      !/200/.test(collected.table) || !/ducknng-http-ok/.test(collected.table)) {
+    fail(`http-aio collect did not return expected HTTP result: "${collected.table}"`);
+  }
+
+  const dropped = await runShell(page,
+    `SELECT ducknng_aio_drop(aio) AS dropped FROM browser_http_aio`, 30000);
+  if (/error/i.test(dropped.meta) || !/true/i.test(dropped.table)) {
+    fail(`http-aio drop failed: "${dropped.table}"`);
+  }
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_aio", 10000);
+  console.log("ok: http-aio returned terminal handle, collected body, and dropped cleanly");
+}
+
+async function runHttpTableProbe(page, base) {
+  const jsonSql =
+    `SELECT sum(a) AS sum_a, string_agg(b, ',' ORDER BY b) AS bs ` +
+    `FROM ducknng_ncurl_table('${base}/probe/json', 'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const json = await runShell(page, jsonSql);
+  if (/error/i.test(json.meta) || !/3/.test(json.table) || !/x,y/.test(json.table)) {
+    fail(`http-table JSON proof failed: ${json.table}`);
+  }
+
+  const textSql =
+    `SELECT body_text FROM ducknng_ncurl_table('${base}/probe/text', ` +
+    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const text = await runShell(page, textSql);
+  if (/error/i.test(text.meta) || !/ducknng text table ok/.test(text.table)) {
+    fail(`http-table text proof failed: ${text.table}`);
+  }
+
+  const csvSql =
+    `SELECT sum(a) AS sum_a, string_agg(b, ',' ORDER BY b) AS bs ` +
+    `FROM ducknng_ncurl_table('${base}/probe/csv', 'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const csv = await runShell(page, csvSql);
+  if (/error/i.test(csv.meta) || !/3/.test(csv.table) || !/x,y/.test(csv.table)) {
+    fail(`http-table CSV proof failed: ${csv.table}`);
+  }
+  console.log("ok: http-table parsed JSON, text, and CSV responses");
+}
+
+async function runHttpsCorsProbe(page, httpsBase) {
+  const httpsSql =
+    `SELECT sum(a) AS sum_a FROM ducknng_ncurl_table('${httpsBase}/probe/https-json', ` +
+    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const https = await runShell(page, httpsSql);
+  if (/error/i.test(https.meta) || !/42/.test(https.table)) {
+    fail(`https-cors proof failed: ${https.table}`);
+  }
+  console.log("ok: https-cors returned a parsed JSON table from a CORS-permissive HTTPS origin");
+}
+
+async function runHttpRpcProbe(page, base) {
+  const rawSql =
+    `SELECT ok, type_name, name, payload_text ` +
+    `FROM ducknng_decode_frame(ducknng_get_rpc_manifest_raw('${base}/probe/rpc', 0::UBIGINT))`;
+  const raw = await runShell(page, rawSql);
+  if (/error/i.test(raw.meta) || !/true/i.test(raw.table) || !/manifest/.test(raw.table) ||
+      !/browser_manifest/.test(raw.table)) {
+    fail(`http-rpc raw manifest proof failed: ${raw.table}`);
+  }
+
+  const manifestSql = `SELECT ok, manifest FROM ducknng_get_rpc_manifest('${base}/probe/rpc', 0::UBIGINT)`;
+  const manifest = await runShell(page, manifestSql);
+  if (/error/i.test(manifest.meta) || !/true/i.test(manifest.table) || !/browser_manifest/.test(manifest.table)) {
+    fail(`http-rpc structured manifest proof failed: ${manifest.table}`);
+  }
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_rpc_aio", 10000);
+  const aioLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_rpc_aio AS ` +
+    `SELECT ducknng_get_rpc_manifest_raw_aio('${base}/probe/rpc', 5000, 0::UBIGINT) AS aio`,
+    30000);
+  if (/error/i.test(aioLaunch.meta)) fail(`http-rpc aio launch failed: ${aioLaunch.table}`);
+  const aio = await runShell(page,
+    `WITH collected AS (` +
+    `  SELECT * FROM ducknng_aio_collect_decoded((SELECT list_value(aio) FROM browser_rpc_aio), 5000)` +
+    `), dropped AS (` +
+    `  SELECT c.*, ducknng_aio_drop(c.aio_id) AS dropped FROM collected c` +
+    `) SELECT ok, type_name, name, payload_text, dropped FROM dropped`,
+    30000);
+  if (/error/i.test(aio.meta) || !/true/i.test(aio.table) || !/manifest/.test(aio.table) ||
+      !/browser_manifest/.test(aio.table)) {
+    fail(`http-rpc aio manifest proof failed: ${aio.table}`);
+  }
+  await runShell(page, "DROP TABLE IF EXISTS browser_rpc_aio", 10000);
+
+  const sessionSql = `WITH opened AS (
+      SELECT ducknng_open_query_raw('${base}/probe/rpc', 'SELECT 1', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT) AS frame
+    ), open_dec AS (
+      SELECT ducknng_frame_error_text(frame) IS NULL AS ok,
+             ducknng_frame_payload_text(frame) AS payload_text
+      FROM opened
+    ), session AS (
+      SELECT json_extract(payload_text::JSON, '$.session_id')::UBIGINT AS session_id,
+             json_extract_string(payload_text::JSON, '$.session_token') AS token
+      FROM open_dec
+    ), fetched AS (
+      SELECT ducknng_fetch_query_raw('${base}/probe/rpc', session_id, token, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT) AS frame
+      FROM session
+    ), fetch_dec AS (
+      SELECT ducknng_frame_error_text(frame) IS NULL AS ok,
+             ducknng_frame_payload_text(frame) AS payload_text
+      FROM fetched
+    ), cancelled AS (
+      SELECT ducknng_cancel_query_raw('${base}/probe/rpc', session_id, token, 0::UBIGINT) AS frame
+      FROM session
+    ), cancel_dec AS (
+      SELECT ducknng_frame_error_text(frame) IS NULL AS ok,
+             ducknng_frame_payload_text(frame) AS payload_text
+      FROM cancelled
+    ), closed AS (
+      SELECT ducknng_close_query_raw('${base}/probe/rpc', session_id, token, 0::UBIGINT) AS frame
+      FROM session
+    ), close_dec AS (
+      SELECT ducknng_frame_error_text(frame) IS NULL AS ok,
+             ducknng_frame_payload_text(frame) AS payload_text
+      FROM closed
+    )
+    SELECT open_dec.ok AS open_ok,
+           position('"state":"open"' IN open_dec.payload_text) > 0 AS open_state,
+           fetch_dec.ok AS fetch_ok,
+           position('"state":"exhausted"' IN fetch_dec.payload_text) > 0 AS fetch_state,
+           cancel_dec.ok AS cancel_ok,
+           position('"state":"cancelled"' IN cancel_dec.payload_text) > 0 AS cancel_state,
+           close_dec.ok AS close_ok,
+           position('"state":"closed"' IN close_dec.payload_text) > 0 AS close_state
+    FROM open_dec, fetch_dec, cancel_dec, close_dec`;
+  const session = await runShell(page, sessionSql);
+  const trueCount = (session.table.match(/true/gi) || []).length;
+  if (/error/i.test(session.meta) || trueCount < 8) {
+    fail(`http-rpc raw session helper proof failed: ${session.table}`);
+  }
+  console.log("ok: http-rpc proved raw, structured, aio, and session helper routing over browser HTTP");
+}
+
 let options;
 try {
   options = parseArgs(process.argv.slice(2));
@@ -307,14 +633,19 @@ try {
 
 const { siteDir, probes } = options;
 const { server, port } = await startServer(siteDir);
+const httpsProbe = probes.has("https-cors") ? await startHttpsProbeServer() : null;
 const base = `http://127.0.0.1:${port}`;
+const httpsBase = httpsProbe ? `https://127.0.0.1:${httpsProbe.port}` : null;
 console.log(`serving ${siteDir} at ${base} (COOP/COEP enabled)`);
+if (httpsBase) console.log(`serving HTTPS CORS probe at ${httpsBase}`);
 console.log(`browser probes: ${Array.from(probes).join(",")}`);
 
 let browser = null;
+let context = null;
 try {
   browser = await chromium.launch({ headless: process.env.BROWSER_HEADFUL !== "1" });
-  const page = await browser.newPage();
+  context = await browser.newContext({ ignoreHTTPSErrors: probes.has("https-cors") });
+  const page = await context.newPage();
   page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`));
   if (process.env.BROWSER_DEBUG === "1") {
     page.on("console", (message) => console.log(`[browser:${message.type()}] ${message.text()}`));
@@ -329,13 +660,19 @@ try {
   await runLoadProbe(page);
   if (probes.has("inproc")) await runInprocProbe(page);
   if (probes.has("http-sync")) await runHttpSyncProbe(page, base);
+  if (probes.has("http-aio")) await runHttpAioProbe(page, base);
+  if (probes.has("http-table")) await runHttpTableProbe(page, base);
+  if (probes.has("https-cors")) await runHttpsCorsProbe(page, httpsBase);
+  if (probes.has("http-rpc")) await runHttpRpcProbe(page, base);
 } catch (error) {
   if ((error?.message ?? String(error)) !== RECORDED_FAILURE) {
     console.error(`FAIL: ${error?.message ?? String(error)}`);
     process.exitCode = 1;
   }
 } finally {
+  if (context) await context.close();
   if (browser) await browser.close();
+  if (httpsProbe) httpsProbe.server.close();
   server.close();
 }
 
