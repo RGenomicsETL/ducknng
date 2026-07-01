@@ -280,6 +280,8 @@ prop_two_sizes_alloc(struct theft *t, void *env, void **instance)
     if (!out) return THEFT_ALLOC_ERROR;
     out->a = ((uint64_t)theft_random_bits(t, 32) << 32) | (uint64_t)theft_random_bits(t, 32);
     out->b = ((uint64_t)theft_random_bits(t, 32) << 32) | (uint64_t)theft_random_bits(t, 32);
+    /* Bias toward boundary values so the overflow branches are hit often rather
+     * than only on a rare random near-SIZE_MAX draw. */
     switch (theft_random_bits(t, 3)) {
     case 0: out->a = (uint64_t)SIZE_MAX; break;
     case 1: out->b = (uint64_t)SIZE_MAX - (out->a & 0xffu); break;
@@ -315,6 +317,12 @@ static struct theft_type_info prop_two_sizes_info = {
     },
 };
 
+/*
+ * Checked size arithmetic must never wrap silently: ducknng_size_add /
+ * ducknng_size_mul report overflow as -1 (leaving *out untouched) exactly when
+ * the mathematical result exceeds SIZE_MAX, and ducknng_grow_capacity always
+ * returns a capacity >= the requested need without overflowing.
+ */
 static enum theft_trial_res
 prop_size_arith_invariants(struct theft *t, void *arg1)
 {
@@ -366,8 +374,10 @@ prop_two_strings_alloc(struct theft *t, void *env, void **instance)
     (void)env;
     out = (struct prop_two_strings *)malloc(sizeof(*out));
     if (!out) return THEFT_ALLOC_ERROR;
+    /* Lengths can be 0 so the empty-prefix / empty-name branches are exercised. */
     la = (size_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_PATH_SEG + 1u);
     lb = (size_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_PATH_SEG + 1u);
+    /* Fill with printable, never-NUL bytes (incl. '.') so these stay C strings. */
     for (i = 0; i < la; i++) out->a[i] = (char)(0x21u + (theft_random_bits(t, 8) % 0x5eu));
     out->a[la] = '\0';
     for (i = 0; i < lb; i++) out->b[i] = (char)(0x21u + (theft_random_bits(t, 8) % 0x5eu));
@@ -401,6 +411,11 @@ static struct theft_type_info prop_two_strings_info = {
     },
 };
 
+/*
+ * ducknng_join_dotted_path(prefix, name) yields a copy of name when prefix is
+ * empty, and exactly "prefix.name" (prefix, one '.', name) otherwise — never
+ * truncating, overrunning, or losing the NUL terminator.
+ */
 static enum theft_trial_res
 prop_join_dotted_path_invariants(struct theft *t, void *arg1)
 {
@@ -412,7 +427,7 @@ prop_join_dotted_path_invariants(struct theft *t, void *arg1)
 
     (void)t;
     r = ducknng_join_dotted_path(in->a, in->b);
-    if (!r) return THEFT_TRIAL_FAIL;
+    if (!r) return THEFT_TRIAL_FAIL; /* sizes are tiny; allocation must succeed */
     if (pa == 0) {
         if (strcmp(r, in->b) != 0) res = THEFT_TRIAL_FAIL;
     } else if (strlen(r) != pa + 1 + pb) {
@@ -574,6 +589,83 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
     return result;
 }
 
+/* Wire logical-type ids mirror the TU-private DUCKNNG_QUACK_LOGICAL_* defines in
+ * src/ducknng_quack.c; kept local so the property harness can hand-build a nested
+ * schema and fuzz the recursive skip path without widening the public header. */
+#define PROP_QK_INTEGER 13
+#define PROP_QK_VARCHAR 25
+#define PROP_QK_STRUCT  100
+#define PROP_QK_LIST    101
+
+static ducknng_quack_column_schema *prop_quack_leaf(int type_id)
+{
+    ducknng_quack_column_schema *n =
+        (ducknng_quack_column_schema *)malloc(sizeof(*n));
+    if (!n) return NULL;
+    memset(n, 0, sizeof(*n));
+    n->logical_type_id = type_id;
+    return n;
+}
+
+/* Build STRUCT(a INTEGER, b VARCHAR) and LIST(INTEGER) top-level columns. The
+ * tree is owned through ducknng_quack_schema_reset, matching the codec's own
+ * allocation/ownership rules (duckdb_malloc == malloc in this harness). */
+static int prop_quack_build_nested_schema(ducknng_quack_schema *schema)
+{
+    ducknng_quack_column_schema *st;
+    ducknng_quack_column_schema *li;
+    memset(schema, 0, sizeof(*schema));
+    schema->cols = (ducknng_quack_column_schema *)malloc(sizeof(*schema->cols) * 2);
+    if (!schema->cols) return -1;
+    memset(schema->cols, 0, sizeof(*schema->cols) * 2);
+    schema->ncols = 2;
+    st = &schema->cols[0];
+    st->logical_type_id = PROP_QK_STRUCT;
+    st->nchildren = 2;
+    st->children = (ducknng_quack_column_schema **)malloc(sizeof(*st->children) * 2);
+    st->child_names = (char **)malloc(sizeof(*st->child_names) * 2);
+    if (!st->children || !st->child_names) return -1;
+    st->children[0] = prop_quack_leaf(PROP_QK_INTEGER);
+    st->children[1] = prop_quack_leaf(PROP_QK_VARCHAR);
+    st->child_names[0] = NULL;
+    st->child_names[1] = NULL;
+    if (!st->children[0] || !st->children[1]) return -1;
+    li = &schema->cols[1];
+    li->logical_type_id = PROP_QK_LIST;
+    li->nchildren = 1;
+    li->children = (ducknng_quack_column_schema **)malloc(sizeof(*li->children) * 1);
+    if (!li->children) return -1;
+    li->children[0] = prop_quack_leaf(PROP_QK_INTEGER);
+    if (!li->children[0]) return -1;
+    return 0;
+}
+
+/* Fuzz the recursive nested skip path: a fixed STRUCT+LIST schema parsed against
+ * random bytes must reject cleanly (or parse a row count) without crashing and
+ * without claiming success while leaving an error string. */
+static enum theft_trial_res
+prop_quack_nested_random_payloads(struct theft *t, void *arg1)
+{
+    const struct prop_bytes *bytes = (const struct prop_bytes *)arg1;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+    int rc;
+    enum theft_trial_res result = THEFT_TRIAL_PASS;
+
+    (void)t;
+    if (prop_quack_build_nested_schema(&schema) != 0) {
+        ducknng_quack_schema_reset(&schema);
+        return THEFT_TRIAL_SKIP;
+    }
+    rc = ducknng_quack_payload_read_row_count(bytes->data, bytes->len, &schema,
+        &row_count, &errmsg);
+    if (rc == 0 && errmsg != NULL) result = THEFT_TRIAL_FAIL;
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    return result;
+}
+
 TEST wire_rejects_or_decodes_random_bytes(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
@@ -635,6 +727,14 @@ TEST quack_rejects_or_scans_random_zero_column_payloads(void)
     PASS();
 }
 
+TEST quack_rejects_random_nested_schema_payloads(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("quack random nested-schema payloads", prop_quack_nested_random_payloads,
+            &prop_random_bytes_info));
+    PASS();
+}
+
 TEST size_add_rejects_overflow_keeps_valid_sums(void)
 {
     size_t out = 0;
@@ -642,10 +742,12 @@ TEST size_add_rejects_overflow_keeps_valid_sums(void)
     ASSERT_EQ(0, ducknng_size_add(10, 20, &out));
     ASSERT_EQ((size_t)30, out);
 
+    /* Exact boundary: sum equals SIZE_MAX is representable. */
     out = 0;
     ASSERT_EQ(0, ducknng_size_add(SIZE_MAX - 1, 1, &out));
     ASSERT_EQ(SIZE_MAX, out);
 
+    /* One past the boundary overflows and must not write a wrapped value. */
     out = 0xabcd;
     ASSERT_EQ(-1, ducknng_size_add(SIZE_MAX, 1, &out));
     ASSERT_EQ((size_t)0xabcd, out);
@@ -663,6 +765,7 @@ TEST size_mul_rejects_overflow_keeps_valid_products(void)
     ASSERT_EQ(0, ducknng_size_mul(6, 7, &out));
     ASSERT_EQ((size_t)42, out);
 
+    /* Zero operand can never overflow. */
     out = 0xabcd;
     ASSERT_EQ(0, ducknng_size_mul(0, SIZE_MAX, &out));
     ASSERT_EQ((size_t)0, out);
@@ -681,6 +784,7 @@ TEST grow_capacity_meets_need_without_overflow(void)
 {
     size_t cap = 0;
 
+    /* First growth seeds from min_cap, then doubles to cover need. */
     ASSERT_EQ(0, ducknng_grow_capacity(1, 0, 256, &cap));
     ASSERT_EQ((size_t)256, cap);
 
@@ -688,10 +792,14 @@ TEST grow_capacity_meets_need_without_overflow(void)
     ASSERT(cap >= 300);
     ASSERT_EQ((size_t)512, cap);
 
+    /* A need already satisfied returns the current capacity unchanged. */
     ASSERT_EQ(0, ducknng_grow_capacity(100, 256, 256, &cap));
     ASSERT_EQ((size_t)256, cap);
 
+    /* Near SIZE_MAX, doubling would overflow; the helper clamps to need
+     * instead of wrapping, and never returns a capacity below need. */
     ASSERT_EQ(0, ducknng_grow_capacity(SIZE_MAX, SIZE_MAX / 2 + 8, 256, &cap));
+    ASSERT(cap >= SIZE_MAX - 1);
     ASSERT_EQ(SIZE_MAX, cap);
     PASS();
 }
@@ -702,6 +810,14 @@ TEST size_arith_invariants_hold_for_random_pairs(void)
         prop_run_one("size arithmetic invariants", prop_size_arith_invariants,
             &prop_two_sizes_info));
     PASS();
+}
+
+SUITE(size_checked_properties)
+{
+    RUN_TEST(size_add_rejects_overflow_keeps_valid_sums);
+    RUN_TEST(size_mul_rejects_overflow_keeps_valid_products);
+    RUN_TEST(grow_capacity_meets_need_without_overflow);
+    RUN_TEST(size_arith_invariants_hold_for_random_pairs);
 }
 
 TEST join_dotted_path_handles_edges(void)
@@ -726,14 +842,6 @@ TEST join_dotted_path_invariants_hold_for_random_pairs(void)
     PASS();
 }
 
-SUITE(size_checked_properties)
-{
-    RUN_TEST(size_add_rejects_overflow_keeps_valid_sums);
-    RUN_TEST(size_mul_rejects_overflow_keeps_valid_products);
-    RUN_TEST(grow_capacity_meets_need_without_overflow);
-    RUN_TEST(size_arith_invariants_hold_for_random_pairs);
-}
-
 SUITE(string_path_properties)
 {
     RUN_TEST(join_dotted_path_handles_edges);
@@ -755,6 +863,7 @@ SUITE(transport_properties)
 SUITE(quack_properties)
 {
     RUN_TEST(quack_rejects_or_scans_random_zero_column_payloads);
+    RUN_TEST(quack_rejects_random_nested_schema_payloads);
 }
 
 GREATEST_MAIN_DEFS();

@@ -514,6 +514,19 @@ FROM ducknng_query_rpc_mode(
 );
 ```
 
+The Quack-derived mode also carries nested DuckDB values through the same RPC/session lifecycle.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT st.a = 7 AS struct_ok,
+       st.xs = [1, 2, 3]::INTEGER[] AS nested_list_ok
+FROM ducknng_query_rpc_mode(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT {''a'': 7::INTEGER, ''xs'': [1,2,3]::INTEGER[]} AS st',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+);
+```
+
 Arrow IPC carries temporal, decimal, list, struct, union, large-string, large-binary, fixed-size-binary, and duration values through the same path. Supported mappings are documented in `docs/types.md`.
 
 ```{duckdb collapse=TRUE, comment=""}

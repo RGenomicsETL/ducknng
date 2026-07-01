@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:35461 |
+| tls+tcp://127.0.0.1:42447 |
 +---------------------------+
 
 +--------+
@@ -987,6 +987,25 @@ FROM ducknng_query_rpc_mode(
 | 11 | true  |
 | 12 | true  |
 +----+-------+
+```
+
+The Quack-derived mode also carries nested DuckDB values through the
+same RPC/session lifecycle.
+
+``` sql
+SELECT st.a = 7 AS struct_ok,
+       st.xs = [1, 2, 3]::INTEGER[] AS nested_list_ok
+FROM ducknng_query_rpc_mode(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT {''a'': 7::INTEGER, ''xs'': [1,2,3]::INTEGER[]} AS st',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+);
++-----------+----------------+
+| struct_ok | nested_list_ok |
++-----------+----------------+
+| true      | true           |
++-----------+----------------+
 ```
 
 Arrow IPC carries temporal, decimal, list, struct, union, large-string,
@@ -2093,11 +2112,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1098283916 | 1782893817888 | 127.0.0.1:49936 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 334461177 | 1782894238477 | 127.0.0.1:57248 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

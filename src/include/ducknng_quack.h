@@ -3,11 +3,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * A column type node. Scalar columns use only name + logical_type_id (+ decimal
+ * width/scale). Nested columns (LIST/ARRAY/STRUCT/UNION/MAP/ENUM) additionally
+ * use the recursive fields: a LIST/ARRAY has one child; a STRUCT/UNION has
+ * `nchildren` children with `child_names`; a MAP is modeled as a LIST whose
+ * single child is a STRUCT(key,value); an ENUM carries `enum_count`/`enum_labels`.
+ * Top-level columns live in `ducknng_quack_schema.cols` as a flat array (the
+ * public API is unchanged); only child trees are separately heap-allocated.
+ */
 typedef struct ducknng_quack_column_schema {
     char *name;
     int logical_type_id;
     uint8_t decimal_width;
     uint8_t decimal_scale;
+    uint32_t array_size;
+    uint32_t enum_count;
+    char **enum_labels;
+    uint32_t nchildren;
+    struct ducknng_quack_column_schema **children;
+    char **child_names;
 } ducknng_quack_column_schema;
 
 typedef struct ducknng_quack_schema {
