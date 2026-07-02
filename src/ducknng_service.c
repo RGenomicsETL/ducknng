@@ -3188,6 +3188,11 @@ int ducknng_service_begin_request(ducknng_service *svc, const char *caller_ident
         return -1;
     }
     if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    if (svc->shutting_down) {
+        if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: service is shutting down");
+        return -1;
+    }
     if (svc->max_inflight_requests > 0 && svc->inflight_request_count >= (size_t)svc->max_inflight_requests) {
         if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
         if (errmsg) *errmsg = ducknng_strdup("ducknng: max inflight requests exceeded");
@@ -3364,16 +3369,25 @@ int ducknng_service_stop(ducknng_service *svc, char **errmsg) {
         ducknng_listener_close(svc->listener);
         memset(&svc->listener, 0, sizeof(svc->listener));
     }
-    if (svc->rep_sock.id != 0) {
-        ducknng_socket_close(svc->rep_sock);
-        memset(&svc->rep_sock, 0, sizeof(svc->rep_sock));
-    }
+    /*
+     * NNG socket shutdown marks socket-owned contexts closed and may destroy
+     * protocol-private context state for contexts whose public refcount is
+     * zero.  A ducknng REP worker keeps an nng_ctx id plus an outstanding AIO,
+     * not a public ctx reference.  Closing the socket before canceling and
+     * joining those AIO workers can therefore leave nng_ctx_recv/send
+     * completions running against freed context state.  Stop accepting first,
+     * drain every worker/AIO/context, and close the REP socket last.
+     */
     if (svc->ctxs) {
         for (i = 0; i < svc->ncontexts; i++) {
             ducknng_rep_ctx_teardown(&svc->ctxs[i]);
         }
         duckdb_free(svc->ctxs);
         svc->ctxs = NULL;
+    }
+    if (svc->rep_sock.id != 0) {
+        ducknng_socket_close(svc->rep_sock);
+        memset(&svc->rep_sock, 0, sizeof(svc->rep_sock));
     }
     if (svc->http_state) {
         ducknng_http_server_stop(svc->http_state);
