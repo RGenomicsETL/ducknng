@@ -844,6 +844,7 @@ typedef struct ducknng_http_server_state {
     int rpc_handler_data_installed;
     int route_handler_finalized;
     int route_handler_data_installed;
+    size_t active_streams;
     int mu_initialized;
     int cv_initialized;
 } ducknng_http_server_state;
@@ -871,6 +872,26 @@ static void ducknng_http_server_state_handler_dtor(void *arg) {
     if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
     ducknng_mutex_unlock(&state->mu);
     duckdb_free(data);
+}
+
+static int ducknng_http_server_stream_begin(ducknng_http_server_state *state) {
+    if (!state || !state->mu_initialized) return -1;
+    ducknng_mutex_lock(&state->mu);
+    if (state->stopping) {
+        ducknng_mutex_unlock(&state->mu);
+        return -1;
+    }
+    state->active_streams++;
+    ducknng_mutex_unlock(&state->mu);
+    return 0;
+}
+
+static void ducknng_http_server_stream_end(ducknng_http_server_state *state) {
+    if (!state || !state->mu_initialized) return;
+    ducknng_mutex_lock(&state->mu);
+    if (state->active_streams > 0) state->active_streams--;
+    if (state->cv_initialized) ducknng_cond_broadcast(&state->cv);
+    ducknng_mutex_unlock(&state->mu);
 }
 
 static uint16_t ducknng_http_be16_to_host(uint16_t value) {
@@ -1110,7 +1131,7 @@ static int ducknng_stream_on_chunk(const void *data, size_t len, void *user_data
 }
 
 static void ducknng_http_serve_stream_route(nng_http_conn *conn, nng_aio *handler_aio,
-    ducknng_http_server_state *state,
+    ducknng_http_server_state *state, nng_http_req *req,
     const ducknng_http_request_context *request_ctx,
     const char *caller_identity) {
     nng_aio *write_aio = NULL;
@@ -1118,13 +1139,22 @@ static void ducknng_http_serve_stream_route(nng_http_conn *conn, nng_aio *handle
     char *stream_err = NULL;
     const char *ct;
     int rv;
-    /* Hijack: NNG hands connection ownership to us; handler_aio must be finished */
-    nng_http_hijack(conn);
+    (void)caller_identity;
+    /*
+     * Hijack: NNG hands connection and request ownership to us.  The handler
+     * AIO must be finished, but ducknng state is protected separately by the
+     * active-stream guard held by the caller until after service cleanup.
+     */
+    rv = nng_http_hijack(conn);
+    if (rv != 0) {
+        nng_aio_finish(handler_aio, rv);
+        return;
+    }
     nng_aio_finish(handler_aio, 0);
     ct = request_ctx->route.stream_content_type;
     if (!ct || !ct[0]) ct = "text/event-stream; charset=utf-8";
     rv = nng_aio_alloc(&write_aio, NULL, NULL);
-    if (rv != 0) { nng_http_conn_close(conn); return; }
+    if (rv != 0) goto done;
     nng_aio_set_timeout(write_aio, 30000); /* 30 s per write */
     rv = ducknng_http_stream_write_headers(conn, write_aio, 200, ct);
     if (rv != 0) goto done;
@@ -1136,9 +1166,9 @@ static void ducknng_http_serve_stream_route(nng_http_conn *conn, nng_aio *handle
     if (stream_err) duckdb_free(stream_err);
     ducknng_http_stream_write_terminator(conn, write_aio);
 done:
-    nng_aio_free(write_aio);
+    if (write_aio) nng_aio_free(write_aio);
+    if (req) nng_http_req_free(req);
     nng_http_conn_close(conn);
-    (void)caller_identity;
 }
 
 static void ducknng_http_split_uri(const char *uri, char **out_path, const char **out_query) {
@@ -1348,18 +1378,24 @@ static void ducknng_http_route_handler(nng_aio *aio) {
         }
         /* streaming route: hijack connection and stream chunked response */
         if (route.response_mode == DUCKNNG_HTTP_ROUTE_RESPONSE_STREAM) {
+            if (ducknng_http_server_stream_begin(state) != 0) {
+                ducknng_authorizer_decision_reset(&decision);
+                ducknng_service_end_request(state->svc, caller_identity, 0);
+                rv = ducknng_http_alloc_text_response(&res, 503, "ducknng: HTTP server is stopping");
+                goto done;
+            }
             ducknng_authorizer_decision_reset(&decision);
+            /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
+            ducknng_http_serve_stream_route(conn, aio, state, req, &request_ctx, caller_identity);
             ducknng_service_end_request(state->svc, caller_identity, 0);
-            /* clean up locals that goto done would handle */
             if (request_path) duckdb_free(request_path);
             if (headers_json) duckdb_free(headers_json);
             if (path_params_json) duckdb_free(path_params_json);
             if (caller_identity) duckdb_free(caller_identity);
+            ducknng_http_route_reset(&request_ctx.route);
             ducknng_http_route_reset(&route);
             ducknng_http_route_reply_reset(&route_reply);
-            /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
-            ducknng_http_serve_stream_route(conn, aio, state, &request_ctx, NULL);
-            ducknng_http_route_reset(&request_ctx.route);
+            ducknng_http_server_stream_end(state);
             return;
         }
         if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
@@ -2033,8 +2069,8 @@ void ducknng_http_server_stop(ducknng_http_server_state *state) {
     }
     if (state->mu_initialized) {
         ducknng_mutex_lock(&state->mu);
-        while ((!state->rpc_handler_finalized || !state->route_handler_finalized) &&
-                state->cv_initialized) {
+        while ((!state->rpc_handler_finalized || !state->route_handler_finalized ||
+                state->active_streams > 0) && state->cv_initialized) {
             ducknng_cond_wait(&state->cv, &state->mu);
         }
         ducknng_mutex_unlock(&state->mu);
