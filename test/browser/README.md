@@ -70,7 +70,7 @@ node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
   --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
 ```
 
-The HTTP probes start local test endpoints and call them through the page's SQL shell. They prove same-origin `ducknng_ncurl(...)` GET/POST and invalid-header error behavior, terminal `ducknng_ncurl_aio(...)` collect/status/cancel/drop behavior, `ducknng_ncurl_table(...)` JSON/text/CSV parsing, HTTPS CORS table parsing, and framed raw/RPC/session helper routing over browser HTTP. They do not prove browser `ipc://`, raw `tcp://`, native POSIX-style `tls+tcp://`, or WebSocket support.
+The HTTP probes start local test endpoints and call them through the page's SQL shell. They prove same-origin `ducknng_ncurl(...)` GET/POST, request-header propagation, response-header exposure, HTTP-status-as-data behavior for 404, invalid method and invalid-header in-band errors, cross-origin no-CORS error mapping, terminal `ducknng_ncurl_aio(...)` collect/status/cancel/drop behavior for both success and launch-failure handles, `ducknng_ncurl_table(...)` JSON/text/CSV parsing, raw HTTPS CORS plus HTTPS CORS table parsing, browser-managed TLS rejection for explicit ducknng TLS handles, and framed raw/RPC/session helper routing over browser HTTP. They do not prove browser `ipc://`, raw `tcp://`, native POSIX-style `tls+tcp://`, or WebSocket support.
 
 The threaded lane is diagnostic rather than release-blocking:
 

@@ -105,17 +105,19 @@ Probes:
              wasm_threads, a failure fails this diagnostic probe, but repeated
              headless runs are currently known to expose progress flakiness.
   http-sync  Exercise browser HTTP(S) sync client support through ducknng_ncurl
-             against same-origin local GET/POST test endpoints plus an invalid
-             headers_json error case. Enable only for artifacts expected to
-             contain the browser HTTP bridge.
+             against same-origin local GET/POST/header/status test endpoints,
+             invalid method and headers_json error cases, and a cross-origin
+             no-CORS failure. Enable only for artifacts expected to contain the
+             browser HTTP bridge.
   http-aio   Launch ducknng_ncurl_aio against the same-origin endpoint, then
              verify aio_status, aio_wait, ducknng_ncurl_aio_collect, cancel,
              and drop behavior. Browser XHR aio handles are terminal at launch.
   http-table Exercise ducknng_ncurl_table over same-origin JSON, text, and CSV
              response bodies.
-  https-cors Exercise ducknng_ncurl_table against a separate HTTPS origin with
-             permissive CORS headers. The runner uses a local test certificate
-             and launches Chromium with HTTPS errors ignored for this probe.
+  https-cors Exercise ducknng_ncurl and ducknng_ncurl_table against a separate
+             HTTPS origin with permissive CORS headers. The runner uses a local
+             test certificate and launches Chromium with HTTPS errors ignored
+             for this probe.
   http-rpc   Exercise framed raw/RPC/session helper routing over browser HTTP
              against a small local ducknng-frame responder.
 
@@ -134,7 +136,8 @@ function setIsolationHeaders(res) {
 function setCorsProbeHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Ducknng-Probe");
+  res.setHeader("Access-Control-Expose-Headers", "X-Ducknng-Reply");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.setHeader("Cache-Control", "no-store");
 }
@@ -247,6 +250,16 @@ async function handleProbe(req, res, pathname) {
     return;
   }
 
+  if (pathname === "/probe/headers" && req.method === "GET") {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("X-Ducknng-Reply", "browser-response-header-ok");
+    res.end(JSON.stringify({
+      requestHeader: req.headers["x-ducknng-probe"] || null,
+      method: req.method,
+    }));
+    return;
+  }
+
   if (pathname === "/probe/rpc" && req.method === "POST") {
     const body = await readBody(req);
     res.setHeader("Content-Type", "application/vnd.ducknng.frame");
@@ -311,6 +324,7 @@ async function handleHttpsCorsProbe(req, res, pathname) {
   }
   if (pathname === "/probe/https-json" && req.method === "GET") {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("X-Ducknng-Reply", "browser-https-response-header-ok");
     res.end('[{"a":10},{"a":32}]');
     return;
   }
@@ -334,6 +348,26 @@ async function startHttpsProbeServer() {
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("https probe failure");
     }
+  });
+  return new Promise((resolveServer) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolveServer({ server, port: server.address().port });
+    });
+  });
+}
+
+function startNoCorsProbeServer() {
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    res.setHeader("Cache-Control", "no-store");
+    if (url.pathname === "/probe/no-cors" && req.method === "GET") {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("this response intentionally has no CORS headers");
+      return;
+    }
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("no-cors probe not found");
   });
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
@@ -415,7 +449,7 @@ async function runInprocProbe(page) {
   fail("inproc smoke failed for wasm_threads");
 }
 
-async function runHttpSyncProbe(page, base) {
+async function runHttpSyncProbe(page, base, noCorsBase) {
   const getSql =
     `SELECT ok, status, body_text FROM ducknng_ncurl('${base}/probe/hello', ` +
     `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
@@ -440,6 +474,42 @@ async function runHttpSyncProbe(page, base) {
     console.log("ok: http-sync POST round-tripped the request body");
   }
 
+  const headerSql =
+    `SELECT ok, status, headers_json, body_text FROM ducknng_ncurl('${base}/probe/headers', ` +
+    `'GET', '[{"name":"X-Ducknng-Probe","value":"browser-header-ok"}]', NULL, 5000, 0::UBIGINT)`;
+  const header = await runShell(page, headerSql);
+  if (/error/i.test(header.meta)) {
+    fail(`http-sync header probe errored: ${header.table}`);
+  } else if (!/browser-header-ok/.test(header.table) || !/browser-response-header-ok/i.test(header.table)) {
+    fail(`http-sync header probe did not round-trip request/response headers: "${header.table}"`);
+  } else {
+    console.log("ok: http-sync sent request headers and exposed response headers");
+  }
+
+  const notFoundSql =
+    `SELECT ok, status, body_text FROM ducknng_ncurl('${base}/probe/not-found', ` +
+    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const notFound = await runShell(page, notFoundSql);
+  if (/error/i.test(notFound.meta)) {
+    fail(`http-sync 404 probe raised a SQL error: ${notFound.table}`);
+  } else if (!/true/i.test(notFound.table) || !/404/.test(notFound.table) || !/probe not found/.test(notFound.table)) {
+    fail(`http-sync 404 probe did not return completed HTTP status/body: "${notFound.table}"`);
+  } else {
+    console.log("ok: http-sync treats HTTP 404 as a completed HTTP exchange");
+  }
+
+  const badMethodSql =
+    `SELECT ok, error FROM ducknng_ncurl('${base}/probe/hello', ` +
+    `'BAD METHOD', NULL, NULL, 5000, 0::UBIGINT)`;
+  const badMethod = await runShell(page, badMethodSql);
+  if (/error/i.test(badMethod.meta)) {
+    fail(`http-sync invalid method raised a SQL error: ${badMethod.table}`);
+  } else if (!/false/i.test(badMethod.table) || !/method/i.test(badMethod.table)) {
+    fail(`http-sync invalid method did not return the expected in-band error: "${badMethod.table}"`);
+  } else {
+    console.log("ok: http-sync invalid method returned an in-band error");
+  }
+
   const badHeadersSql =
     `SELECT ok, error FROM ducknng_ncurl('${base}/probe/hello', ` +
     `'GET', '{"bad":true}', NULL, 5000, 0::UBIGINT)`;
@@ -450,6 +520,18 @@ async function runHttpSyncProbe(page, base) {
     fail(`http-sync invalid headers_json did not return the expected in-band error: "${badHeaders.table}"`);
   } else {
     console.log("ok: http-sync invalid headers_json returned an in-band error");
+  }
+
+  const noCorsSql =
+    `SELECT ok, status, error FROM ducknng_ncurl('${noCorsBase}/probe/no-cors', ` +
+    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+  const noCors = await runShell(page, noCorsSql);
+  if (/error/i.test(noCors.meta)) {
+    fail(`http-sync no-CORS probe raised a SQL error: ${noCors.table}`);
+  } else if (!/false/i.test(noCors.table) || !/(CORS|network)/i.test(noCors.table)) {
+    fail(`http-sync no-CORS probe did not return expected in-band browser error: "${noCors.table}"`);
+  } else {
+    console.log("ok: http-sync cross-origin no-CORS failure returned an in-band error");
   }
 }
 
@@ -494,7 +576,34 @@ async function runHttpAioProbe(page, base) {
     fail(`http-aio drop failed: "${dropped.table}"`);
   }
   await runShell(page, "DROP TABLE IF EXISTS browser_http_aio", 10000);
-  console.log("ok: http-aio returned terminal handle, collected body, and dropped cleanly");
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_bad_aio", 10000);
+  const badLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_http_bad_aio AS ` +
+    `SELECT ducknng_ncurl_aio('${base}/probe/hello', 'GET', '{"bad":true}', NULL, 5000, 0::UBIGINT) AS aio`,
+    30000);
+  if (/error/i.test(badLaunch.meta)) fail(`http-aio bad-header launch raised SQL error: ${badLaunch.table}`);
+  const badStatus = await runShell(page,
+    `SELECT kind, state, terminal, error FROM ducknng_aio_status((SELECT aio FROM browser_http_bad_aio))`,
+    30000);
+  if (/error/i.test(badStatus.meta) || !/ncurl/i.test(badStatus.table) || !/error/i.test(badStatus.table) ||
+      !/true/i.test(badStatus.table) || !/headers_json/i.test(badStatus.table)) {
+    fail(`http-aio bad-header handle was not a terminal error handle: "${badStatus.table}"`);
+  }
+  const badCollected = await runShell(page,
+    `SELECT ok, error FROM ducknng_ncurl_aio_collect(` +
+    `(SELECT list_value(aio) FROM browser_http_bad_aio), 0)`,
+    30000);
+  if (/error/i.test(badCollected.meta) || !/false/i.test(badCollected.table) || !/headers_json/i.test(badCollected.table)) {
+    fail(`http-aio bad-header collect did not return expected terminal error row: "${badCollected.table}"`);
+  }
+  const badDropped = await runShell(page,
+    `SELECT ducknng_aio_drop(aio) AS dropped FROM browser_http_bad_aio`, 30000);
+  if (/error/i.test(badDropped.meta) || !/true/i.test(badDropped.table)) {
+    fail(`http-aio bad-header drop failed: "${badDropped.table}"`);
+  }
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_bad_aio", 10000);
+  console.log("ok: http-aio returned terminal success and terminal error handles cleanly");
 }
 
 async function runHttpTableProbe(page, base) {
@@ -525,14 +634,37 @@ async function runHttpTableProbe(page, base) {
 }
 
 async function runHttpsCorsProbe(page, httpsBase) {
+  const rawSql =
+    `SELECT ok, status, headers_json, body_text FROM ducknng_ncurl('${httpsBase}/probe/https-json', ` +
+    `'GET', '[{"name":"X-Ducknng-Probe","value":"browser-https-header-ok"}]', NULL, 5000, 0::UBIGINT)`;
+  const raw = await runShell(page, rawSql);
+  if (/error/i.test(raw.meta)) {
+    fail(`https-cors raw proof raised a SQL error: ${raw.table}`);
+  } else if (!/true/i.test(raw.table) || !/200/.test(raw.table) || !/browser-https-response-header-ok/i.test(raw.table) ||
+      !/"a":10/.test(raw.table)) {
+    fail(`https-cors raw proof did not expose expected status/header/body: ${raw.table}`);
+  }
+
+  const tlsRejectSql = `WITH cfg AS (
+      SELECT ducknng_tls_config_from_pem('browser-test-cert', NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, 0) AS tls_id
+    )
+    SELECT ok, error
+    FROM cfg, ducknng_ncurl('${httpsBase}/probe/https-json', 'GET', NULL, NULL, 5000, cfg.tls_id)`;
+  const tlsReject = await runShell(page, tlsRejectSql);
+  if (/error/i.test(tlsReject.meta)) {
+    fail(`https-cors explicit TLS rejection raised a SQL error: ${tlsReject.table}`);
+  } else if (!/false/i.test(tlsReject.table) || !/(browser-managed TLS|explicit TLS)/i.test(tlsReject.table)) {
+    fail(`https-cors explicit TLS rejection did not return expected in-band error: ${tlsReject.table}`);
+  }
+
   const httpsSql =
     `SELECT sum(a) AS sum_a FROM ducknng_ncurl_table('${httpsBase}/probe/https-json', ` +
     `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
   const https = await runShell(page, httpsSql);
   if (/error/i.test(https.meta) || !/42/.test(https.table)) {
-    fail(`https-cors proof failed: ${https.table}`);
+    fail(`https-cors table proof failed: ${https.table}`);
   }
-  console.log("ok: https-cors returned a parsed JSON table from a CORS-permissive HTTPS origin");
+  console.log("ok: https-cors returned raw/parsed results and rejected explicit browser TLS handles");
 }
 
 async function runHttpRpcProbe(page, base) {
@@ -634,10 +766,13 @@ try {
 const { siteDir, probes } = options;
 const { server, port } = await startServer(siteDir);
 const httpsProbe = probes.has("https-cors") ? await startHttpsProbeServer() : null;
+const noCorsProbe = probes.has("http-sync") ? await startNoCorsProbeServer() : null;
 const base = `http://127.0.0.1:${port}`;
 const httpsBase = httpsProbe ? `https://127.0.0.1:${httpsProbe.port}` : null;
+const noCorsBase = noCorsProbe ? `http://127.0.0.1:${noCorsProbe.port}` : null;
 console.log(`serving ${siteDir} at ${base} (COOP/COEP enabled)`);
 if (httpsBase) console.log(`serving HTTPS CORS probe at ${httpsBase}`);
+if (noCorsBase) console.log(`serving no-CORS failure probe at ${noCorsBase}`);
 console.log(`browser probes: ${Array.from(probes).join(",")}`);
 
 let browser = null;
@@ -659,7 +794,7 @@ try {
 
   await runLoadProbe(page);
   if (probes.has("inproc")) await runInprocProbe(page);
-  if (probes.has("http-sync")) await runHttpSyncProbe(page, base);
+  if (probes.has("http-sync")) await runHttpSyncProbe(page, base, noCorsBase);
   if (probes.has("http-aio")) await runHttpAioProbe(page, base);
   if (probes.has("http-table")) await runHttpTableProbe(page, base);
   if (probes.has("https-cors")) await runHttpsCorsProbe(page, httpsBase);
@@ -673,6 +808,7 @@ try {
   if (context) await context.close();
   if (browser) await browser.close();
   if (httpsProbe) httpsProbe.server.close();
+  if (noCorsProbe) noCorsProbe.server.close();
   server.close();
 }
 

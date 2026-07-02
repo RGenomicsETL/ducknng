@@ -18,15 +18,15 @@ The local Playwright runner under `test/browser/` and the smoke-page API in `scr
 
 - `load` loads DuckDB wasm, loads the extension, verifies `crossOriginIsolated`, and runs one SQL shell query.
 - `inproc` runs the page's scalar/codec/`inproc://` AIO proof.
-- `http-sync` starts same-origin GET/POST endpoints and calls them through `ducknng_ncurl(...)` from the SQL shell, then checks that invalid `headers_json` returns an in-band error row.
-- `http-aio` launches `ducknng_ncurl_aio(...)`, inspects status/wait/cancel semantics for a terminal browser handle, collects the HTTP-shaped result, and drops the handle.
+- `http-sync` starts same-origin GET/POST/header/status endpoints and calls them through `ducknng_ncurl(...)` from the SQL shell, then checks request headers, response headers, 404-as-completed-HTTP behavior, invalid method and invalid `headers_json` in-band errors, and browser no-CORS failure mapping.
+- `http-aio` launches `ducknng_ncurl_aio(...)`, inspects status/wait/cancel semantics for a terminal browser success handle, collects the HTTP-shaped result, drops the handle, and checks that invalid launch input creates a terminal error handle rather than a SQL exception.
 - `http-table` parses same-origin JSON, text, and CSV responses through `ducknng_ncurl_table(...)`.
-- `https-cors` parses a CORS-permissive response from a separate local HTTPS origin.
+- `https-cors` exercises raw `ducknng_ncurl(...)` and parsed `ducknng_ncurl_table(...)` responses from a separate local HTTPS origin with CORS-exposed response headers, and checks that explicit ducknng TLS handles are rejected because browser HTTPS trust is browser-managed.
 - `http-rpc` routes raw framed requests plus structured manifest/exec/session helpers over browser HTTP against a local ducknng-frame responder.
 
 Observed local results for the browser HTTP claim:
 
-- [x] Fresh `wasm_eh` staged site, real Chromium, `load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc`: pass. `inproc://` is reported unavailable and is not claimed for EH.
+- [x] Fresh `wasm_eh` staged site, real Chromium, `load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc`: pass. `inproc://` is reported unavailable and is not claimed for EH. The HTTP slice includes request/response headers, non-2xx status rows, no-CORS failure rows, terminal success/error AIO handles, raw HTTPS CORS, browser-managed TLS rejection, parsed body helpers, and framed RPC/session helpers.
 - [~] Fresh `wasm_threads` staged site, real Chromium, `load,http-sync,http-aio,http-table,https-cors,http-rpc`: individual `load`, `http-sync`, and `http-aio` runs can pass, but repeated runs have produced extension-load timeouts and DuckDB-wasm JSON extension autoload failures during `http-table`.
 - [~] Fresh `wasm_threads` staged site, real Chromium, `load,inproc`: repeated runs have produced both passes and `inproc://` timeouts. Trace builds tend to pass, which points to a scheduling/progress race.
 
@@ -51,14 +51,14 @@ These results are proof that the browser harness is catching real browser behavi
 - [x] Map CORS, COEP, network, abort, and setup failures to `ok = false` rows with clear `error` text.
 - [x] Reject nonzero `tls_config_id` in browser mode with an explicit error instead of ignoring it; browser HTTPS uses browser-managed TLS.
 - [~] Add timeout and cancellation behavior that does not leave leaked browser requests or stale SQL-visible handles. The current browser path is synchronous XHR, so `ducknng_ncurl_aio(...)` creates a terminal handle at launch; async/cancellable Fetch remains future work.
-- [x] Add browser smoke probes for same-origin HTTP GET, POST, and invalid `headers_json` error handling, plus a local HTTPS/CORS proof.
+- [x] Add browser smoke probes for same-origin HTTP GET, POST, request/response headers, non-2xx status handling, invalid method and invalid `headers_json` error handling, cross-origin no-CORS failure mapping, plus a local raw and parsed HTTPS/CORS proof with explicit TLS-handle rejection.
 
 ## Priority 2: browser HTTP(S) async and table helpers
 
 - [x] Implement browser `ducknng_ncurl_aio(...)` over the same browser HTTP adapter as a terminal-at-launch handle.
 - [x] Implement or adapt `ducknng_ncurl_aio_collect(...)` so terminal browser HTTP operations return the existing HTTP-shaped result rows.
 - [x] Keep `ducknng_aio_status(...)`, `ducknng_aio_wait(...)`, `ducknng_aio_cancel(...)`, and `ducknng_aio_drop(...)` behavior coherent for browser HTTP handles.
-- [x] Represent expected launch failures as terminal error handles when a runtime exists, matching the native AIO contract.
+- [x] Represent expected launch failures as terminal error handles when a runtime exists, matching the native AIO contract; this is covered in the browser smoke runner with invalid `headers_json`.
 - [x] Implement browser `ducknng_ncurl_table(...)` by reusing the browser HTTP result and the existing body codec layer.
 - [x] Prove JSON, text, and CSV responses through `ducknng_ncurl_table(...)` in the smoke page for `wasm_eh`.
 

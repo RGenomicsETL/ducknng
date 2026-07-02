@@ -171,10 +171,13 @@ release-supported browser lane is `wasm_eh` with
 `inproc://` is allowed to report unavailable because the EH runtime does not
 provide pthread workers for NNG progress; the HTTP probes still prove the browser
 HTTP adapter. A local Chromium run of that lane passed with extension load,
-same-origin `ducknng_ncurl(...)` GET/POST and invalid-header errors,
-terminal `ducknng_ncurl_aio(...)` collect/status/cancel/drop behavior,
-`ducknng_ncurl_table(...)` JSON/text/CSV parsing, HTTPS CORS table parsing, and
-framed raw/RPC/session helper routing over browser HTTP.
+same-origin `ducknng_ncurl(...)` GET/POST, request-header propagation,
+response-header exposure, 404-as-completed-HTTP behavior, invalid method and
+invalid-header errors, no-CORS browser failure rows, terminal
+`ducknng_ncurl_aio(...)` success/error handle collect/status/cancel/drop
+behavior, `ducknng_ncurl_table(...)` JSON/text/CSV parsing, raw HTTPS CORS,
+browser-managed TLS rejection for explicit ducknng TLS handles, HTTPS CORS table
+parsing, and framed raw/RPC/session helper routing over browser HTTP.
 
 The threaded runtime remains diagnostic rather than release-blocking:
 
@@ -209,12 +212,16 @@ native client. The whole translation unit is gated on `__EMSCRIPTEN__` and
 compiles to nothing on native builds.
 
 The proven `wasm_eh` browser HTTP slice now includes same-origin
-`ducknng_ncurl(...)` GET and POST, invalid `headers_json` returning `ok = false`
-in-band, terminal `ducknng_ncurl_aio(...)` handles collected through
-`ducknng_ncurl_aio_collect(...)`, `ducknng_ncurl_table(...)` JSON/text/CSV body
-parsing, a local HTTPS CORS table response, and framed raw/RPC/session helpers
-routed over browser HTTP. Browser constraints apply: same-origin URLs work
-directly; cross-origin requests need permissive CORS on the remote. TLS is
+`ducknng_ncurl(...)` GET and POST, request-header propagation, response-header
+exposure, non-2xx statuses returned as completed HTTP rows, invalid methods and
+invalid `headers_json` returning `ok = false` in-band, browser network/CORS
+failures returned as `ok = false`, terminal `ducknng_ncurl_aio(...)` success and
+launch-error handles collected through `ducknng_ncurl_aio_collect(...)`,
+`ducknng_ncurl_table(...)` JSON/text/CSV body parsing, raw local HTTPS CORS,
+explicit TLS-handle rejection because browser HTTPS trust is browser-managed,
+local HTTPS CORS table parsing, and framed raw/RPC/session helpers routed over
+browser HTTP. Browser constraints apply: same-origin URLs work directly;
+cross-origin requests need permissive CORS on the remote. TLS is
 browser-managed, so an explicit ducknng TLS configuration is rejected with an
 error rather than silently ignored. The current browser AIO implementation uses
 the same synchronous XHR transaction at launch and exposes it as an immediate
@@ -297,9 +304,9 @@ The current compatibility matrix is:
 | Runtime / carrier | Current status |
 | --- | --- |
 | `duckdb-wasm` `wasm_eh`: load, scalar SQL, codecs | Proven locally in real Chromium. |
-| `duckdb-wasm` `wasm_eh`: same-origin `ducknng_ncurl(...)` GET/POST and invalid `headers_json` error | Proven locally in real Chromium through the browser HTTP bridge. |
-| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_aio(...)` terminal handle status/wait/cancel/collect/drop | Proven locally in real Chromium; current browser handles are terminal at launch. |
-| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_table(...)` JSON/text/CSV and HTTPS CORS table parsing | Proven locally in real Chromium. |
+| `duckdb-wasm` `wasm_eh`: same-origin `ducknng_ncurl(...)` GET/POST, request/response headers, non-2xx status rows, invalid input rows, and no-CORS network/CORS errors | Proven locally in real Chromium through the browser HTTP bridge. |
+| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_aio(...)` terminal handle status/wait/cancel/collect/drop for success and launch-error cases | Proven locally in real Chromium; current browser handles are terminal at launch. |
+| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_table(...)` JSON/text/CSV plus raw/parsed HTTPS CORS and explicit TLS-handle rejection | Proven locally in real Chromium. |
 | `duckdb-wasm` `wasm_eh`: framed raw/RPC/session helpers over `http://` | Proven locally against a Playwright local ducknng-frame responder. |
 | `duckdb-wasm` `wasm_eh`: `inproc://` | Not supported; the probe may report unavailable and still pass because this runtime has no pthread worker support for NNG progress. |
 | `duckdb-wasm` `wasm_threads`: load, scalar SQL, codecs | Proven in individual runs and on the Pages demo, but repeated headless local runs can time out during `LOAD`; treat as resource-sensitive. |
