@@ -1753,6 +1753,45 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
 static void ducknng_service_clear_principals(ducknng_service *svc);
 static ducknng_principal_state *ducknng_service_find_or_create_principal_locked(ducknng_service *svc, const char *identity);
 
+static void ducknng_http_worker_destroy(ducknng_http_worker *w) {
+    if (!w) return;
+    if (w->mu_initialized) ducknng_mutex_lock(&w->mu);
+    w->stopping = 1;
+    if (w->cv_initialized) ducknng_cond_broadcast(&w->cv);
+    if (w->mu_initialized) ducknng_mutex_unlock(&w->mu);
+    if (w->thread_started) {
+        ducknng_thread_join(w->thread);
+        w->thread_started = 0;
+    }
+    if (w->cv_initialized) {
+        ducknng_cond_destroy(&w->cv);
+        w->cv_initialized = 0;
+    }
+    if (w->mu_initialized) {
+        ducknng_mutex_destroy(&w->mu);
+        w->mu_initialized = 0;
+    }
+    if (w->name) duckdb_free(w->name);
+    if (w->sql) duckdb_free(w->sql);
+    duckdb_free(w);
+}
+
+static void ducknng_service_stop_http_workers(ducknng_service *svc) {
+    ducknng_http_worker **workers;
+    size_t count;
+    size_t i;
+    if (!svc || !svc->http_workers) return;
+    if (svc->mu_initialized) ducknng_mutex_lock(&svc->mu);
+    workers = svc->http_workers;
+    count = svc->http_worker_count;
+    svc->http_workers = NULL;
+    svc->http_worker_count = 0;
+    svc->http_worker_cap = 0;
+    if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
+    for (i = 0; i < count; i++) ducknng_http_worker_destroy(workers[i]);
+    duckdb_free(workers);
+}
+
 void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_session **sessions = NULL;
     size_t session_count = 0;
@@ -1761,6 +1800,7 @@ void ducknng_service_destroy(ducknng_service *svc) {
     if (svc->running || svc->http_state || svc->ctxs || svc->listener.id != 0 || svc->rep_sock.id != 0) {
         (void)ducknng_service_stop(svc, NULL);
     }
+    ducknng_service_stop_http_workers(svc);
     sessions = ducknng_service_detach_all_sessions(svc, &session_count);
     if (svc->name) duckdb_free(svc->name);
     if (svc->listen_url) duckdb_free(svc->listen_url);
@@ -1772,27 +1812,6 @@ void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_service_clear_http_routes(svc);
     ducknng_service_clear_pipe_events(svc);
     ducknng_service_clear_pipe_states(svc);
-    /* stop and free workers */
-    if (svc->http_workers) {
-        for (i = 0; i < svc->http_worker_count; i++) {
-            ducknng_http_worker *w = svc->http_workers[i];
-            if (!w) continue;
-            if (w->mu_initialized) ducknng_mutex_lock(&w->mu);
-            w->stopping = 1;
-            if (w->cv_initialized) ducknng_cond_broadcast(&w->cv);
-            if (w->mu_initialized) ducknng_mutex_unlock(&w->mu);
-            if (w->thread_started) ducknng_thread_join(w->thread);
-            if (w->cv_initialized) { ducknng_cond_destroy(&w->cv); w->cv_initialized = 0; }
-            if (w->mu_initialized) { ducknng_mutex_destroy(&w->mu); w->mu_initialized = 0; }
-            if (w->name) duckdb_free(w->name);
-            if (w->sql) duckdb_free(w->sql);
-            duckdb_free(w);
-        }
-        duckdb_free(svc->http_workers);
-        svc->http_workers = NULL;
-        svc->http_worker_count = 0;
-        svc->http_worker_cap = 0;
-    }
     ducknng_service_clear_principals(svc);
     for (i = 0; i < session_count; i++) {
         if (sessions && sessions[i]) ducknng_session_destroy(sessions[i]);
@@ -1957,16 +1976,7 @@ int ducknng_service_unregister_http_worker(ducknng_service *svc, const char *nam
         if (errmsg) *errmsg = ducknng_strdup("ducknng: http worker not found");
         return -1;
     }
-    if (w->mu_initialized) ducknng_mutex_lock(&w->mu);
-    w->stopping = 1;
-    if (w->cv_initialized) ducknng_cond_broadcast(&w->cv);
-    if (w->mu_initialized) ducknng_mutex_unlock(&w->mu);
-    if (w->thread_started) ducknng_thread_join(w->thread);
-    if (w->cv_initialized) { ducknng_cond_destroy(&w->cv); w->cv_initialized = 0; }
-    if (w->mu_initialized) { ducknng_mutex_destroy(&w->mu); w->mu_initialized = 0; }
-    if (w->name) duckdb_free(w->name);
-    if (w->sql) duckdb_free(w->sql);
-    duckdb_free(w);
+    ducknng_http_worker_destroy(w);
     return 0;
 }
 
@@ -3365,6 +3375,7 @@ int ducknng_service_stop(ducknng_service *svc, char **errmsg) {
     } else {
         svc->shutting_down = 1;
     }
+    ducknng_service_stop_http_workers(svc);
     if (svc->listener.id != 0) {
         ducknng_listener_close(svc->listener);
         memset(&svc->listener, 0, sizeof(svc->listener));
