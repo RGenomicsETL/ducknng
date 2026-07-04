@@ -134,6 +134,39 @@ typedef struct ducknng_user_codec {
     char *function_name; /* DuckDB scalar function name */
 } ducknng_user_codec;
 
+typedef struct ducknng_http_profile {
+    char *profile_id;
+    char *scheme;
+    char *host;
+    uint16_t port;
+    int has_port;
+    char *path_prefix;
+    char *method;
+    int tls_required;
+    char *auth_header_name;
+    char *auth_header_value; /* secret: never exposed by introspection */
+    uint64_t version;
+    uint64_t created_ms;
+    uint64_t updated_ms;
+    uint64_t expires_at_ms;
+} ducknng_http_profile;
+
+typedef struct ducknng_http_profile_info {
+    char *profile_id;
+    char *scheme;
+    char *host;
+    uint16_t port;
+    int has_port;
+    char *path_prefix;
+    char *method;
+    int tls_required;
+    char *auth_header_names_json;
+    uint64_t version;
+    uint64_t created_ms;
+    uint64_t updated_ms;
+    uint64_t expires_at_ms;
+} ducknng_http_profile_info;
+
 typedef struct ducknng_runtime {
     duckdb_database db;
     duckdb_connection init_con;
@@ -169,10 +202,14 @@ typedef struct ducknng_runtime {
     ducknng_user_codec *user_codecs;
     size_t user_codec_count;
     size_t user_codec_cap;
+    ducknng_http_profile *http_profiles;
+    size_t http_profile_count;
+    size_t http_profile_cap;
     uint64_t next_service_id;
     uint64_t next_client_socket_id;
     uint64_t next_client_aio_id;
     uint64_t next_tls_config_id;
+    uint64_t next_http_profile_version;
     int shutting_down;
     int log_capture_enabled; /* 1 after ducknng_enable_log_capture() succeeds */
     atomic_uintptr_t current_request_service_ptr;
@@ -188,6 +225,20 @@ int ducknng_runtime_register_user_codec(ducknng_runtime *rt, const char *content
     const char *function_name, char **errmsg);
 int ducknng_runtime_unregister_user_codec(ducknng_runtime *rt, const char *content_type);
 char *ducknng_runtime_find_user_codec(ducknng_runtime *rt, const char *content_type);
+
+int ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
+    const char *scheme, const char *host, int32_t port, int has_port,
+    const char *path_prefix, const char *method, int tls_required,
+    const char *auth_header_name, const char *auth_header_value,
+    uint64_t expires_at_ms, char **errmsg);
+int ducknng_runtime_drop_http_profile(ducknng_runtime *rt, const char *profile_id);
+int ducknng_runtime_http_profiles_snapshot(ducknng_runtime *rt,
+    ducknng_http_profile_info **out_profiles, size_t *out_count, char **errmsg);
+void ducknng_runtime_http_profiles_snapshot_free(ducknng_http_profile_info *profiles, size_t count);
+void ducknng_runtime_http_profiles_reset(ducknng_runtime *rt);
+int ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
+    const char *profile_id, const char *url, const char *method,
+    const char *headers_json, char **out_headers_json, char **errmsg);
 
 int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info info,
     struct duckdb_extension_access *access, ducknng_runtime **out_rt, int *out_created);

@@ -98,6 +98,7 @@ set(EXTENSION_SOURCES
     src/ducknng_sql_monitor.c
     src/ducknng_sql_service.c
     src/ducknng_sql_http.c
+    src/ducknng_sql_http_profile.c
     src/ducknng_sql_tls.c
     src/ducknng_sql_socket.c
     src/ducknng_sql_aio.c
@@ -117,6 +118,7 @@ set(EXTENSION_SOURCES
     src/ducknng_ipc_out.c
     src/ducknng_quack.c
     src/ducknng_transport.c
+    src/ducknng_http_profile.c
     src/ducknng_http_compat.c
     src/ducknng_wasm_http_fetch.c
     src/ducknng_nng_compat.c

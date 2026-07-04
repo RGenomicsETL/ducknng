@@ -172,6 +172,8 @@ jobs:
           "$py" test/http_smoke.py build/release/ducknng.duckdb_extension
           "$py" - <<'PY'
           import duckdb
+          from urllib.parse import urlparse
+
           con = duckdb.connect(':memory:', config={'allow_unsigned_extensions': 'true'})
           con.execute("LOAD 'build/release/ducknng.duckdb_extension'")
           expected = {
@@ -180,6 +182,8 @@ jobs:
               'ducknng_stop_server',
               'ducknng_set_service_peer_allowlist',
               'ducknng_set_service_ip_allowlist',
+              'ducknng_register_http_profile',
+              'ducknng_drop_http_profile',
               'ducknng_run_rpc_raw',
               'ducknng_get_rpc_manifest_raw',
               'ducknng_open_query_raw',
@@ -200,7 +204,73 @@ jobs:
           missing = sorted(expected - {name for name, _ in rows})
           if bad or missing:
               raise SystemExit(f'volatile scalar check failed: bad={bad!r} missing={missing!r}')
+          arities = {
+              name: sorted(count for (count,) in con.execute(f"""
+                  SELECT len(parameter_types)
+                  FROM duckdb_functions()
+                  WHERE function_type = 'scalar'
+                    AND function_name = '{name}'
+              """).fetchall())
+              for name in ('ducknng__ncurl_row', 'ducknng_register_http_profile')
+          }
+          if arities['ducknng__ncurl_row'] != [6, 7]:
+              raise SystemExit(f'ducknng__ncurl_row arities changed: {arities["ducknng__ncurl_row"]!r}')
+          if arities['ducknng_register_http_profile'] != [9, 10]:
+              raise SystemExit(f'ducknng_register_http_profile arities changed: {arities["ducknng_register_http_profile"]!r}')
           print('volatile scalar check:', sorted(expected))
+
+          service = 'release_http_profile'
+          try:
+              ok = con.execute(f"""
+                  SELECT ducknng_start_server('{service}', 'http://127.0.0.1:0/_ducknng',
+                                             1, 134217728, 300000, 0::UBIGINT)
+              """).fetchone()[0]
+              if ok is not True:
+                  raise SystemExit('failed to start HTTP profile smoke server')
+              listen = con.execute(
+                  "SELECT listen FROM ducknng_list_servers() WHERE name = ?",
+                  [service],
+              ).fetchone()[0]
+              base = listen[:-len('/_ducknng')]
+              port = urlparse(base).port
+              if port is None:
+                  raise SystemExit(f'HTTP profile smoke could not parse listen port from {listen!r}')
+              route_ok = con.execute(f"""
+                  SELECT ducknng_register_http_route(
+                    '{service}', 'GET', '/profile-smoke',
+                    'SELECT * FROM ducknng_http_text(200, CASE WHEN ducknng_http_header(''Authorization'') = ''Bearer release-secret'' THEN ''authorized'' ELSE ''denied'' END)'
+                  )
+              """).fetchone()[0]
+              if route_ok is not True:
+                  raise SystemExit('HTTP profile smoke route registration returned false')
+              profile_ok = con.execute("""
+                  SELECT ducknng_register_http_profile(
+                    'release-profile', 'http', '127.0.0.1', ?,
+                    '/profile-smoke', 'GET', false,
+                    'Authorization', 'Bearer release-secret'
+                  )
+              """, [port]).fetchone()[0]
+              if profile_ok is not True:
+                  raise SystemExit('HTTP profile smoke profile registration returned false')
+              row = con.execute("""
+                  SELECT ok, status, body_text
+                  FROM ducknng_ncurl(?, 'GET', NULL, NULL, 2000, 0::UBIGINT,
+                                     'release-profile')
+              """, [base + '/profile-smoke']).fetchone()
+              if row != (True, 200, 'authorized'):
+                  raise SystemExit(f'HTTP profile smoke failed: {row!r}')
+              redacted = con.execute("""
+                  SELECT count(*) = 1
+                  FROM ducknng_list_http_profiles()
+                  WHERE profile_id = 'release-profile'
+                    AND position('release-secret' IN auth_header_names_json) = 0
+              """).fetchone()[0]
+              if redacted is not True:
+                  raise SystemExit('HTTP profile introspection leaked a secret or profile was missing')
+              print('HTTP profile smoke: ok')
+          finally:
+              con.execute("SELECT ducknng_drop_http_profile('release-profile')")
+              con.execute(f"SELECT ducknng_stop_server('{service}')")
           PY
 
       - name: Smoke test Windows MinGW artifact in R
@@ -255,6 +325,8 @@ jobs:
             "ducknng_stop_server",
             "ducknng_set_service_peer_allowlist",
             "ducknng_set_service_ip_allowlist",
+            "ducknng_register_http_profile",
+            "ducknng_drop_http_profile",
             "ducknng_run_rpc_raw",
             "ducknng_get_rpc_manifest_raw",
             "ducknng_open_query_raw",
@@ -276,6 +348,19 @@ jobs:
                  " missing=", paste(missing, collapse = ","))
           }
           print(rows[order(rows$function_name), , drop = FALSE])
+          arities <- dbGetQuery(con, paste0(
+            "SELECT function_name, len(parameter_types) AS arity FROM duckdb_functions() ",
+            "WHERE function_type = 'scalar' AND function_name IN ",
+            "('ducknng__ncurl_row', 'ducknng_register_http_profile')"
+          ))
+          ncurl_row_arities <- sort(arities$arity[arities$function_name == "ducknng__ncurl_row"])
+          register_profile_arities <- sort(arities$arity[arities$function_name == "ducknng_register_http_profile"])
+          if (length(ncurl_row_arities) != 2L || any(ncurl_row_arities != c(6, 7))) {
+            stop("ducknng__ncurl_row arities changed: ", paste(ncurl_row_arities, collapse = ","))
+          }
+          if (length(register_profile_arities) != 2L || any(register_profile_arities != c(9, 10))) {
+            stop("ducknng_register_http_profile arities changed: ", paste(register_profile_arities, collapse = ","))
+          }
           RSCRIPT
 
       - name: Package release assets

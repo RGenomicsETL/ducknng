@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:42769 |
+| tls+tcp://127.0.0.1:40785 |
 +---------------------------+
 
 +--------+
@@ -163,6 +163,7 @@ ORDER BY aio_id;
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
 | 1      | true | true      |
+| 2      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -198,6 +199,67 @@ FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 +------+-----------+----------+--------------+
 | true | result    | manifest | 7            |
 +------+-----------+----------+--------------+
+```
+
+**Outbound HTTP profile.** Caller SQL passes a profile id and ordinary
+request fields. `ducknng` checks the profile scope, injects the auth
+header inside the HTTP client path, and keeps profile introspection
+redacted.
+
+``` sql
+SELECT CASE WHEN ducknng_register_http_route(
+  'tour_http', 'GET', '/profile-auth',
+  'SELECT * FROM ducknng_http_text(
+     200,
+     CASE
+       WHEN ducknng_http_header(''Authorization'') = ''Bearer readme-secret''
+       THEN ''authorized''
+       ELSE ''denied''
+     END
+   )'
+) THEN 1 ELSE 0 END AS route_registered;
+SELECT CASE WHEN ducknng_register_http_profile(
+  'tour-profile', 'http', '127.0.0.1', 18440,
+  '/profile-auth', 'GET', false,
+  'Authorization', 'Bearer readme-secret'
+) THEN 1 ELSE 0 END AS profile_registered;
+SELECT ok, status, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18440/profile-auth',
+  'GET', NULL, NULL, 2000, 0::UBIGINT,
+  'tour-profile'
+);
+SELECT profile_id, path_prefix, method, auth_header_names_json,
+       position('readme-secret' IN auth_header_names_json) = 0 AS redacted
+FROM ducknng_list_http_profiles()
+WHERE profile_id = 'tour-profile';
+SELECT CASE WHEN ducknng_drop_http_profile('tour-profile')
+  THEN 1 ELSE 0 END AS profile_dropped;
++------------------+
+| route_registered |
++------------------+
+| 1                |
++------------------+
++--------------------+
+| profile_registered |
++--------------------+
+| 1                  |
++--------------------+
++------+--------+------------+
+|  ok  | status | body_text  |
++------+--------+------------+
+| true | 200    | authorized |
++------+--------+------------+
++--------------+---------------+--------+------------------------+----------+
+|  profile_id  |  path_prefix  | method | auth_header_names_json | redacted |
++--------------+---------------+--------+------------------------+----------+
+| tour-profile | /profile-auth | GET    | ["Authorization"]      | true     |
++--------------+---------------+--------+------------------------+----------+
++-----------------+
+| profile_dropped |
++-----------------+
+| 1               |
++-----------------+
 ```
 
 **Query session: open, fetch Arrow IPC, parse the batch.**
@@ -554,12 +616,15 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## HTTP Transport
 
-| name                        | kind   | arguments                                                    | returns                                                                                                                | description                                                                                                                         |
-|-----------------------------|--------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_ncurl`             | table  | `url, method, headers_json, body, timeout_ms, tls_config_id` | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                 | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
-| `ducknng_ncurl_aio`         | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id` | `UBIGINT`                                                                                                              | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
-| `ducknng_ncurl_aio_collect` | table  | `aio_ids, wait_ms`                                           | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)` | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
-| `ducknng_ncurl_table`       | table  | `url, method, headers_json, body, timeout_ms, tls_config_id` | `TABLE(dynamic by response Content-Type)`                                                                              | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
+| name                            | kind   | arguments                                                                                                                 | returns                                                                                                                                                                                                                                                              | description                                                                                                                         |
+|---------------------------------|--------|---------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_ncurl`                 | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                               | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
+| `ducknng_ncurl_aio`             | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `UBIGINT`                                                                                                                                                                                                                                                            | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
+| `ducknng_ncurl_aio_collect`     | table  | `aio_ids, wait_ms`                                                                                                        | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                               | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
+| `ducknng_ncurl_table`           | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `TABLE(dynamic by response Content-Type)`                                                                                                                                                                                                                            | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
+| `ducknng_register_http_profile` | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms]` | `BOOLEAN`                                                                                                                                                                                                                                                            | Register or replace an outbound HTTP credential profile with fail-closed request scope.                                             |
+| `ducknng_drop_http_profile`     | scalar | `profile_id`                                                                                                              | `BOOLEAN`                                                                                                                                                                                                                                                            | Drop a registered outbound HTTP credential profile.                                                                                 |
+| `ducknng_list_http_profiles`    | table  |                                                                                                                           | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)` | List registered outbound HTTP profiles with redacted credential metadata.                                                           |
 
 ## Body Codecs
 
@@ -2115,7 +2180,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1625844296 | 1782966084248 | 127.0.0.1:41664 | NULL          |
+| 1340834191 | 1783177957954 | 127.0.0.1:36520 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 

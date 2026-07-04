@@ -6,8 +6,10 @@ Community-extension submission to duckdb/community-extensions (#1904).
 
 - Vendored NNG 1.11.0 transport layer: inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://.
 - HTTP carrier over http:// and https:// via NNG HTTP framework.
+- Scoped outbound HTTP profiles for `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, and `ducknng_ncurl_table(...)`: profile credentials are resolved inside the HTTP client path after fail-closed scheme/host/port/path/method/TLS checks, caller auth-header collisions are rejected, and `ducknng_list_http_profiles()` redacts secret values.
+- The self-published release workflow now smoke-checks the outbound HTTP profile path and compatibility arities on backport release binaries.
 
-- 110 SQL functions across 16 categories: Server, NNG Sockets, Framed RPC, HTTP Client,
+- The generated SQL catalog spans Server, NNG Sockets, Framed RPC, HTTP Client,
   HTTP Routes, HTTP Workers, HTTP Helpers, Body Codecs, TLS, Service, Admission,
   Monitoring, Async I/O, Method Registry, Frame Helpers, SQL Macros.
 - Cross-platform Linux/macOS; Windows requires MinGW/Rtools (MSVC excluded for MbedTLS).

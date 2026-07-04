@@ -871,7 +871,7 @@
       "name": "ducknng_ncurl",
       "kind": "table",
       "category": "HTTP Transport",
-      "signature": "ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)",
+      "signature": "ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
       "returns": "TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
@@ -881,7 +881,10 @@
         "ok means the HTTP transport operation completed and a response was received; status carries the HTTP status code and may still be 4xx or 5xx.",
         "headers_json uses the canonical array-of-objects form such as [{\"name\":\"Content-Type\",\"value\":\"application/json\"}].",
         "body contains the raw response body bytes and body_text is a best-effort text decoding when the payload looks textual.",
-        "The helper uses a volatile execution path so constant-argument HTTP calls are not reused as one cached response across recursive CTE iterations or repeated row execution."
+        "The helper uses a volatile execution path so constant-argument HTTP calls are not reused as one cached response across recursive CTE iterations or repeated row execution.",
+        "Optional profile_id resolves a registered outbound HTTP profile and injects its authentication header after scope checks pass.",
+        "Profile scope enforcement is fail-closed before sending: scheme, host, optional port, path prefix, method, and TLS requirement must match.",
+        "Caller-supplied Authorization or another profile-protected auth header is rejected rather than allowed to override the profile credential."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl('http://127.0.0.1:8080/_ducknng', 'POST', '[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]', from_hex('01000000000000000000000000000000000000000000'), 2000, 0::UBIGINT);"
@@ -891,7 +894,7 @@
       "name": "ducknng_ncurl_aio",
       "kind": "scalar",
       "category": "HTTP Transport",
-      "signature": "ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id)",
+      "signature": "ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
       "returns": "UBIGINT",
       "since": "0.1.0",
       "implemented": true,
@@ -901,7 +904,9 @@
         "Expected setup and launch failures return an immediate terminal error aio; inspect it with ducknng_aio_status() or ducknng_ncurl_aio_collect().",
         "timeout_ms bounds the pending NNG HTTP operation itself; it is separate from the wait_ms argument used during collection.",
         "Collect with ducknng_ncurl_aio_collect(), not ducknng_aio_collect(), because HTTP results have status, headers_json, body, and body_text columns rather than a raw frame column.",
-        "The operation is a local HTTP transport helper and does not add any new manifest method."
+        "The operation is a local HTTP transport helper and does not add any new manifest method.",
+        "Optional profile_id uses the same outbound HTTP profile resolution and fail-closed scope checks as ducknng_ncurl().",
+        "Profile resolution failures return an immediate terminal error aio handle when a runtime is available."
       ],
       "examples": [
         "SELECT ducknng_ncurl_aio('http://127.0.0.1:8080/health', 'GET', NULL, NULL, 2000, 0::UBIGINT);"
@@ -1006,7 +1011,7 @@
       "name": "ducknng_ncurl_table",
       "kind": "table",
       "category": "HTTP Transport",
-      "signature": "ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)",
+      "signature": "ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
       "returns": "TABLE(dynamic by response Content-Type)",
       "since": "0.1.0",
       "implemented": true,
@@ -1016,10 +1021,67 @@
         "The response Content-Type selects the provider. Missing or unknown content types fall back to raw BLOB output.",
         "Because its result schema is inferred from the response during binding, this helper is not a lateral per-row HTTP primitive; use ducknng_ncurl() plus an explicit parse step for row-by-row retry or chunk fanout workflows.",
         "JSON parses in memory; CSV, TSV, and Parquet currently use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
-        "This helper is transport-local and does not change the framed RPC method surface."
+        "This helper is transport-local and does not change the framed RPC method surface.",
+        "Optional profile_id uses the same outbound HTTP profile resolution and fail-closed scope checks as ducknng_ncurl().",
+        "The request is sent only after profile scope checks pass and protected auth-header collisions are rejected."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl_table('http://127.0.0.1:8080/data.json', 'GET', NULL, NULL, 2000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_register_http_profile",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms])",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Register or replace an outbound HTTP credential profile with fail-closed request scope.",
+      "notes": [
+        "Profiles are runtime-local credentials for ducknng outbound HTTP helpers; they are not RPC manifest methods and are not DuckDB Secret Manager objects yet.",
+        "scheme must be http or https; tls_required can only be true for https profiles.",
+        "host matching is exact and case-insensitive; port is optional when NULL and exact when supplied.",
+        "path_prefix must start with / and the request path must begin with that prefix.",
+        "method is an HTTP token or * for all methods.",
+        "auth_header_name must be an HTTP token; the matching auth_header_value is stored in memory and never exposed by list/introspection.",
+        "expires_at_ms = 0 means no runtime expiry check. Non-zero values are compared to ducknng runtime milliseconds before each request."
+      ],
+      "examples": [
+        "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');"
+      ]
+    },
+    {
+      "name": "ducknng_drop_http_profile",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_drop_http_profile(profile_id)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Drop a registered outbound HTTP credential profile.",
+      "notes": [
+        "Returns true when a profile was removed and false when no such profile existed."
+      ],
+      "examples": [
+        "SELECT ducknng_drop_http_profile('local-api');"
+      ]
+    },
+    {
+      "name": "ducknng_list_http_profiles",
+      "kind": "table",
+      "category": "HTTP Transport",
+      "signature": "ducknng_list_http_profiles()",
+      "returns": "TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "List registered outbound HTTP profiles with redacted credential metadata.",
+      "notes": [
+        "Introspection exposes profile id, scope, auth header names, version, timestamps, and expiry only.",
+        "Raw authentication header values are never returned."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_list_http_profiles();"
       ]
     },
     {
@@ -1110,144 +1172,144 @@
         "This helper is rejected inside SQL authorizer callbacks and inside active request handlers so the shared execution lane is not re-entered recursively."
       ],
       "examples": [
-         "SELECT service_name, method, match_kind, path FROM ducknng_list_http_routes() ORDER BY service_name, match_kind, path;"
-       ]
-     },
-     {
-       "name": "ducknng_set_http_route_auth",
-       "kind": "scalar",
-       "category": "HTTP Routes",
-       "signature": "ducknng_set_http_route_auth(service_name, method, path[, require_identity[, allow_identities_json]])",
-       "returns": "BOOLEAN",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Set authentication requirements on a registered HTTP route.",
-       "notes": [
-         "The three-argument form clears auth settings for the route (sets require_identity=false, allow_identities_json=NULL).",
-         "The four-argument form enables or disables identity requirement without changing the allow-list.",
-         "The five-argument form sets both require_identity and a JSON array of allowed identities.",
-         "allow_identities_json must be a JSON array of CN strings, or NULL to allow any verified identity.",
-         "Requires an active TLS service with peer certificate verification enabled to have effect at runtime.",
-         "Returns false if the service or route is not found."
-       ],
-       "examples": [
-         "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin');",
-         "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin', true);",
-         "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin', true, '[\"client1\",\"client2\"]');"
-       ],
-       "parameters": "service_name, method, path[, require_identity[, allow_identities_json]]"
-     },
-     {
-       "name": "ducknng_register_http_static",
-       "kind": "scalar",
-       "category": "HTTP Routes",
-       "signature": "ducknng_register_http_static(service_name, path_prefix, dir_path)",
-       "returns": "BOOLEAN",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Register a prefix route that serves static files from a directory on the server filesystem.",
-       "notes": [
-         "path_prefix is treated as a prefix match; the remainder of the request path is resolved relative to dir_path.",
-         "The route is always registered as a GET prefix route.",
-         "The static directory path is stored in the route and is visible in ducknng_list_http_routes() as static_dir_path.",
-         "Returns false if the service is not found or the route could not be registered."
-       ],
-       "examples": [
-         "SELECT ducknng_register_http_static('svc', '/static/', '/var/www/static');"
-       ],
-       "parameters": "service_name, path_prefix, dir_path"
-     },
-     {
-       "name": "ducknng_register_http_worker",
-       "kind": "scalar",
-       "category": "HTTP Routes",
-       "signature": "ducknng_register_http_worker(service_name, worker_name, sql, interval_ms)",
-       "returns": "BOOLEAN",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Register a background SQL worker that runs on a recurring interval while the HTTP service is active.",
-       "notes": [
-         "The worker executes the provided SQL statement in the service execution context at the given interval in milliseconds.",
-         "Workers are identified by service_name and worker_name together; registering with the same pair replaces the existing worker.",
-         "Workers are visible in ducknng_list_http_workers().",
-         "Returns false if the service is not found."
-       ],
-       "examples": [
-         "SELECT ducknng_register_http_worker('svc', 'cache_refresh', 'INSERT INTO cache SELECT * FROM source', 5000::UBIGINT);"
-       ],
-       "parameters": "service_name, worker_name, sql, interval_ms"
-     },
-     {
-       "name": "ducknng_unregister_http_worker",
-       "kind": "scalar",
-       "category": "HTTP Routes",
-       "signature": "ducknng_unregister_http_worker(service_name, worker_name)",
-       "returns": "BOOLEAN",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Unregister a previously registered HTTP background worker.",
-       "notes": [
-         "Returns false if the service or worker is not found."
-       ],
-       "examples": [
-         "SELECT ducknng_unregister_http_worker('svc', 'cache_refresh');"
-       ],
-       "parameters": "service_name, worker_name"
-     },
-     {
-       "name": "ducknng_list_http_workers",
-       "kind": "table",
-       "category": "HTTP Routes",
-       "signature": "ducknng_list_http_workers()",
-       "returns": "TABLE(service_name VARCHAR, worker_name VARCHAR, sql VARCHAR, interval_ms UBIGINT)",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "List all currently registered HTTP background workers across running services.",
-       "notes": [
-         "Returns one row per registered worker with its service name, worker name, SQL statement, and interval in milliseconds."
-       ],
-       "examples": [
-         "SELECT * FROM ducknng_list_http_workers();"
-       ]
-     },
-     {
-       "name": "ducknng_http_ndjson",
-       "kind": "table_macro",
-       "category": "HTTP Routes",
-       "signature": "ducknng_http_ndjson(status, body_text)",
-       "returns": "TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Convenience table macro for returning an NDJSON HTTP response from a route handler.",
-       "notes": [
-         "Sets content_type to 'application/x-ndjson'.",
-         "Use inside handler_sql to produce a well-formed NDJSON response row."
-       ],
-       "examples": [
-         "SELECT * FROM ducknng_http_ndjson(200, (SELECT string_agg(to_json(t)::VARCHAR, chr(10)) FROM my_table t));"
-       ],
-       "parameters": "status, body_text"
-     },
-     {
-       "name": "ducknng_http_sse",
-       "kind": "table_macro",
-       "category": "HTTP Routes",
-       "signature": "ducknng_http_sse(status, body_text)",
-       "returns": "TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)",
-       "since": "0.1.0",
-       "implemented": true,
-       "description": "Convenience table macro for returning a Server-Sent Events HTTP response from a route handler.",
-       "notes": [
-         "Sets content_type to 'text/event-stream'.",
-         "Use inside handler_sql to produce a well-formed SSE response row."
-       ],
-       "examples": [
-         "SELECT * FROM ducknng_http_sse(200, 'data: hello\n\n');"
-       ],
-       "parameters": "status, body_text"
-     },
-     {
-       "name": "ducknng_http_request",
+        "SELECT service_name, method, match_kind, path FROM ducknng_list_http_routes() ORDER BY service_name, match_kind, path;"
+      ]
+    },
+    {
+      "name": "ducknng_set_http_route_auth",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_set_http_route_auth(service_name, method, path[, require_identity[, allow_identities_json]])",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Set authentication requirements on a registered HTTP route.",
+      "notes": [
+        "The three-argument form clears auth settings for the route (sets require_identity=false, allow_identities_json=NULL).",
+        "The four-argument form enables or disables identity requirement without changing the allow-list.",
+        "The five-argument form sets both require_identity and a JSON array of allowed identities.",
+        "allow_identities_json must be a JSON array of CN strings, or NULL to allow any verified identity.",
+        "Requires an active TLS service with peer certificate verification enabled to have effect at runtime.",
+        "Returns false if the service or route is not found."
+      ],
+      "examples": [
+        "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin');",
+        "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin', true);",
+        "SELECT ducknng_set_http_route_auth('svc', 'GET', '/api/admin', true, '[\"client1\",\"client2\"]');"
+      ],
+      "parameters": "service_name, method, path[, require_identity[, allow_identities_json]]"
+    },
+    {
+      "name": "ducknng_register_http_static",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_register_http_static(service_name, path_prefix, dir_path)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Register a prefix route that serves static files from a directory on the server filesystem.",
+      "notes": [
+        "path_prefix is treated as a prefix match; the remainder of the request path is resolved relative to dir_path.",
+        "The route is always registered as a GET prefix route.",
+        "The static directory path is stored in the route and is visible in ducknng_list_http_routes() as static_dir_path.",
+        "Returns false if the service is not found or the route could not be registered."
+      ],
+      "examples": [
+        "SELECT ducknng_register_http_static('svc', '/static/', '/var/www/static');"
+      ],
+      "parameters": "service_name, path_prefix, dir_path"
+    },
+    {
+      "name": "ducknng_register_http_worker",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_register_http_worker(service_name, worker_name, sql, interval_ms)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Register a background SQL worker that runs on a recurring interval while the HTTP service is active.",
+      "notes": [
+        "The worker executes the provided SQL statement in the service execution context at the given interval in milliseconds.",
+        "Workers are identified by service_name and worker_name together; registering with the same pair replaces the existing worker.",
+        "Workers are visible in ducknng_list_http_workers().",
+        "Returns false if the service is not found."
+      ],
+      "examples": [
+        "SELECT ducknng_register_http_worker('svc', 'cache_refresh', 'INSERT INTO cache SELECT * FROM source', 5000::UBIGINT);"
+      ],
+      "parameters": "service_name, worker_name, sql, interval_ms"
+    },
+    {
+      "name": "ducknng_unregister_http_worker",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_unregister_http_worker(service_name, worker_name)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Unregister a previously registered HTTP background worker.",
+      "notes": [
+        "Returns false if the service or worker is not found."
+      ],
+      "examples": [
+        "SELECT ducknng_unregister_http_worker('svc', 'cache_refresh');"
+      ],
+      "parameters": "service_name, worker_name"
+    },
+    {
+      "name": "ducknng_list_http_workers",
+      "kind": "table",
+      "category": "HTTP Routes",
+      "signature": "ducknng_list_http_workers()",
+      "returns": "TABLE(service_name VARCHAR, worker_name VARCHAR, sql VARCHAR, interval_ms UBIGINT)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "List all currently registered HTTP background workers across running services.",
+      "notes": [
+        "Returns one row per registered worker with its service name, worker name, SQL statement, and interval in milliseconds."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_list_http_workers();"
+      ]
+    },
+    {
+      "name": "ducknng_http_ndjson",
+      "kind": "table_macro",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_ndjson(status, body_text)",
+      "returns": "TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Convenience table macro for returning an NDJSON HTTP response from a route handler.",
+      "notes": [
+        "Sets content_type to 'application/x-ndjson'.",
+        "Use inside handler_sql to produce a well-formed NDJSON response row."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_ndjson(200, (SELECT string_agg(to_json(t)::VARCHAR, chr(10)) FROM my_table t));"
+      ],
+      "parameters": "status, body_text"
+    },
+    {
+      "name": "ducknng_http_sse",
+      "kind": "table_macro",
+      "category": "HTTP Routes",
+      "signature": "ducknng_http_sse(status, body_text)",
+      "returns": "TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Convenience table macro for returning a Server-Sent Events HTTP response from a route handler.",
+      "notes": [
+        "Sets content_type to 'text/event-stream'.",
+        "Use inside handler_sql to produce a well-formed SSE response row."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_http_sse(200, 'data: hello\n\n');"
+      ],
+      "parameters": "status, body_text"
+    },
+    {
+      "name": "ducknng_http_request",
       "kind": "table",
       "category": "HTTP Routes",
       "signature": "ducknng_http_request()",

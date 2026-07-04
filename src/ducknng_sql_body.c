@@ -118,6 +118,17 @@ static void destroy_single_row_init_data(void *ptr) {
     if (data) duckdb_free(data);
 }
 
+static int execute_sql(duckdb_connection con, const char *sql) {
+    duckdb_result result;
+    memset(&result, 0, sizeof(result));
+    if (duckdb_query(con, sql, &result) == DuckDBError) {
+        duckdb_destroy_result(&result);
+        return 0;
+    }
+    duckdb_destroy_result(&result);
+    return 1;
+}
+
 static char *ducknng_dup_bytes(const uint8_t *data, size_t len) {
     char *out = (char *)duckdb_malloc(len + 1);
     if (!out) return NULL;
@@ -1985,10 +1996,13 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     duckdb_value body_val;
     duckdb_value timeout_val;
     duckdb_value tls_val;
+    duckdb_value profile_val = NULL;
     duckdb_blob body_blob;
     char *url;
     char *method;
     char *headers_json;
+    char *profile_id = NULL;
+    char *effective_headers_json = NULL;
     char *content_type = NULL;
     int32_t timeout_ms;
     uint64_t tls_config_id;
@@ -2007,18 +2021,21 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     body_val = duckdb_bind_get_parameter(info, 3);
     timeout_val = duckdb_bind_get_parameter(info, 4);
     tls_val = duckdb_bind_get_parameter(info, 5);
+    if (duckdb_bind_get_parameter_count(info) > 6) profile_val = duckdb_bind_get_parameter(info, 6);
     url = duckdb_is_null_value(url_val) ? NULL : duckdb_get_varchar(url_val);
     method = duckdb_is_null_value(method_val) ? NULL : duckdb_get_varchar(method_val);
     headers_json = duckdb_is_null_value(headers_val) ? NULL : duckdb_get_varchar(headers_val);
     if (!duckdb_is_null_value(body_val)) body_blob = duckdb_get_blob(body_val);
     timeout_ms = duckdb_get_int32(timeout_val);
     tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    if (profile_val && !duckdb_is_null_value(profile_val)) profile_id = duckdb_get_varchar(profile_val);
     duckdb_destroy_value(&url_val);
     duckdb_destroy_value(&method_val);
     duckdb_destroy_value(&headers_val);
     duckdb_destroy_value(&body_val);
     duckdb_destroy_value(&timeout_val);
     duckdb_destroy_value(&tls_val);
+    if (profile_val) duckdb_destroy_value(&profile_val);
     if (!url || !url[0]) {
         duckdb_bind_set_error(info, "ducknng: ducknng_ncurl_table URL must not be NULL or empty");
         goto cleanup;
@@ -2027,7 +2044,12 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
         duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
         goto cleanup;
     }
-    if (ducknng_http_transact(url, method, headers_json,
+    if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
+            profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile");
+        goto cleanup;
+    }
+    if (ducknng_http_transact(url, method, effective_headers_json ? effective_headers_json : headers_json,
             (const uint8_t *)body_blob.data, (size_t)body_blob.size, timeout_ms, tls_opts,
             &status, &resp_headers_json, &resp_body, &resp_body_len, &errmsg) != 0) {
         duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: HTTP request failed");
@@ -2048,6 +2070,8 @@ cleanup:
     if (url) duckdb_free(url);
     if (method) duckdb_free(method);
     if (headers_json) duckdb_free(headers_json);
+    if (profile_id) duckdb_free(profile_id);
+    if (effective_headers_json) duckdb_free(effective_headers_json);
     if (body_blob.data) duckdb_free(body_blob.data);
     if (resp_headers_json) duckdb_free(resp_headers_json);
     if (resp_body) duckdb_free(resp_body);
@@ -2302,11 +2326,16 @@ static int register_body_parse_table_named(duckdb_connection con, ducknng_sql_co
 }
 
 static int register_ncurl_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_type param_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
-        DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
+    duckdb_type profile_param_types[7] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
+    const char *sql =
+        "CREATE OR REPLACE MACRO ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id := NULL) AS TABLE "
+        "SELECT * FROM ducknng__ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id)";
+    (void)name;
     if (!ctx || !ctx->rt) return 0;
-    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 6, param_types, ducknng_ncurl_table_bind,
-        ducknng_body_parse_init, ducknng_body_parse_scan);
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng__ncurl_table", ctx, 7, profile_param_types,
+            ducknng_ncurl_table_bind, ducknng_body_parse_init, ducknng_body_parse_scan)) return 0;
+    return execute_sql(con, sql);
 }
 
 static int register_codecs_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {

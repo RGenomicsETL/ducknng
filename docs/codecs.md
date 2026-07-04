@@ -7,10 +7,10 @@ The raw HTTP primitives remain `ducknng_ncurl(...)` and its async companion `duc
 ```sql
 SELECT * FROM ducknng_list_codecs();
 SELECT * FROM ducknng_parse_body(body, content_type);
-SELECT * FROM ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id);
+SELECT * FROM ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]);
 ```
 
-`ducknng_parse_body(...)` parses an existing `BLOB` using the supplied content type. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx response status, extracts the response `Content-Type`, and parses the response body into a DuckDB table. Its schema is inferred from the response at bind time, so it cannot be used as a lateral per-row HTTP call or as the retry primitive inside a recursive CTE. Use `ducknng_ncurl(...)` instead when you need volatile row-by-row HTTP execution, non-2xx status inspection, response headers, or raw bytes, then parse the body explicitly once the response you want has been selected.
+`ducknng_parse_body(...)` parses an existing `BLOB` using the supplied content type. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx response status, extracts the response `Content-Type`, and parses the response body into a DuckDB table. When `profile_id` is supplied, it uses the same scoped outbound HTTP profile resolver as `ducknng_ncurl(...)` and sends the request only after scope and protected-auth-header collision checks pass. Its schema is inferred from the response at bind time, so it cannot be used as a lateral per-row HTTP call or as the retry primitive inside a recursive CTE. Use `ducknng_ncurl(...)` instead when you need volatile row-by-row HTTP execution, non-2xx status inspection, response headers, or raw bytes, then parse the body explicitly once the response you want has been selected.
 
 Format-specific functions are also available for formats where DuckDB's own readers provide better type inference and dialect detection than the built-in codec:
 

@@ -2087,6 +2087,7 @@ static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chun
     duckdb_vector body_vec;
     duckdb_vector timeout_vec;
     duckdb_vector tls_vec;
+    duckdb_vector profile_vec = NULL;
     duckdb_vector child_vecs[6];
     bool *ok_data;
     int32_t *status_data;
@@ -2100,6 +2101,7 @@ static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chun
     body_vec = duckdb_data_chunk_get_vector(input, 3);
     timeout_vec = duckdb_data_chunk_get_vector(input, 4);
     tls_vec = duckdb_data_chunk_get_vector(input, 5);
+    if (duckdb_data_chunk_get_column_count(input) > 6) profile_vec = duckdb_data_chunk_get_vector(input, 6);
     row_count = duckdb_data_chunk_get_size(input);
     for (i = 0; i < 6; i++) child_vecs[i] = duckdb_struct_vector_get_child(output, (idx_t)i);
     ok_data = (bool *)duckdb_vector_get_data(child_vecs[0]);
@@ -2112,6 +2114,8 @@ static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chun
         idx_t body_len = 0;
         int32_t timeout_ms;
         uint64_t tls_config_id;
+        char *profile_id = NULL;
+        char *effective_headers_json = NULL;
         const ducknng_tls_opts *tls_opts = NULL;
         char *errmsg = NULL;
         char *headers_out = NULL;
@@ -2130,10 +2134,16 @@ static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chun
         if (!arg_is_null(body_vec, row)) body = arg_blob_dup(body_vec, row, &body_len);
         timeout_ms = arg_int32(timeout_vec, row, 0);
         tls_config_id = arg_u64(tls_vec, row, 0);
+        if (profile_vec && !arg_is_null(profile_vec, row)) profile_id = arg_varchar_dup(profile_vec, row);
         if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) goto emit_error;
-        if (ducknng_http_transact(url, method, headers_json, body, (size_t)body_len,
-                timeout_ms, tls_opts, &status, &headers_out, &body_out, &body_out_len,
-                &errmsg) != 0) {
+        if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
+                profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
+            goto emit_error;
+        }
+        if (ducknng_http_transact(url, method,
+                effective_headers_json ? effective_headers_json : headers_json,
+                body, (size_t)body_len, timeout_ms, tls_opts, &status,
+                &headers_out, &body_out, &body_out_len, &errmsg) != 0) {
             if (!errmsg) errmsg = ducknng_strdup("ducknng: HTTP request failed");
             goto emit_error;
         }
@@ -2174,6 +2184,8 @@ cleanup_row:
         if (url) duckdb_free(url);
         if (method) duckdb_free(method);
         if (headers_json) duckdb_free(headers_json);
+        if (profile_id) duckdb_free(profile_id);
+        if (effective_headers_json) duckdb_free(effective_headers_json);
         if (body) duckdb_free(body);
         if (headers_out) duckdb_free(headers_out);
         if (body_out) duckdb_free(body_out);
@@ -2227,12 +2239,14 @@ static int register_request_socket_result_table_named(duckdb_connection con, duc
 static int register_http_result_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     duckdb_type param_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
+    duckdb_type profile_param_types[7] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
     duckdb_type field_types[6] = {DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_VARCHAR};
     const char *field_names[6] = {"ok", "status", "error", "headers_json", "body", "body_text"};
     const char *sql =
-        "CREATE OR REPLACE MACRO ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id) AS TABLE "
-        "WITH _row AS (SELECT ducknng__ncurl_row(url, method, headers_json, body, timeout_ms, tls_config_id) AS r) "
+        "CREATE OR REPLACE MACRO ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id := NULL) AS TABLE "
+        "WITH _row AS (SELECT ducknng__ncurl_row(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id) AS r) "
         "SELECT struct_extract(r, 'ok') AS ok, "
         "       struct_extract(r, 'status') AS status, "
         "       struct_extract(r, 'error') AS error, "
@@ -2244,6 +2258,8 @@ static int register_http_result_table_named(duckdb_connection con, ducknng_sql_c
     if (!ctx || !ctx->rt) return 0;
     if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 6,
             param_types, ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
+    if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 7,
+            profile_param_types, ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
     return execute_sql(con, sql);
 }
 
