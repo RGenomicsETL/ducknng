@@ -15,13 +15,13 @@ The generic socket surface remains NNG-only. `ducknng_open_socket(...)`, `ducknn
 The shipped low-level synchronous client entry point is:
 
 ```sql
-ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)
+ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
 ```
 
 Its asynchronous companion is:
 
 ```sql
-ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id)
+ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
 ducknng_ncurl_aio_collect(aio_ids, wait_ms)
 ```
 
@@ -44,12 +44,24 @@ TABLE(
 
 The request-side `headers_json` argument uses the same canonical JSON shape for symmetry. The preferred contract is an array of objects such as `[{"name":"Content-Type","value":"application/json"}]` rather than a plain JSON object, because HTTP header names may repeat and order sometimes matters operationally.
 
+Outbound HTTP credential profiles are runtime-local records resolved inside the HTTP client path rather than in caller SQL. They are managed with:
+
+```sql
+ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix,
+                              method, tls_required,
+                              auth_header_name, auth_header_value[, expires_at_ms])
+ducknng_drop_http_profile(profile_id)
+ducknng_list_http_profiles()
+```
+
+When `profile_id` is supplied to `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, or `ducknng_ncurl_table(...)`, ducknng looks up the profile, checks the request scope, and injects the profile's authentication header before the request is sent. Scope checks are fail-closed and cover scheme, exact host, optional exact port, path prefix, HTTP method, and whether TLS is required. The current implementation deliberately rejects a caller-supplied header that collides with the profile auth header, including `Authorization`, instead of letting caller SQL override the credential. This collision policy applies consistently across the sync, table, and AIO helpers. `ducknng_list_http_profiles()` is redacted: it exposes profile id, scope, auth header names, version, timestamps, and expiry, but never raw credential values. These profiles are ducknng runtime credentials; the vendored DuckDB C API in this repository does not expose a stable Secret Manager registration/lookup path, so the resolver is shaped to allow a future Secret Manager or C++ bridge without pretending that integration exists today.
+
 The raw helper deliberately does not parse response bodies by default. Provider-driven parsing is opt-in through two table helpers:
 
 ```sql
 ducknng_list_codecs()
 ducknng_parse_body(body, content_type)
-ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)
+ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
 ```
 
 `ducknng_list_codecs()` lists the built-in body serialization/deserialization providers. `ducknng_parse_body(...)` takes an existing `BLOB` plus a `Content-Type` string and returns provider-specific table output. `ducknng_ncurl_table(...)` performs one HTTP/HTTPS request, requires a 2xx status, reads the response `Content-Type`, and returns the parsed body as a DuckDB table. Because its output schema depends on the response body and `Content-Type`, it is a dynamic-schema table function whose request is resolved during binding; it is not the right primitive for per-row retry loops or lateral chunk fanout. Use raw `ducknng_ncurl(...)` plus an explicit parse step when row-by-row HTTP execution is required. Missing or unknown content types fall back to a raw `body BLOB` column.

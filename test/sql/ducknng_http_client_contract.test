@@ -9,6 +9,16 @@ FROM ducknng_ncurl('ipc:///tmp/nope', NULL, NULL, NULL, 1000, 0::UBIGINT)
 ----
 0	1	1
 
+# Downstream code uses the private row scalar directly; keep the original
+# six-argument overload registered while the public macro gains profile_id.
+query III
+SELECT struct_extract(r, 'ok'),
+       struct_extract(r, 'status') IS NULL,
+       struct_extract(r, 'error') = 'ducknng: http:// or https:// URL is required'
+FROM (SELECT ducknng__ncurl_row('ipc:///tmp/nope', NULL, NULL, NULL, 1000, 0::UBIGINT) AS r)
+----
+0	1	1
+
 query III
 SELECT ok, status IS NULL, error = 'ducknng: headers_json must be a JSON array of {name,value} objects'
 FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '{}', NULL, 1000, 0::UBIGINT)
