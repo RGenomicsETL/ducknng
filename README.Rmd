@@ -163,6 +163,43 @@ SELECT ok, type_name, name,
 FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 ```
 
+**Outbound HTTP profile.** Caller SQL passes a profile id and ordinary request fields. `ducknng` checks the profile scope, injects the auth header inside the HTTP client path, and keeps profile introspection redacted.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT CASE WHEN ducknng_register_http_route(
+  'tour_http', 'GET', '/profile-auth',
+  'SELECT * FROM ducknng_http_text(
+     200,
+     CASE
+       WHEN ducknng_http_header(''Authorization'') = ''Bearer readme-secret''
+       THEN ''authorized''
+       ELSE ''denied''
+     END
+   )'
+) THEN 1 ELSE 0 END AS route_registered;
+
+SELECT CASE WHEN ducknng_register_http_profile(
+  'tour-profile', 'http', '127.0.0.1', 18440,
+  '/profile-auth', 'GET', false,
+  'Authorization', 'Bearer readme-secret'
+) THEN 1 ELSE 0 END AS profile_registered;
+
+SELECT ok, status, body_text
+FROM ducknng_ncurl(
+  'http://127.0.0.1:18440/profile-auth',
+  'GET', NULL, NULL, 2000, 0::UBIGINT,
+  'tour-profile'
+);
+
+SELECT profile_id, path_prefix, method, auth_header_names_json,
+       position('readme-secret' IN auth_header_names_json) = 0 AS redacted
+FROM ducknng_list_http_profiles()
+WHERE profile_id = 'tour-profile';
+
+SELECT CASE WHEN ducknng_drop_http_profile('tour-profile')
+  THEN 1 ELSE 0 END AS profile_dropped;
+```
+
 **Query session: open, fetch Arrow IPC, parse the batch.** `ducknng_open_query` returns a `session_id` + `session_token`. `ducknng_fetch_query_table` decodes the first Arrow batch directly as rows. The raw fetch frame carries the same Arrow bytes as a BLOB for callers that need to forward or inspect the payload.
 
 ```{duckdb collapse=TRUE, comment=""}
