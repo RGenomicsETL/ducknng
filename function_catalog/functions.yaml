@@ -929,10 +929,10 @@
         "Profiles are runtime-local credentials for ducknng outbound HTTP helpers; they are not RPC manifest methods and are not DuckDB Secret Manager objects yet.",
         "scheme must be http or https; tls_required can only be true for https profiles.",
         "host matching is exact and case-insensitive; port is optional when NULL and exact when supplied.",
-        "path_prefix must start with / and the request path must begin with that prefix.",
+        "path_prefix must start with / and is segment-aware: /auth matches /auth and /auth/... but not /authz; use / or a trailing slash for deliberately broad scopes.",
         "method is an HTTP token or * for all methods.",
         "auth_header_name must be an HTTP token; the matching auth_header_value is stored in memory and never exposed by list/introspection.",
-        "expires_at_ms = 0 means no runtime expiry check. Non-zero values are compared to ducknng runtime milliseconds before each request."
+        "expires_at_ms = 0 means no expiry check. Non-zero values are compared to Unix epoch milliseconds before each request."
       ],
       "examples": [
         "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');"
