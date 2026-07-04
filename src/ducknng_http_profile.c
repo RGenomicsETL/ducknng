@@ -105,6 +105,33 @@ ducknng_http_profile_method_valid(const char *method)
 }
 
 static int
+ducknng_http_profile_header_value_valid(const char *value)
+{
+    const unsigned char *p;
+
+    if (!value || !value[0]) return 0;
+    for (p = (const unsigned char *)value; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f) return 0;
+    }
+    return 1;
+}
+
+static int
+ducknng_http_profile_path_in_scope(const char *path, const char *prefix)
+{
+    size_t prefix_len;
+
+    if (!path || !prefix || prefix[0] != '/') return 0;
+    prefix_len = strlen(prefix);
+    if (prefix_len == 0) return 0;
+    if (strcmp(prefix, "/") == 0) return 1;
+    if (strncmp(path, prefix, prefix_len) != 0) return 0;
+    if (path[prefix_len] == '\0') return 1;
+    if (prefix[prefix_len - 1] == '/') return 1;
+    return path[prefix_len] == '/';
+}
+
+static int
 ducknng_http_profile_copy(ducknng_http_profile *dst, const ducknng_http_profile *src)
 {
     if (!dst || !src) return -1;
@@ -245,8 +272,8 @@ ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile auth header name must be an HTTP token");
         return -1;
     }
-    if (!auth_header_value || !auth_header_value[0]) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile auth header value must be non-empty");
+    if (!ducknng_http_profile_header_value_valid(auth_header_value)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile auth header value must be non-empty and must not contain control characters");
         return -1;
     }
     if (has_port && (port <= 0 || port > 65535)) {
@@ -281,7 +308,7 @@ ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
     next.has_port = has_port ? 1 : 0;
     next.tls_required = tls_required ? 1 : 0;
     next.expires_at_ms = expires_at_ms;
-    now = ducknng_now_ms();
+    now = ducknng_wall_clock_ms();
     ducknng_mutex_lock(&rt->mu);
     for (i = 0; i < rt->http_profile_count; i++) {
         if (rt->http_profiles[i].profile_id && strcmp(rt->http_profiles[i].profile_id, profile_id) == 0) {
@@ -612,7 +639,7 @@ ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
         return -1;
     }
     if (ducknng_http_profile_find_copy(rt, profile_id, &profile, errmsg) != 0) return -1;
-    if (profile.expires_at_ms != 0 && ducknng_now_ms() > profile.expires_at_ms) {
+    if (profile.expires_at_ms != 0 && ducknng_wall_clock_ms() > profile.expires_at_ms) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile expired");
         goto done;
     }
@@ -648,7 +675,7 @@ ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
         goto done;
     }
     path = parsed_url->u_path && parsed_url->u_path[0] ? parsed_url->u_path : "/";
-    if (strncmp(path, profile.path_prefix, strlen(profile.path_prefix)) != 0) {
+    if (!ducknng_http_profile_path_in_scope(path, profile.path_prefix)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile scope rejected URL path");
         goto done;
     }
