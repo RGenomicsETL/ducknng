@@ -365,6 +365,7 @@ int ducknng_register_sql_api(duckdb_connection connection, ducknng_runtime *rt) 
     if (!ducknng_register_config_options(connection)) return 0;
     if (!ducknng_register_sql_service(connection, &ctx)) return 0;
     if (!ducknng_register_sql_http(connection, &ctx)) return 0;
+    if (!ducknng_register_sql_http_profiles(connection, &ctx)) return 0;
     if (!ducknng_register_sql_auth(connection, &ctx)) return 0;
     if (!ducknng_register_sql_monitor(connection, &ctx)) return 0;
     if (!ducknng_register_sql_tls(connection, &ctx)) return 0;
