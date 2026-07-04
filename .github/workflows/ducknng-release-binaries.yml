@@ -239,6 +239,17 @@ jobs:
                   raise
           else:
               raise SystemExit('malformed quack batch was accepted')
+          huge_ncols_hex = '0100818004'
+          try:
+              con.execute("""
+                  SELECT *
+                  FROM ducknng_parse_body(from_hex(?), 'application/vnd.ducknng.quack-batch')
+              """, [huge_ncols_hex]).fetchall()
+          except duckdb.Error as exc:
+              if 'quack column count exceeds supported limit' not in str(exc):
+                  raise
+          else:
+              raise SystemExit('huge-column-count quack batch was accepted')
           print('security regression smoke: header and quack checks ok')
 
           tls_server_cfg = con.execute("""

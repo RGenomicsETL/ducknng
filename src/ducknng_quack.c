@@ -1358,6 +1358,10 @@ static int ducknng_quack_encode_result_payload(duckdb_result result,
         ducknng_quack_set_error(errmsg, "ducknng: missing quack payload output pointers");
         return -1;
     }
+    if ((uint64_t)ncols > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack column count exceeds supported limit");
+        return -1;
+    }
     if (include_schema) {
         if (ducknng_quack_write_field_id(&w, DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
             ducknng_quack_write_uleb128(&w, (uint64_t)ncols, errmsg) != 0) goto fail;
@@ -1879,8 +1883,10 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
     ducknng_quack_reader r;
     uint16_t field_id = 0;
     uint64_t ncols = 0;
+    idx_t ncols_idx = 0;
     uint64_t i;
     idx_t row_count = 0;
+    size_t cols_bytes = 0;
     if (out_row_count) *out_row_count = 0;
     if (!info || !payload || payload_len == 0 || !out_schema) {
         ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for bind");
@@ -1893,13 +1899,26 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
 
     if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
         ducknng_quack_read_uleb128(&r, &ncols, errmsg) != 0) goto fail;
-    out_schema->ncols = (idx_t)ncols;
-    out_schema->cols = (ducknng_quack_column_schema *)duckdb_malloc(sizeof(*out_schema->cols) * (size_t)ncols);
-    if (!out_schema->cols) {
-        ducknng_quack_set_error(errmsg, "ducknng: out of memory allocating quack schema columns");
+    if (ncols > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack column count exceeds supported limit");
         goto fail;
     }
-    memset(out_schema->cols, 0, sizeof(*out_schema->cols) * (size_t)ncols);
+    if (ducknng_quack_uint64_to_idx(ncols, &ncols_idx,
+            "ducknng: quack column count exceeds supported size", errmsg) != 0) goto fail;
+    if (ncols_idx > 0) {
+        if (ducknng_size_mul(sizeof(*out_schema->cols), (size_t)ncols_idx,
+                &cols_bytes) != 0) {
+            ducknng_quack_set_error(errmsg, "ducknng: quack schema column allocation overflows supported size");
+            goto fail;
+        }
+        out_schema->cols = (ducknng_quack_column_schema *)duckdb_malloc(cols_bytes);
+        if (!out_schema->cols) {
+            ducknng_quack_set_error(errmsg, "ducknng: out of memory allocating quack schema columns");
+            goto fail;
+        }
+        memset(out_schema->cols, 0, cols_bytes);
+    }
+    out_schema->ncols = ncols_idx;
     for (i = 0; i < ncols; i++) {
         ducknng_quack_column_schema *node = NULL;
         if (ducknng_quack_read_type_node(&r, 0, &node, errmsg) != 0) goto fail;

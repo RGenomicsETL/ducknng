@@ -599,6 +599,7 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
 #define PROP_QK_LIST    101
 
 #define PROP_QK_FIELD_END          0xffffu
+#define PROP_QK_OUTER_RESULT_TYPES 1u
 #define PROP_QK_OUTER_RESULTS      4u
 #define PROP_QK_CHUNK_WRAPPER      300u
 #define PROP_QK_CHUNK_ROWS         100u
@@ -690,6 +691,17 @@ prop_quack_payload_fixed_width_overflow(struct prop_quack_buf *b)
     if (prop_qb_uleb(b, 0) != 0) return -1;
     return prop_qb_field_end(b) != 0 || prop_qb_field_end(b) != 0 ||
         prop_qb_field_end(b) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_payload_huge_schema_column_count(struct prop_quack_buf *b)
+{
+    uint64_t ncols;
+
+    memset(b, 0, sizeof(*b));
+    ncols = UINT64_MAX / (uint64_t)sizeof(ducknng_quack_column_schema) + 2u;
+    return prop_qb_u16(b, PROP_QK_OUTER_RESULT_TYPES) != 0 ||
+        prop_qb_uleb(b, ncols) != 0 ? -1 : 0;
 }
 
 static int
@@ -884,6 +896,31 @@ TEST quack_rejects_blob_length_wraparound_fixture(void)
     PASS();
 }
 
+TEST quack_rejects_huge_schema_column_count_fixture(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    struct _duckdb_bind_info bind_info;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+    int rc;
+
+    memset(&schema, 0, sizeof(schema));
+    memset(&bind_info, 0, sizeof(bind_info));
+    ASSERT_EQ(0, prop_quack_payload_huge_schema_column_count(&payload));
+    rc = ducknng_quack_payload_bind_columns((duckdb_bind_info)&bind_info,
+        payload.data, payload.len, &schema, &row_count, &errmsg);
+    ASSERT_NEQ(0, rc);
+    ASSERT_EQ((idx_t)0, row_count);
+    ASSERT_EQ((idx_t)0, schema.ncols);
+    ASSERT_EQ(NULL, schema.cols);
+    ASSERT(errmsg != NULL);
+    ASSERT(strstr(errmsg, "column count") != NULL);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    PASS();
+}
+
 TEST quack_rejects_random_nested_schema_payloads(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
@@ -1022,6 +1059,7 @@ SUITE(quack_properties)
     RUN_TEST(quack_rejects_or_scans_random_zero_column_payloads);
     RUN_TEST(quack_rejects_fixed_width_size_overflow_fixture);
     RUN_TEST(quack_rejects_blob_length_wraparound_fixture);
+    RUN_TEST(quack_rejects_huge_schema_column_count_fixture);
     RUN_TEST(quack_rejects_random_nested_schema_payloads);
 }
 

@@ -32,6 +32,15 @@ FROM ducknng_parse_body(
 ----
 ducknng: invalid fixed-size quack vector payload
 
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('0100818004'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack column count exceeds supported limit
+
 query IT
 SELECT a, b
 FROM ducknng_parse_body(
