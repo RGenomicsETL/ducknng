@@ -21,6 +21,7 @@ char *ducknng_make_temp_dir(const char *prefix);
 int ducknng_remove_file(const char *path);
 int ducknng_remove_dir(const char *path);
 uint64_t ducknng_now_ms(void);
+uint64_t ducknng_wall_clock_ms(void);
 void ducknng_sleep_ms(uint64_t ms);
 int ducknng_ascii_tolower_int(int c);
 int ducknng_ascii_ieq(const char *a, const char *b);
