@@ -89,6 +89,24 @@ uint64_t ducknng_now_ms(void) {
 #endif
 }
 
+uint64_t ducknng_wall_clock_ms(void) {
+#ifndef _WIN32
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ((uint64_t)ts.tv_sec * 1000ULL) + (uint64_t)(ts.tv_nsec / 1000000ULL);
+#else
+    FILETIME ft;
+    ULARGE_INTEGER value;
+    const uint64_t windows_to_unix_100ns = 116444736000000000ULL;
+
+    GetSystemTimeAsFileTime(&ft);
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+    if (value.QuadPart < windows_to_unix_100ns) return 0;
+    return (uint64_t)((value.QuadPart - windows_to_unix_100ns) / 10000ULL);
+#endif
+}
+
 void ducknng_sleep_ms(uint64_t ms) {
 #ifndef _WIN32
     usleep((useconds_t)(ms * 1000ULL));
