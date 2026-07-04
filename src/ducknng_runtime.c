@@ -100,6 +100,7 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
     rt->next_client_socket_id = 1;
     rt->next_client_aio_id = 1;
     rt->next_tls_config_id = 1;
+    rt->next_http_profile_version = 1;
     atomic_store_explicit(&rt->current_request_service_ptr, (uintptr_t)0, memory_order_release);
     if (ducknng_mutex_init(&rt->mu) != 0) {
         duckdb_free(rt);
@@ -312,6 +313,7 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->user_codec_count = 0;
         rt->user_codec_cap = 0;
     }
+    ducknng_runtime_http_profiles_reset(rt);
     ducknng_method_registry_destroy(&rt->registry);
     ducknng_log_ring_destroy(&rt->log_ring);
     if (rt->execution_pool) {

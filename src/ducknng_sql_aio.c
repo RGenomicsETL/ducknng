@@ -1145,6 +1145,7 @@ static void ducknng_cancel_query_raw_aio_scalar(duckdb_function_info info, duckd
 
 static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t ncols = duckdb_data_chunk_get_column_count(input);
     idx_t row;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
     if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
@@ -1153,27 +1154,54 @@ static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chun
         char *url = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
         char *method = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
         char *headers_json = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        char *profile_id = NULL;
+        char *effective_headers_json = NULL;
         idx_t body_len = 0;
         uint8_t *body = arg_blob_dup(duckdb_data_chunk_get_vector(input, 3), row, &body_len);
         int32_t timeout_ms = arg_int32(duckdb_data_chunk_get_vector(input, 4), row, 5000);
         uint64_t tls_config_id = arg_u64(duckdb_data_chunk_get_vector(input, 5), row, 0);
         char *errmsg = NULL;
         out[row] = 0;
+        if (ncols > 6 && !arg_is_null(duckdb_data_chunk_get_vector(input, 6), row)) {
+            profile_id = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 6), row);
+        }
         if (!ctx || !ctx->rt || !url || (!body && body_len > 0)) {
             if (url) duckdb_free(url);
             if (method) duckdb_free(method);
             if (headers_json) duckdb_free(headers_json);
+            if (profile_id) duckdb_free(profile_id);
             if (body) duckdb_free(body);
             if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
                     DUCKNNG_CLIENT_AIO_KIND_NCURL, DUCKNNG_CLIENT_AIO_PHASE_HTTP,
                     timeout_ms, "ducknng: ncurl_aio requires url") != 0) return;
             continue;
         }
-        if (ducknng_client_launch_ncurl_aio(ctx, url, method, headers_json,
+        if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
+                profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
+            duckdb_free(url);
+            if (method) duckdb_free(method);
+            if (headers_json) duckdb_free(headers_json);
+            if (profile_id) duckdb_free(profile_id);
+            if (body) duckdb_free(body);
+            if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
+                    DUCKNNG_CLIENT_AIO_KIND_NCURL, DUCKNNG_CLIENT_AIO_PHASE_HTTP,
+                    timeout_ms, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile") != 0) {
+                if (effective_headers_json) duckdb_free(effective_headers_json);
+                if (errmsg) duckdb_free(errmsg);
+                return;
+            }
+            if (effective_headers_json) duckdb_free(effective_headers_json);
+            if (errmsg) duckdb_free(errmsg);
+            continue;
+        }
+        if (ducknng_client_launch_ncurl_aio(ctx, url, method,
+                effective_headers_json ? effective_headers_json : headers_json,
                 body, (size_t)body_len, timeout_ms, tls_config_id, &out[row], &errmsg) != 0) {
             duckdb_free(url);
             if (method) duckdb_free(method);
             if (headers_json) duckdb_free(headers_json);
+            if (profile_id) duckdb_free(profile_id);
+            if (effective_headers_json) duckdb_free(effective_headers_json);
             if (body) duckdb_free(body);
             if (ducknng_set_terminal_error_aio_or_throw(info, ctx, output, row,
                     DUCKNNG_CLIENT_AIO_KIND_NCURL, DUCKNNG_CLIENT_AIO_PHASE_HTTP,
@@ -1187,6 +1215,8 @@ static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chun
         duckdb_free(url);
         if (method) duckdb_free(method);
         if (headers_json) duckdb_free(headers_json);
+        if (profile_id) duckdb_free(profile_id);
+        if (effective_headers_json) duckdb_free(effective_headers_json);
         if (body) duckdb_free(body);
     }
 }
@@ -2141,6 +2171,8 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
     duckdb_type ncurl_aio_types[6] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
+    duckdb_type ncurl_aio_profile_types[7] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
     duckdb_type request_socket_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER};
     duckdb_type recv_socket_types[2] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_INTEGER};
     duckdb_type request_tls_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
@@ -2152,6 +2184,7 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_close_query_raw_aio", 5, ducknng_close_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_cancel_query_raw_aio", 5, ducknng_cancel_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_aio", 6, ducknng_ncurl_aio_scalar, ctx, ncurl_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_aio", 7, ducknng_ncurl_aio_scalar, ctx, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_send_socket_raw_aio", 3, ducknng_send_socket_raw_aio_scalar, ctx, request_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_recv_socket_raw_aio", 2, ducknng_recv_socket_raw_aio_scalar, ctx, recv_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_request_socket_raw_aio", 3, ducknng_request_socket_raw_aio_scalar, ctx, request_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
