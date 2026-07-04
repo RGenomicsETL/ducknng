@@ -220,10 +220,62 @@ static int ducknng_quack_write_blob(ducknng_quack_writer *w, const uint8_t *data
 }
 
 static int ducknng_quack_reader_need(ducknng_quack_reader *r, size_t n, char **errmsg) {
-    if (!r || r->off + n > r->len) {
+    if (!r || r->off > r->len || n > r->len - r->off) {
         ducknng_quack_set_error(errmsg, "ducknng: truncated quack payload");
         return -1;
     }
+    return 0;
+}
+
+static int ducknng_quack_uint64_to_idx(uint64_t value, idx_t *out,
+    const char *message, char **errmsg) {
+    idx_t converted = (idx_t)value;
+    if ((uint64_t)converted != value) {
+        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack integer exceeds supported size");
+        return -1;
+    }
+    if (out) *out = converted;
+    return 0;
+}
+
+static int ducknng_quack_size_to_idx(size_t value, idx_t *out,
+    const char *message, char **errmsg) {
+    return ducknng_quack_uint64_to_idx((uint64_t)value, out, message, errmsg);
+}
+
+static int ducknng_quack_idx_add(idx_t a, idx_t b, idx_t *out,
+    const char *message, char **errmsg) {
+    uint64_t av = (uint64_t)a;
+    uint64_t bv = (uint64_t)b;
+    uint64_t sum;
+    if (bv > UINT64_MAX - av) {
+        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+        return -1;
+    }
+    sum = av + bv;
+    if ((uint64_t)(idx_t)sum != sum) {
+        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+        return -1;
+    }
+    if (out) *out = (idx_t)sum;
+    return 0;
+}
+
+static int ducknng_quack_idx_mul(idx_t a, idx_t b, idx_t *out,
+    const char *message, char **errmsg) {
+    uint64_t av = (uint64_t)a;
+    uint64_t bv = (uint64_t)b;
+    uint64_t product;
+    if (bv != 0 && av > UINT64_MAX / bv) {
+        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+        return -1;
+    }
+    product = av * bv;
+    if ((uint64_t)(idx_t)product != product) {
+        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+        return -1;
+    }
+    if (out) *out = (idx_t)product;
     return 0;
 }
 
@@ -287,6 +339,10 @@ static int ducknng_quack_read_blob_view(ducknng_quack_reader *r, const uint8_t *
     size_t *out_len, char **errmsg) {
     uint64_t len = 0;
     if (ducknng_quack_read_uleb128(r, &len, errmsg) != 0) return -1;
+    if (len > (uint64_t)SIZE_MAX) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack blob length exceeds supported size");
+        return -1;
+    }
     if (ducknng_quack_reader_need(r, (size_t)len, errmsg) != 0) return -1;
     if (out_data) *out_data = r->data + r->off;
     if (out_len) *out_len = (size_t)len;
@@ -1236,6 +1292,7 @@ static int ducknng_quack_encode_vector(ducknng_quack_writer *w, duckdb_vector ve
     }
     if (node->logical_type_id == DUCKNNG_QUACK_LOGICAL_ARRAY) {
         duckdb_vector child = duckdb_array_vector_get_child(vec);
+        idx_t child_rows;
         if (node->nchildren != 1) {
             ducknng_quack_set_error(errmsg, "ducknng: quack array vector has no child type");
             return -1;
@@ -1243,7 +1300,9 @@ static int ducknng_quack_encode_vector(ducknng_quack_writer *w, duckdb_vector ve
         if (ducknng_quack_write_field_id(w, DUCKNNG_QUACK_VECTOR_ARRAY_SIZE, errmsg) != 0 ||
             ducknng_quack_write_uleb128(w, node->array_size, errmsg) != 0 ||
             ducknng_quack_write_field_id(w, DUCKNNG_QUACK_VECTOR_ARRAY_CHILD, errmsg) != 0) return -1;
-        if (ducknng_quack_encode_vector(w, child, node->children[0], rows * (idx_t)node->array_size, depth + 1, errmsg) != 0) return -1;
+        if (ducknng_quack_idx_mul(rows, (idx_t)node->array_size, &child_rows,
+                "ducknng: quack array row count overflows supported size", errmsg) != 0) return -1;
+        if (ducknng_quack_encode_vector(w, child, node->children[0], child_rows, depth + 1, errmsg) != 0) return -1;
         return ducknng_quack_write_field_end(w, errmsg);
     }
     width = ducknng_quack_node_fixed_width(node);
@@ -1251,8 +1310,15 @@ static int ducknng_quack_encode_vector(ducknng_quack_writer *w, duckdb_vector ve
         ducknng_quack_set_error(errmsg, "ducknng: unsupported column type for ducknng_quack_batch encoding");
         return -1;
     }
-    if (ducknng_quack_write_field_id(w, DUCKNNG_QUACK_VECTOR_DATA, errmsg) != 0 ||
-        ducknng_quack_write_blob(w, (const uint8_t *)duckdb_vector_get_data(vec), width * (size_t)rows, errmsg) != 0) return -1;
+    {
+        size_t data_len = 0;
+        if (ducknng_size_mul(width, (size_t)rows, &data_len) != 0) {
+            ducknng_quack_set_error(errmsg, "ducknng: fixed-size quack vector payload overflows supported size");
+            return -1;
+        }
+        if (ducknng_quack_write_field_id(w, DUCKNNG_QUACK_VECTOR_DATA, errmsg) != 0 ||
+            ducknng_quack_write_blob(w, (const uint8_t *)duckdb_vector_get_data(vec), data_len, errmsg) != 0) return -1;
+    }
     return ducknng_quack_write_field_end(w, errmsg);
 }
 
@@ -1409,6 +1475,7 @@ static int ducknng_quack_skip_vector_node(ducknng_quack_reader *r,
         node->logical_type_id == DUCKNNG_QUACK_LOGICAL_MAP) {
         uint64_t child_size = 0;
         uint64_t n_entries = 0;
+        idx_t child_rows = 0;
         uint64_t row;
         if (!node->children || node->nchildren != 1) {
             ducknng_quack_set_error(errmsg, "ducknng: quack list/map vector has no child type");
@@ -1422,6 +1489,8 @@ static int ducknng_quack_skip_vector_node(ducknng_quack_reader *r,
             ducknng_quack_set_error(errmsg, "ducknng: quack list vector entry count mismatch");
             return -1;
         }
+        if (ducknng_quack_uint64_to_idx(child_size, &child_rows,
+                "ducknng: quack list child size exceeds supported size", errmsg) != 0) return -1;
         for (row = 0; row < n_entries; row++) {
             uint64_t off = 0, len = 0;
             if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_ENTRY_OFFSET, errmsg) != 0 ||
@@ -1429,13 +1498,18 @@ static int ducknng_quack_skip_vector_node(ducknng_quack_reader *r,
                 ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_ENTRY_LENGTH, errmsg) != 0 ||
                 ducknng_quack_read_uleb128(r, &len, errmsg) != 0 ||
                 ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
+            if (off > child_size || len > child_size - off) {
+                ducknng_quack_set_error(errmsg, "ducknng: quack list entry exceeds child vector size");
+                return -1;
+            }
         }
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_LIST_CHILD, errmsg) != 0) return -1;
-        if (ducknng_quack_skip_vector_node(r, node->children[0], (idx_t)child_size, depth + 1, errmsg) != 0) return -1;
+        if (ducknng_quack_skip_vector_node(r, node->children[0], child_rows, depth + 1, errmsg) != 0) return -1;
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
     }
     if (node->logical_type_id == DUCKNNG_QUACK_LOGICAL_ARRAY) {
         uint64_t asize = 0;
+        idx_t child_rows;
         if (!node->children || node->nchildren != 1) {
             ducknng_quack_set_error(errmsg, "ducknng: quack array vector has no child type");
             return -1;
@@ -1443,16 +1517,24 @@ static int ducknng_quack_skip_vector_node(ducknng_quack_reader *r,
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_ARRAY_SIZE, errmsg) != 0 ||
             ducknng_quack_read_uleb128(r, &asize, errmsg) != 0 ||
             ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_ARRAY_CHILD, errmsg) != 0) return -1;
-        if (ducknng_quack_skip_vector_node(r, node->children[0], rows * (idx_t)asize, depth + 1, errmsg) != 0) return -1;
+        if (asize != node->array_size) {
+            ducknng_quack_set_error(errmsg, "ducknng: quack array vector fixed-size mismatch");
+            return -1;
+        }
+        if (ducknng_quack_idx_mul(rows, (idx_t)asize, &child_rows,
+                "ducknng: quack array row count overflows supported size", errmsg) != 0) return -1;
+        if (ducknng_quack_skip_vector_node(r, node->children[0], child_rows, depth + 1, errmsg) != 0) return -1;
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
     }
     {
         const uint8_t *blob = NULL;
         size_t blob_len = 0;
         size_t width = ducknng_quack_node_fixed_width(node);
+        size_t expected_len = 0;
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_DATA, errmsg) != 0 ||
             ducknng_quack_read_blob_view(r, &blob, &blob_len, errmsg) != 0) return -1;
-        if (width == 0 || blob_len != width * (size_t)rows) {
+        if (width == 0 || ducknng_size_mul(width, (size_t)rows, &expected_len) != 0 ||
+            blob_len != expected_len) {
             ducknng_quack_set_error(errmsg, "ducknng: invalid fixed-size quack vector payload");
             return -1;
         }
@@ -1476,16 +1558,19 @@ static int ducknng_quack_skip_optional_chunk_types(ducknng_quack_reader *r,
 
 static int ducknng_quack_skip_data_chunk(ducknng_quack_reader *r,
     const ducknng_quack_schema *schema, idx_t *out_rows, char **errmsg) {
-    uint64_t rows = 0;
+    uint64_t rows_u64 = 0;
     uint64_t ncols = 0;
+    idx_t rows = 0;
     idx_t col;
     if (!schema) {
         ducknng_quack_set_error(errmsg, "ducknng: missing quack schema while skipping data chunk");
         return -1;
     }
     if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_CHUNK_ROWS, errmsg) != 0 ||
-        ducknng_quack_read_uleb128(r, &rows, errmsg) != 0 ||
-        ducknng_quack_skip_optional_chunk_types(r, schema, errmsg) != 0 ||
+        ducknng_quack_read_uleb128(r, &rows_u64, errmsg) != 0) return -1;
+    if (ducknng_quack_uint64_to_idx(rows_u64, &rows,
+            "ducknng: quack row count exceeds supported size", errmsg) != 0) return -1;
+    if (ducknng_quack_skip_optional_chunk_types(r, schema, errmsg) != 0 ||
         ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_CHUNK_COLUMNS, errmsg) != 0 ||
         ducknng_quack_read_uleb128(r, &ncols, errmsg) != 0) return -1;
     if (ncols != (uint64_t)schema->ncols) {
@@ -1493,9 +1578,9 @@ static int ducknng_quack_skip_data_chunk(ducknng_quack_reader *r,
         return -1;
     }
     for (col = 0; col < schema->ncols; col++) {
-        if (ducknng_quack_skip_vector_node(r, &schema->cols[col], (idx_t)rows, 0, errmsg) != 0) return -1;
+        if (ducknng_quack_skip_vector_node(r, &schema->cols[col], rows, 0, errmsg) != 0) return -1;
     }
-    if (out_rows) *out_rows = (idx_t)rows;
+    if (out_rows) *out_rows = rows;
     return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
 }
 
@@ -1550,7 +1635,11 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
                 duckdb_vector_ensure_validity_writable(out_vec);
                 duckdb_validity_set_row_invalid(duckdb_vector_get_validity(out_vec), row - offset);
             } else {
-                duckdb_unsafe_vector_assign_string_element_len(out_vec, row - offset, (const char *)data, (idx_t)len);
+                idx_t len_idx = 0;
+                if (ducknng_quack_size_to_idx(len, &len_idx,
+                        "ducknng: quack string value exceeds supported size", errmsg) != 0) return -1;
+                duckdb_unsafe_vector_assign_string_element_len(out_vec, row - offset,
+                    (const char *)data, len_idx);
             }
         }
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
@@ -1576,6 +1665,7 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
         node->logical_type_id == DUCKNNG_QUACK_LOGICAL_MAP) {
         uint64_t child_size = 0;
         uint64_t n_entries = 0;
+        idx_t child_rows = 0;
         uint64_t row;
         duckdb_list_entry *out_entries = NULL;
         duckdb_vector child = NULL;
@@ -1591,7 +1681,9 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
             ducknng_quack_set_error(errmsg, "ducknng: quack list vector entry count mismatch");
             return -1;
         }
-        if (duckdb_list_vector_reserve(out_vec, (idx_t)child_size) != DuckDBSuccess) {
+        if (ducknng_quack_uint64_to_idx(child_size, &child_rows,
+                "ducknng: quack list child size exceeds supported size", errmsg) != 0) return -1;
+        if (duckdb_list_vector_reserve(out_vec, child_rows) != DuckDBSuccess) {
             ducknng_quack_set_error(errmsg, "ducknng: failed to reserve quack list child capacity");
             return -1;
         }
@@ -1604,23 +1696,29 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
                 ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_ENTRY_LENGTH, errmsg) != 0 ||
                 ducknng_quack_read_uleb128(r, &len, errmsg) != 0 ||
                 ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
+            if (off > child_size || len > child_size - off) {
+                ducknng_quack_set_error(errmsg, "ducknng: quack list entry exceeds child vector size");
+                return -1;
+            }
             if (row >= offset && row < offset + out_count) {
                 out_entries[row - offset].offset = off;
                 out_entries[row - offset].length = len;
             }
         }
-        if (duckdb_list_vector_set_size(out_vec, (idx_t)child_size) != DuckDBSuccess) {
+        if (duckdb_list_vector_set_size(out_vec, child_rows) != DuckDBSuccess) {
             ducknng_quack_set_error(errmsg, "ducknng: failed to size quack list child vector");
             return -1;
         }
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_LIST_CHILD, errmsg) != 0) return -1;
         child = duckdb_list_vector_get_child(out_vec);
-        if (ducknng_quack_decode_vector_into(r, node->children[0], (idx_t)child_size, 0, child, (idx_t)child_size, depth + 1, errmsg) != 0) return -1;
+        if (ducknng_quack_decode_vector_into(r, node->children[0], child_rows, 0, child,
+                child_rows, depth + 1, errmsg) != 0) return -1;
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
     }
     if (node->logical_type_id == DUCKNNG_QUACK_LOGICAL_ARRAY) {
         uint64_t asize = 0;
         duckdb_vector child = NULL;
+        idx_t array_size = 0;
         idx_t child_rows;
         if (!node->children || node->nchildren != 1) {
             ducknng_quack_set_error(errmsg, "ducknng: quack array vector has no child type");
@@ -1632,25 +1730,39 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
             ducknng_quack_set_error(errmsg, "ducknng: quack array vector fixed-size mismatch");
             return -1;
         }
+        if (ducknng_quack_uint64_to_idx(asize, &array_size,
+                "ducknng: quack array size exceeds supported size", errmsg) != 0) return -1;
         if (src_validity && out_count > 0) ducknng_quack_copy_validity_slice(out_vec, src_validity, offset, out_count);
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_ARRAY_CHILD, errmsg) != 0) return -1;
         child = duckdb_array_vector_get_child(out_vec);
-        child_rows = src_rows * (idx_t)asize;
-        if (ducknng_quack_decode_vector_into(r, node->children[0], child_rows, 0, child, child_rows, depth + 1, errmsg) != 0) return -1;
+        if (ducknng_quack_idx_mul(src_rows, array_size, &child_rows,
+                "ducknng: quack array row count overflows supported size", errmsg) != 0) return -1;
+        if (ducknng_quack_decode_vector_into(r, node->children[0], child_rows, 0, child,
+                child_rows, depth + 1, errmsg) != 0) return -1;
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
     }
     {
         const uint8_t *data_blob = NULL;
         size_t data_len = 0;
         size_t width = ducknng_quack_node_fixed_width(node);
+        size_t expected_len = 0;
+        size_t copy_offset = 0;
+        size_t copy_len = 0;
         if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_DATA, errmsg) != 0 ||
             ducknng_quack_read_blob_view(r, &data_blob, &data_len, errmsg) != 0) return -1;
-        if (width == 0 || data_len != width * (size_t)src_rows) {
+        if (width == 0 || ducknng_size_mul(width, (size_t)src_rows, &expected_len) != 0 ||
+            data_len != expected_len) {
             ducknng_quack_set_error(errmsg, "ducknng: invalid fixed-size quack vector payload");
             return -1;
         }
         if (out_count > 0) {
-            memcpy(duckdb_vector_get_data(out_vec), data_blob + width * (size_t)offset, width * (size_t)out_count);
+            if (ducknng_size_mul(width, (size_t)offset, &copy_offset) != 0 ||
+                ducknng_size_mul(width, (size_t)out_count, &copy_len) != 0 ||
+                copy_offset > data_len || copy_len > data_len - copy_offset) {
+                ducknng_quack_set_error(errmsg, "ducknng: invalid fixed-size quack vector slice");
+                return -1;
+            }
+            memcpy(duckdb_vector_get_data(out_vec), data_blob + copy_offset, copy_len);
             if (src_validity) ducknng_quack_copy_validity_slice(out_vec, src_validity, offset, out_count);
         }
         return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
@@ -1828,7 +1940,8 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
             }
             if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
                 ducknng_quack_skip_data_chunk(&r, out_schema, &chunk_rows, errmsg) != 0) goto fail;
-            row_count += chunk_rows;
+            if (ducknng_quack_idx_add(row_count, chunk_rows, &row_count,
+                    "ducknng: quack row count overflows supported size", errmsg) != 0) goto fail;
         }
         if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) goto fail;
     }
@@ -1879,7 +1992,8 @@ int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_
         if (ducknng_quack_read_byte(&r, &present, errmsg) != 0 || !present ||
             ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
             ducknng_quack_skip_data_chunk(&r, schema, &chunk_rows, errmsg) != 0) return -1;
-        row_count += chunk_rows;
+        if (ducknng_quack_idx_add(row_count, chunk_rows, &row_count,
+                "ducknng: quack row count overflows supported size", errmsg) != 0) return -1;
     }
     if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
     if (out_row_count) *out_row_count = row_count;
@@ -1898,7 +2012,12 @@ static int ducknng_quack_decode_data_chunk_slice(ducknng_quack_reader *r,
     if (out_rows) *out_rows = 0;
     if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_CHUNK_ROWS, errmsg) != 0 ||
         ducknng_quack_read_uleb128(r, &rows_u64, errmsg) != 0) return -1;
-    rows = (idx_t)rows_u64;
+    if (ducknng_quack_uint64_to_idx(rows_u64, &rows,
+            "ducknng: quack row count exceeds supported size", errmsg) != 0) return -1;
+    if (rows > duckdb_vector_size()) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack chunk exceeds output vector capacity");
+        return -1;
+    }
     if (out_rows) *out_rows = rows;
     has_nested = ducknng_quack_schema_has_nested(schema);
     if (offset >= rows) {
@@ -1922,10 +2041,6 @@ static int ducknng_quack_decode_data_chunk_slice(ducknng_quack_reader *r,
          * fit in one output chunk (source chunks are already <= vector size). */
         if (offset != 0) {
             ducknng_quack_set_error(errmsg, "ducknng: nested quack chunk cannot resume mid-chunk");
-            return -1;
-        }
-        if (rows > duckdb_vector_size()) {
-            ducknng_quack_set_error(errmsg, "ducknng: nested quack chunk exceeds output vector capacity");
             return -1;
         }
         copy_count = rows;
@@ -2050,16 +2165,22 @@ int ducknng_quack_payload_scan(duckdb_data_chunk output,
         uint8_t present = 0;
         idx_t chunk_rows = 0;
         idx_t local_offset;
+        idx_t next_seen = 0;
+        idx_t next_offset = 0;
         if (ducknng_quack_read_byte(&r, &present, errmsg) != 0 || !present ||
             ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0) return -1;
         if (global_offset >= seen_rows) local_offset = global_offset - seen_rows;
         else local_offset = 0;
         if (ducknng_quack_decode_data_chunk_slice(&r, output, schema, local_offset, &chunk_rows, errmsg) != 0) return -1;
-        if (global_offset < seen_rows + chunk_rows) {
-            *inout_offset = global_offset + duckdb_data_chunk_get_size(output);
+        if (ducknng_quack_idx_add(seen_rows, chunk_rows, &next_seen,
+                "ducknng: quack row count overflows supported size", errmsg) != 0) return -1;
+        if (global_offset < next_seen) {
+            if (ducknng_quack_idx_add(global_offset, duckdb_data_chunk_get_size(output), &next_offset,
+                    "ducknng: quack scan offset overflows supported size", errmsg) != 0) return -1;
+            *inout_offset = next_offset;
             return 0;
         }
-        seen_rows += chunk_rows;
+        seen_rows = next_seen;
     }
     if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
     duckdb_data_chunk_set_size(output, 0);

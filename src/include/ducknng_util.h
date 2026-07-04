@@ -28,6 +28,7 @@ int ducknng_ascii_ieq(const char *a, const char *b);
 int ducknng_ascii_istarts_with(const char *s, const char *prefix);
 int ducknng_ascii_iends_with(const char *s, const char *suffix);
 int ducknng_http_token_is_valid(const char *s);
+int ducknng_http_header_value_is_valid(const char *s);
 int ducknng_http_headers_json_get_header(const char *headers_json, const char *wanted_name,
     int reject_duplicates, char **out_value, char **errmsg);
 int ducknng_json_object_get_string(const char *json, const char *wanted_name,

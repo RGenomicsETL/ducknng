@@ -4,7 +4,7 @@
     "extension": {
       "name": "ducknng",
       "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC \u2014 with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "language": "C",
       "build": "cmake",
       "license": "MIT",
@@ -452,7 +452,7 @@
       "category": "TLS",
       "signature": "self_signed_tls_config(host, days, auth_mode)",
       "returns": "UBIGINT",
-      "description": "Generate a self-signed TLS cert in memory. auth_mode: 0=none, 1=server, 2=mutual. Returns TLS config handle.",
+      "description": "Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.",
       "examples": []
     },
     {

@@ -29,10 +29,13 @@ static int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
         opts->auth_mode != 0);
 }
 
-static int ducknng_http_tls_auth_mode_map(int auth_mode, nng_tls_auth_mode *out) {
+static int ducknng_http_tls_auth_mode_map(nng_tls_mode mode, int auth_mode,
+    nng_tls_auth_mode *out) {
     if (!out) return NNG_EINVAL;
     switch (auth_mode) {
-    case 0: *out = NNG_TLS_AUTH_MODE_NONE; return 0;
+    case 0:
+        *out = (mode == NNG_TLS_MODE_CLIENT) ? NNG_TLS_AUTH_MODE_REQUIRED : NNG_TLS_AUTH_MODE_NONE;
+        return 0;
     case 1: *out = NNG_TLS_AUTH_MODE_OPTIONAL; return 0;
     case 2: *out = NNG_TLS_AUTH_MODE_REQUIRED; return 0;
     default: return NNG_EINVAL;
@@ -115,7 +118,7 @@ static int ducknng_http_tls_config_build(nng_tls_config **out, nng_tls_mode mode
     if (!opts || !ducknng_http_tls_requested(opts)) return 0;
     rv = nng_tls_config_alloc(&cfg, mode);
     if (rv != 0) return rv;
-    rv = ducknng_http_tls_auth_mode_map(opts->auth_mode, &auth_mode);
+    rv = ducknng_http_tls_auth_mode_map(mode, opts->auth_mode, &auth_mode);
     if (rv != 0) goto fail;
     rv = nng_tls_config_auth_mode(cfg, auth_mode);
     if (rv != 0) goto fail;
@@ -218,11 +221,14 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
             case '"': out = '"'; break;
             case '\\': out = '\\'; break;
             case '/': out = '/'; break;
-            case 'b': out = '\b'; break;
-            case 'f': out = '\f'; break;
-            case 'n': out = '\n'; break;
-            case 'r': out = '\r'; break;
-            case 't': out = '\t'; break;
+            case 'b':
+            case 'f':
+            case 'n':
+            case 'r':
+            case 't':
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                return NULL;
             case 'u': {
                 int i;
                 unsigned value = 0;
@@ -242,6 +248,11 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
                     if (errmsg) *errmsg = ducknng_strdup("ducknng: only ASCII JSON unicode escapes are supported in headers_json");
                     return NULL;
                 }
+                if (value < 0x20 || value == 0x7f) {
+                    if (buf) duckdb_free(buf);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                    return NULL;
+                }
                 out = (char)value;
                 break;
             }
@@ -256,6 +267,12 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
                 return NULL;
             }
         } else {
+            unsigned char uc = (unsigned char)c;
+            if (uc < 0x20 || uc == 0x7f) {
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                return NULL;
+            }
             if (ducknng_http_buf_append(&buf, &len, &cap, &c, 1) != 0) {
                 if (buf) duckdb_free(buf);
                 if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing headers_json");
@@ -369,6 +386,12 @@ static int ducknng_http_apply_headers_json_common(const char *headers_json,
             duckdb_free(name);
             duckdb_free(header_value);
             if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header name must be an HTTP token");
+            return -1;
+        }
+        if (!ducknng_http_header_value_is_valid(header_value)) {
+            duckdb_free(name);
+            duckdb_free(header_value);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
             return -1;
         }
         rv = add_header(target, name, header_value);
@@ -1029,6 +1052,11 @@ static int ducknng_http_route_response_alloc(nng_http_res **out,
         goto fail;
     }
     if (reply->content_type && reply->content_type[0]) {
+        if (!ducknng_http_header_value_is_valid(reply->content_type)) {
+            rv = NNG_EINVAL;
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
+            goto fail;
+        }
         rv = nng_http_res_set_header(res, "Content-Type", reply->content_type);
         if (rv != 0) goto fail;
     }
@@ -1066,6 +1094,10 @@ static int ducknng_http_stream_write_headers(nng_http_conn *conn, nng_aio *write
     rv = nng_http_res_set_header(res, "Transfer-Encoding", "chunked");
     if (rv != 0) goto fail;
     if (content_type && content_type[0]) {
+        if (!ducknng_http_header_value_is_valid(content_type)) {
+            rv = NNG_EINVAL;
+            goto fail;
+        }
         rv = nng_http_res_set_header(res, "Content-Type", content_type);
         if (rv != 0) goto fail;
     }

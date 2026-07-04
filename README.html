@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:40785</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:43935</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -815,8 +815,9 @@ that the framed RPC surface is identical over HTTP.</p>
 <span id="cb5-26"><a href="#cb5-26" tabindex="-1"></a><span class="op">+</span><span class="co">------+-----------+----------+--------------+</span></span></code></pre></div>
 <p><strong>Outbound HTTP profile.</strong> Caller SQL passes a profile
 id and ordinary request fields. <code>ducknng</code> checks the profile
-scope, injects the auth header inside the HTTP client path, and keeps
-profile introspection redacted.</p>
+scope, injects the profile auth header inside the HTTP client path,
+rejects caller attempts to override that header, and keeps profile
+introspection redacted.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="kw">SELECT</span> <span class="cf">CASE</span> <span class="cf">WHEN</span> ducknng_register_http_route(</span>
 <span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  <span class="st">&#39;tour_http&#39;</span>, <span class="st">&#39;GET&#39;</span>, <span class="st">&#39;/profile-auth&#39;</span>,</span>
 <span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="st">&#39;SELECT * FROM ducknng_http_text(</span></span>
@@ -2464,9 +2465,12 @@ Material can come from the filesystem or from in-memory PEM content.</p>
 <span id="cb14-39"><a href="#cb14-39" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span></code></pre></div>
 <p>File-backed material uses
 <code>ducknng_tls_config_from_files(cert_key_file, ca_file, password, auth_mode)</code>.
-Set <code>auth_mode = 2</code> to require client certificates (mTLS).
-The dispatcher derives caller identity from the first verified SAN
-(<code>tls:san:&lt;value&gt;</code>) falling back to CN
+TLS client handles verify the remote server certificate by default when
+<code>auth_mode = 0</code>; on listeners, <code>auth_mode = 0</code>
+means ordinary server TLS without requiring client certificates. Set
+listener <code>auth_mode = 2</code> to require client certificates
+(mTLS). The dispatcher derives caller identity from the first verified
+SAN (<code>tls:san:&lt;value&gt;</code>) falling back to CN
 (<code>tls:cn:&lt;name&gt;</code>). Peer identity and IP/CIDR allowlists
 narrow admission before SQL dispatch.</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a><span class="kw">SET</span> VARIABLE tls_files <span class="op">=</span> ducknng_tls_config_from_files(</span>
@@ -3090,10 +3094,13 @@ just like any other AIO handle.</p>
 <h3 id="ducknng_ncurl--http-client-primitive"><code>ducknng_ncurl</code>
 — HTTP client primitive</h3>
 <p><code>ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)</code>
-is the low-level HTTP/HTTPS transport primitive. A local
-<code>nanonext</code> HTTPS server is started during README rendering
-for the TLS example; the server definition is shown because it is part
-of the example rather than hidden setup.</p>
+is the low-level HTTP/HTTPS transport primitive. Its
+<code>headers_json</code> argument uses
+<code>[{&quot;name&quot;:&quot;...&quot;,&quot;value&quot;:&quot;...&quot;}]</code> arrays; header names must be
+HTTP tokens and values must not contain CRLF or other control
+characters. A local <code>nanonext</code> HTTPS server is started during
+README rendering for the TLS example; the server definition is shown
+because it is part of the example rather than hidden setup.</p>
 <div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a><span class="fu">library</span>(nanonext)</span>
 <span id="cb28-2"><a href="#cb28-2" tabindex="-1"></a></span>
 <span id="cb28-3"><a href="#cb28-3" tabindex="-1"></a>cert <span class="ot">&lt;-</span> <span class="fu">write_cert</span>(<span class="at">cn =</span> <span class="st">&#39;127.0.0.1&#39;</span>)</span>
@@ -3118,47 +3125,48 @@ of the example rather than hidden setup.</p>
 <span id="cb28-22"><a href="#cb28-22" tabindex="-1"></a>  <span class="at">tls =</span> <span class="fu">tls_config</span>(<span class="at">server =</span> cert<span class="sc">$</span>server)</span>
 <span id="cb28-23"><a href="#cb28-23" tabindex="-1"></a>)</span></code></pre></div>
 <div class="sourceCode" id="cb29"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb29-1"><a href="#cb29-1" tabindex="-1"></a><span class="co">-- Register a client TLS handle that trusts the self-signed demo CA.</span></span>
-<span id="cb29-2"><a href="#cb29-2" tabindex="-1"></a><span class="kw">SET</span> VARIABLE tls_http <span class="op">=</span> ducknng_tls_config_from_files(</span>
-<span id="cb29-3"><a href="#cb29-3" tabindex="-1"></a>  <span class="kw">NULL</span>, <span class="st">&#39;/tmp/ducknng_readme_http_demo_ca.pem&#39;</span>, <span class="kw">NULL</span>,</span>
-<span id="cb29-4"><a href="#cb29-4" tabindex="-1"></a>  <span class="dv">2</span>  <span class="co">-- auth_mode = require certificate validation</span></span>
-<span id="cb29-5"><a href="#cb29-5" tabindex="-1"></a>);</span>
-<span id="cb29-6"><a href="#cb29-6" tabindex="-1"></a><span class="co">-- GET request over HTTPS.</span></span>
-<span id="cb29-7"><a href="#cb29-7" tabindex="-1"></a><span class="kw">SELECT</span> ok, status, error, body_text</span>
-<span id="cb29-8"><a href="#cb29-8" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb29-9"><a href="#cb29-9" tabindex="-1"></a>  <span class="st">&#39;https://127.0.0.1:18443/hello&#39;</span>,</span>
-<span id="cb29-10"><a href="#cb29-10" tabindex="-1"></a>  <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="dv">2000</span>,</span>
-<span id="cb29-11"><a href="#cb29-11" tabindex="-1"></a>  getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span></span>
-<span id="cb29-12"><a href="#cb29-12" tabindex="-1"></a>);</span>
-<span id="cb29-13"><a href="#cb29-13" tabindex="-1"></a><span class="co">-- POST with raw bytes; inspect echoed body and response headers.</span></span>
-<span id="cb29-14"><a href="#cb29-14" tabindex="-1"></a><span class="kw">SET</span> VARIABLE echo_hdrs <span class="op">=</span> <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/octet-stream&quot;}]&#39;</span>;</span>
-<span id="cb29-15"><a href="#cb29-15" tabindex="-1"></a><span class="kw">SELECT</span> ok, status, hex(<span class="kw">body</span>) <span class="kw">AS</span> body_hex,</span>
-<span id="cb29-16"><a href="#cb29-16" tabindex="-1"></a>       position(<span class="st">&#39;X-Test&#39;</span> <span class="kw">IN</span> headers_json) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_x_test</span>
-<span id="cb29-17"><a href="#cb29-17" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
-<span id="cb29-18"><a href="#cb29-18" tabindex="-1"></a>  <span class="st">&#39;https://127.0.0.1:18443/echo&#39;</span>,</span>
-<span id="cb29-19"><a href="#cb29-19" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
-<span id="cb29-20"><a href="#cb29-20" tabindex="-1"></a>  getvariable(<span class="st">&#39;echo_hdrs&#39;</span>),</span>
-<span id="cb29-21"><a href="#cb29-21" tabindex="-1"></a>  from_hex(<span class="st">&#39;01020304&#39;</span>),</span>
-<span id="cb29-22"><a href="#cb29-22" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
-<span id="cb29-23"><a href="#cb29-23" tabindex="-1"></a>  getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span></span>
-<span id="cb29-24"><a href="#cb29-24" tabindex="-1"></a>);</span>
-<span id="cb29-25"><a href="#cb29-25" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
-<span id="cb29-26"><a href="#cb29-26" tabindex="-1"></a></span>
-<span id="cb29-27"><a href="#cb29-27" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
-<span id="cb29-28"><a href="#cb29-28" tabindex="-1"></a>|  ok  | status | error |            body_text             |</span>
-<span id="cb29-29"><a href="#cb29-29" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
-<span id="cb29-30"><a href="#cb29-30" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">200</span>    | <span class="kw">NULL</span>  | hello <span class="kw">from</span> nanonext https server |</span>
-<span id="cb29-31"><a href="#cb29-31" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
-<span id="cb29-32"><a href="#cb29-32" tabindex="-1"></a></span>
-<span id="cb29-33"><a href="#cb29-33" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
-<span id="cb29-34"><a href="#cb29-34" tabindex="-1"></a>|  ok  | status | body_hex | has_x_test |</span>
-<span id="cb29-35"><a href="#cb29-35" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
-<span id="cb29-36"><a href="#cb29-36" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">200</span>    | <span class="dv">01020304</span> | <span class="kw">true</span>       |</span>
-<span id="cb29-37"><a href="#cb29-37" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
-<span id="cb29-38"><a href="#cb29-38" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span>
-<span id="cb29-39"><a href="#cb29-39" tabindex="-1"></a>| ducknng_drop_tls_config(<span class="fu">CAST</span>(getvariable(<span class="st">&#39;tls_http&#39;</span>) <span class="kw">AS</span> <span class="ot">&quot;UBIGINT&quot;</span>)) |</span>
-<span id="cb29-40"><a href="#cb29-40" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span>
-<span id="cb29-41"><a href="#cb29-41" tabindex="-1"></a>| <span class="kw">true</span>                                                                |</span>
-<span id="cb29-42"><a href="#cb29-42" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span></code></pre></div>
+<span id="cb29-2"><a href="#cb29-2" tabindex="-1"></a><span class="co">-- In client mode auth_mode = 0 still verifies the HTTPS server certificate.</span></span>
+<span id="cb29-3"><a href="#cb29-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE tls_http <span class="op">=</span> ducknng_tls_config_from_files(</span>
+<span id="cb29-4"><a href="#cb29-4" tabindex="-1"></a>  <span class="kw">NULL</span>, <span class="st">&#39;/tmp/ducknng_readme_http_demo_ca.pem&#39;</span>, <span class="kw">NULL</span>,</span>
+<span id="cb29-5"><a href="#cb29-5" tabindex="-1"></a>  <span class="dv">0</span></span>
+<span id="cb29-6"><a href="#cb29-6" tabindex="-1"></a>);</span>
+<span id="cb29-7"><a href="#cb29-7" tabindex="-1"></a><span class="co">-- GET request over HTTPS.</span></span>
+<span id="cb29-8"><a href="#cb29-8" tabindex="-1"></a><span class="kw">SELECT</span> ok, status, error, body_text</span>
+<span id="cb29-9"><a href="#cb29-9" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb29-10"><a href="#cb29-10" tabindex="-1"></a>  <span class="st">&#39;https://127.0.0.1:18443/hello&#39;</span>,</span>
+<span id="cb29-11"><a href="#cb29-11" tabindex="-1"></a>  <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="kw">NULL</span>, <span class="dv">2000</span>,</span>
+<span id="cb29-12"><a href="#cb29-12" tabindex="-1"></a>  getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span></span>
+<span id="cb29-13"><a href="#cb29-13" tabindex="-1"></a>);</span>
+<span id="cb29-14"><a href="#cb29-14" tabindex="-1"></a><span class="co">-- POST with raw bytes; inspect echoed body and response headers.</span></span>
+<span id="cb29-15"><a href="#cb29-15" tabindex="-1"></a><span class="kw">SET</span> VARIABLE echo_hdrs <span class="op">=</span> <span class="st">&#39;[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/octet-stream&quot;}]&#39;</span>;</span>
+<span id="cb29-16"><a href="#cb29-16" tabindex="-1"></a><span class="kw">SELECT</span> ok, status, hex(<span class="kw">body</span>) <span class="kw">AS</span> body_hex,</span>
+<span id="cb29-17"><a href="#cb29-17" tabindex="-1"></a>       position(<span class="st">&#39;X-Test&#39;</span> <span class="kw">IN</span> headers_json) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_x_test</span>
+<span id="cb29-18"><a href="#cb29-18" tabindex="-1"></a><span class="kw">FROM</span> ducknng_ncurl(</span>
+<span id="cb29-19"><a href="#cb29-19" tabindex="-1"></a>  <span class="st">&#39;https://127.0.0.1:18443/echo&#39;</span>,</span>
+<span id="cb29-20"><a href="#cb29-20" tabindex="-1"></a>  <span class="st">&#39;POST&#39;</span>,</span>
+<span id="cb29-21"><a href="#cb29-21" tabindex="-1"></a>  getvariable(<span class="st">&#39;echo_hdrs&#39;</span>),</span>
+<span id="cb29-22"><a href="#cb29-22" tabindex="-1"></a>  from_hex(<span class="st">&#39;01020304&#39;</span>),</span>
+<span id="cb29-23"><a href="#cb29-23" tabindex="-1"></a>  <span class="dv">2000</span>,</span>
+<span id="cb29-24"><a href="#cb29-24" tabindex="-1"></a>  getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span></span>
+<span id="cb29-25"><a href="#cb29-25" tabindex="-1"></a>);</span>
+<span id="cb29-26"><a href="#cb29-26" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_drop_tls_config(getvariable(<span class="st">&#39;tls_http&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
+<span id="cb29-27"><a href="#cb29-27" tabindex="-1"></a></span>
+<span id="cb29-28"><a href="#cb29-28" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
+<span id="cb29-29"><a href="#cb29-29" tabindex="-1"></a>|  ok  | status | error |            body_text             |</span>
+<span id="cb29-30"><a href="#cb29-30" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
+<span id="cb29-31"><a href="#cb29-31" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">200</span>    | <span class="kw">NULL</span>  | hello <span class="kw">from</span> nanonext https server |</span>
+<span id="cb29-32"><a href="#cb29-32" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+-------+----------------------------------+</span></span>
+<span id="cb29-33"><a href="#cb29-33" tabindex="-1"></a></span>
+<span id="cb29-34"><a href="#cb29-34" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
+<span id="cb29-35"><a href="#cb29-35" tabindex="-1"></a>|  ok  | status | body_hex | has_x_test |</span>
+<span id="cb29-36"><a href="#cb29-36" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
+<span id="cb29-37"><a href="#cb29-37" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">200</span>    | <span class="dv">01020304</span> | <span class="kw">true</span>       |</span>
+<span id="cb29-38"><a href="#cb29-38" tabindex="-1"></a><span class="op">+</span><span class="co">------+--------+----------+------------+</span></span>
+<span id="cb29-39"><a href="#cb29-39" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span>
+<span id="cb29-40"><a href="#cb29-40" tabindex="-1"></a>| ducknng_drop_tls_config(<span class="fu">CAST</span>(getvariable(<span class="st">&#39;tls_http&#39;</span>) <span class="kw">AS</span> <span class="ot">&quot;UBIGINT&quot;</span>)) |</span>
+<span id="cb29-41"><a href="#cb29-41" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span>
+<span id="cb29-42"><a href="#cb29-42" tabindex="-1"></a>| <span class="kw">true</span>                                                                |</span>
+<span id="cb29-43"><a href="#cb29-43" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------------------------------------------------+</span></span></code></pre></div>
 <p><code>ducknng_ncurl_aio(...)</code> is the async form;
 <code>ducknng_ncurl_table(...)</code> parses the response body through
 the codec layer and returns a table directly.</p>
@@ -3715,7 +3723,7 @@ for a service.</p>
 <span id="cb47-3"><a href="#cb47-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
 <span id="cb47-4"><a href="#cb47-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
 <span id="cb47-5"><a href="#cb47-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb47-6"><a href="#cb47-6" tabindex="-1"></a>| <span class="dv">1340834191</span> | <span class="dv">1783177957954</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:36520</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb47-6"><a href="#cb47-6" tabindex="-1"></a>| <span class="dv">1722025696</span> | <span class="dv">1783185633549</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:60880</span> | <span class="kw">NULL</span>          |</span>
 <span id="cb47-7"><a href="#cb47-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb48"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb48-1"><a href="#cb48-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb48-2"><a href="#cb48-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
@@ -3796,7 +3804,7 @@ threaded runtime, and the smoke harness are tracked in
 <code>docs/wasm_browser_transport_checklist.md</code>, and
 <code>test/browser/README.md</code>.</p>
 <h2 id="status">Status</h2>
-<p>Version 0.1.0. Every DuckDB chunk shown as runnable in this README is
+<p>Version 0.1.2. Every DuckDB chunk shown as runnable in this README is
 implemented, tested, and runs at render time. Browser/WebAssembly and
 release-matrix checks require external runtimes, so their exact commands
 are shown above and covered by the Playwright and GitHub Actions

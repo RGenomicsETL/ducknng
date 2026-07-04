@@ -788,7 +788,7 @@
       "notes": [
         "Intended for development and local testing utilities rather than production PKI.",
         "Uses the openssl command-line tool available in the runtime environment.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_self_signed_tls_config('127.0.0.1', 365, 1);"
@@ -806,7 +806,7 @@
       "notes": [
         "Stores PEM material in the runtime and returns a reusable config id.",
         "Can be used with tls+tcp, wss, and https listeners and the one-shot raw request/RPC/session paths.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_tls_config_from_pem('-----BEGIN CERTIFICATE-----\n...','-----BEGIN PRIVATE KEY-----\n...', '-----BEGIN CERTIFICATE-----\n...', NULL, 1);"
@@ -824,7 +824,7 @@
       "notes": [
         "Stores TLS material references in the runtime and returns a reusable config id.",
         "Can be used with tls+tcp, wss, and https listeners and the one-shot raw request/RPC/session paths.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_tls_config_from_files('/tmp/server.pem', '/tmp/ca.pem', NULL, 1);"
@@ -884,7 +884,7 @@
         "The helper uses a volatile execution path so constant-argument HTTP calls are not reused as one cached response across recursive CTE iterations or repeated row execution.",
         "Optional profile_id resolves a registered outbound HTTP profile and injects its authentication header after scope checks pass.",
         "Profile scope enforcement is fail-closed before sending: scheme, host, optional port, path prefix, method, and TLS requirement must match.",
-        "Caller-supplied Authorization or another profile-protected auth header is rejected rather than allowed to override the profile credential."
+        "Caller-supplied headers that collide with the profile auth header are rejected rather than allowed to override the profile credential."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl('http://127.0.0.1:8080/_ducknng', 'POST', '[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]', from_hex('01000000000000000000000000000000000000000000'), 2000, 0::UBIGINT);"
@@ -1023,7 +1023,7 @@
         "JSON parses in memory; CSV, TSV, and Parquet currently use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
         "This helper is transport-local and does not change the framed RPC method surface.",
         "Optional profile_id uses the same outbound HTTP profile resolution and fail-closed scope checks as ducknng_ncurl().",
-        "The request is sent only after profile scope checks pass and protected auth-header collisions are rejected."
+        "The request is sent only after profile scope checks pass and profile-auth-header collisions are rejected."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl_table('http://127.0.0.1:8080/data.json', 'GET', NULL, NULL, 2000, 0::UBIGINT);"

@@ -23,7 +23,7 @@ GIT_REF = subprocess.run(
 EXTENSION = {
     "name": "ducknng",
     "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "language": "C",
     "build": "cmake",
     "license": "MIT",
@@ -438,7 +438,7 @@ FUNCTIONS = [
         TLS,
         "self_signed_tls_config(host, days, auth_mode)",
         "UBIGINT",
-        "Generate a self-signed TLS cert in memory. auth_mode: 0=none, 1=server, 2=mutual. Returns TLS config handle.",
+        "Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.",
     ),
     af(
         "ducknng_tls_config_from_files",

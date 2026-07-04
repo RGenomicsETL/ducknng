@@ -173,6 +173,16 @@ int ducknng_http_token_is_valid(const char *s) {
     return 1;
 }
 
+int ducknng_http_header_value_is_valid(const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    if (!s) return 0;
+    while (*p) {
+        unsigned char ch = *p++;
+        if (ch < 0x20 || ch == 0x7f) return 0;
+    }
+    return 1;
+}
+
 static char *ducknng_dup_bytes(const char *src, size_t len) {
     char *out = (char *)duckdb_malloc(len + 1);
     if (!out) return NULL;
@@ -535,6 +545,10 @@ int ducknng_http_headers_json_get_header(const char *headers_json, const char *w
         }
         if (!name || !name[0] || !header_value) {
             if (errmsg) *errmsg = ducknng_strdup("ducknng: each headers_json object must contain non-empty name and a string value");
+            goto fail;
+        }
+        if (!ducknng_http_header_value_is_valid(header_value)) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
             goto fail;
         }
         if (ducknng_ascii_ieq(name, wanted_name)) {

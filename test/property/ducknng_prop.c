@@ -593,9 +593,128 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
  * src/ducknng_quack.c; kept local so the property harness can hand-build a nested
  * schema and fuzz the recursive skip path without widening the public header. */
 #define PROP_QK_INTEGER 13
+#define PROP_QK_BIGINT  14
 #define PROP_QK_VARCHAR 25
 #define PROP_QK_STRUCT  100
 #define PROP_QK_LIST    101
+
+#define PROP_QK_FIELD_END          0xffffu
+#define PROP_QK_OUTER_RESULTS      4u
+#define PROP_QK_CHUNK_WRAPPER      300u
+#define PROP_QK_CHUNK_ROWS         100u
+#define PROP_QK_CHUNK_COLUMNS      102u
+#define PROP_QK_VECTOR_HAS_VALIDITY 100u
+#define PROP_QK_VECTOR_DATA        102u
+
+struct prop_quack_buf {
+    uint8_t data[256];
+    size_t len;
+};
+
+static int
+prop_qb_put(struct prop_quack_buf *b, const void *src, size_t len)
+{
+    if (!b || len > sizeof(b->data) || b->len > sizeof(b->data) - len) return -1;
+    if (len) memcpy(b->data + b->len, src, len);
+    b->len += len;
+    return 0;
+}
+
+static int
+prop_qb_byte(struct prop_quack_buf *b, uint8_t value)
+{
+    return prop_qb_put(b, &value, 1);
+}
+
+static int
+prop_qb_u16(struct prop_quack_buf *b, uint16_t value)
+{
+    uint8_t tmp[2];
+
+    tmp[0] = (uint8_t)(value & 0xffu);
+    tmp[1] = (uint8_t)((value >> 8) & 0xffu);
+    return prop_qb_put(b, tmp, sizeof(tmp));
+}
+
+static int
+prop_qb_uleb(struct prop_quack_buf *b, uint64_t value)
+{
+    do {
+        uint8_t byte = (uint8_t)(value & 0x7fu);
+        value >>= 7;
+        if (value) byte |= 0x80u;
+        if (prop_qb_byte(b, byte) != 0) return -1;
+    } while (value);
+    return 0;
+}
+
+static int
+prop_qb_field_end(struct prop_quack_buf *b)
+{
+    return prop_qb_u16(b, PROP_QK_FIELD_END);
+}
+
+static int
+prop_quack_build_one_col_schema(ducknng_quack_schema *schema, int type_id)
+{
+    memset(schema, 0, sizeof(*schema));
+    schema->cols = (ducknng_quack_column_schema *)malloc(sizeof(*schema->cols));
+    if (!schema->cols) return -1;
+    memset(schema->cols, 0, sizeof(*schema->cols));
+    schema->ncols = 1;
+    schema->cols[0].logical_type_id = type_id;
+    return 0;
+}
+
+static int
+prop_qb_begin_one_col_chunk(struct prop_quack_buf *b, uint64_t rows)
+{
+    return prop_qb_u16(b, PROP_QK_OUTER_RESULTS) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_byte(b, 1) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_WRAPPER) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_ROWS) != 0 ||
+        prop_qb_uleb(b, rows) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_COLUMNS) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_HAS_VALIDITY) != 0 ||
+        prop_qb_byte(b, 0) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_DATA) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_payload_fixed_width_overflow(struct prop_quack_buf *b)
+{
+    memset(b, 0, sizeof(*b));
+    if (prop_qb_begin_one_col_chunk(b, UINT64_C(1) << 61) != 0) return -1;
+    if (prop_qb_uleb(b, 0) != 0) return -1;
+    return prop_qb_field_end(b) != 0 || prop_qb_field_end(b) != 0 ||
+        prop_qb_field_end(b) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_payload_varlen_wraparound(struct prop_quack_buf *b)
+{
+    size_t first_data_off;
+    size_t after_huge_len_off;
+    uint64_t huge_len;
+    uint8_t fake_ends[6] = {0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu};
+
+    memset(b, 0, sizeof(*b));
+    if (prop_qb_begin_one_col_chunk(b, 2) != 0) return -1;
+    if (prop_qb_uleb(b, 2) != 0) return -1;
+    if (prop_qb_uleb(b, sizeof(fake_ends)) != 0) return -1;
+    first_data_off = b->len;
+    if (prop_qb_put(b, fake_ends, sizeof(fake_ends)) != 0) return -1;
+
+    /* Choose a second string length that made the old size_t bounds check wrap
+     * r->off back to first_data_off, where fake field-end bytes are waiting. */
+    after_huge_len_off = b->len + 10;
+    huge_len = UINT64_MAX - (uint64_t)after_huge_len_off + 1u +
+        (uint64_t)first_data_off;
+    if (prop_qb_uleb(b, huge_len) != 0) return -1;
+    return b->len == after_huge_len_off ? 0 : -1;
+}
 
 static ducknng_quack_column_schema *prop_quack_leaf(int type_id)
 {
@@ -724,6 +843,44 @@ TEST quack_rejects_or_scans_random_zero_column_payloads(void)
     ASSERT_EQ(THEFT_RUN_PASS,
         prop_run_one("quack random zero-column payloads", prop_quack_random_payloads,
             &prop_random_bytes_info));
+    PASS();
+}
+
+TEST quack_rejects_fixed_width_size_overflow_fixture(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+    int rc;
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_BIGINT));
+    ASSERT_EQ(0, prop_quack_payload_fixed_width_overflow(&payload));
+    rc = ducknng_quack_payload_read_row_count(payload.data, payload.len, &schema,
+        &row_count, &errmsg);
+    ASSERT_NEQ(0, rc);
+    ASSERT_EQ((idx_t)0, row_count);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    PASS();
+}
+
+TEST quack_rejects_blob_length_wraparound_fixture(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+    int rc;
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_VARCHAR));
+    ASSERT_EQ(0, prop_quack_payload_varlen_wraparound(&payload));
+    rc = ducknng_quack_payload_read_row_count(payload.data, payload.len, &schema,
+        &row_count, &errmsg);
+    ASSERT_NEQ(0, rc);
+    ASSERT_EQ((idx_t)0, row_count);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
     PASS();
 }
 
@@ -863,6 +1020,8 @@ SUITE(transport_properties)
 SUITE(quack_properties)
 {
     RUN_TEST(quack_rejects_or_scans_random_zero_column_payloads);
+    RUN_TEST(quack_rejects_fixed_width_size_overflow_fixture);
+    RUN_TEST(quack_rejects_blob_length_wraparound_fixture);
     RUN_TEST(quack_rejects_random_nested_schema_payloads);
 }
 

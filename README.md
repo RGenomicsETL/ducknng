@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:40785 |
+| tls+tcp://127.0.0.1:43935 |
 +---------------------------+
 
 +--------+
@@ -202,9 +202,9 @@ FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 ```
 
 **Outbound HTTP profile.** Caller SQL passes a profile id and ordinary
-request fields. `ducknng` checks the profile scope, injects the auth
-header inside the HTTP client path, and keeps profile introspection
-redacted.
+request fields. `ducknng` checks the profile scope, injects the profile
+auth header inside the HTTP client path, rejects caller attempts to
+override that header, and keeps profile introspection redacted.
 
 ``` sql
 SELECT CASE WHEN ducknng_register_http_route(
@@ -839,10 +839,13 @@ SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 
 File-backed material uses
 `ducknng_tls_config_from_files(cert_key_file, ca_file, password, auth_mode)`.
-Set `auth_mode = 2` to require client certificates (mTLS). The
-dispatcher derives caller identity from the first verified SAN
-(`tls:san:<value>`) falling back to CN (`tls:cn:<name>`). Peer identity
-and IP/CIDR allowlists narrow admission before SQL dispatch.
+TLS client handles verify the remote server certificate by default when
+`auth_mode = 0`; on listeners, `auth_mode = 0` means ordinary server TLS
+without requiring client certificates. Set listener `auth_mode = 2` to
+require client certificates (mTLS). The dispatcher derives caller
+identity from the first verified SAN (`tls:san:<value>`) falling back to
+CN (`tls:cn:<name>`). Peer identity and IP/CIDR allowlists narrow
+admission before SQL dispatch.
 
 ``` sql
 SET VARIABLE tls_files = ducknng_tls_config_from_files(
@@ -1520,10 +1523,12 @@ SELECT ducknng_stop_server('session_aio');
 ### `ducknng_ncurl` — HTTP client primitive
 
 `ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)`
-is the low-level HTTP/HTTPS transport primitive. A local `nanonext`
-HTTPS server is started during README rendering for the TLS example; the
-server definition is shown because it is part of the example rather than
-hidden setup.
+is the low-level HTTP/HTTPS transport primitive. Its `headers_json`
+argument uses `[{"name":"...","value":"..."}]` arrays; header names must
+be HTTP tokens and values must not contain CRLF or other control
+characters. A local `nanonext` HTTPS server is started during README
+rendering for the TLS example; the server definition is shown because it
+is part of the example rather than hidden setup.
 
 ``` r
 library(nanonext)
@@ -1553,9 +1558,10 @@ server <- http_server(
 
 ``` sql
 -- Register a client TLS handle that trusts the self-signed demo CA.
+-- In client mode auth_mode = 0 still verifies the HTTPS server certificate.
 SET VARIABLE tls_http = ducknng_tls_config_from_files(
   NULL, '/tmp/ducknng_readme_http_demo_ca.pem', NULL,
-  2  -- auth_mode = require certificate validation
+  0
 );
 -- GET request over HTTPS.
 SELECT ok, status, error, body_text
@@ -2180,7 +2186,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +------------+---------------+-----------------+---------------+
 |  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
 +------------+---------------+-----------------+---------------+
-| 1340834191 | 1783177957954 | 127.0.0.1:36520 | NULL          |
+| 1722025696 | 1783185633549 | 127.0.0.1:60880 | NULL          |
 +------------+---------------+-----------------+---------------+
 ```
 
@@ -2290,7 +2296,7 @@ threaded runtime, and the smoke harness are tracked in `docs/wasm.md`,
 
 ## Status
 
-Version 0.1.0. Every DuckDB chunk shown as runnable in this README is
+Version 0.1.2. Every DuckDB chunk shown as runnable in this README is
 implemented, tested, and runs at render time. Browser/WebAssembly and
 release-matrix checks require external runtimes, so their exact commands
 are shown above and covered by the Playwright and GitHub Actions

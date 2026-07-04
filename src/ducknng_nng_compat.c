@@ -317,10 +317,13 @@ static int ducknng_tls_requested(const ducknng_tls_opts *opts) {
         opts->auth_mode != 0);
 }
 
-static int ducknng_tls_auth_mode_map(int auth_mode, nng_tls_auth_mode *out) {
+static int ducknng_tls_auth_mode_map(nng_tls_mode mode, int auth_mode,
+    nng_tls_auth_mode *out) {
     if (!out) return NNG_EINVAL;
     switch (auth_mode) {
-    case 0: *out = NNG_TLS_AUTH_MODE_NONE; return 0;
+    case 0:
+        *out = (mode == NNG_TLS_MODE_CLIENT) ? NNG_TLS_AUTH_MODE_REQUIRED : NNG_TLS_AUTH_MODE_NONE;
+        return 0;
     case 1: *out = NNG_TLS_AUTH_MODE_OPTIONAL; return 0;
     case 2: *out = NNG_TLS_AUTH_MODE_REQUIRED; return 0;
     default: return NNG_EINVAL;
@@ -406,7 +409,7 @@ static int ducknng_tls_config_build(nng_tls_config **out, nng_tls_mode mode, con
     if (!opts || !ducknng_tls_requested(opts)) return 0;
     rv = nng_tls_config_alloc(&cfg, mode);
     if (rv != 0) return rv;
-    rv = ducknng_tls_auth_mode_map(opts->auth_mode, &auth_mode);
+    rv = ducknng_tls_auth_mode_map(mode, opts->auth_mode, &auth_mode);
     if (rv != 0) goto fail;
     rv = nng_tls_config_auth_mode(cfg, auth_mode);
     if (rv != 0) goto fail;

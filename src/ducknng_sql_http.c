@@ -591,6 +591,11 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
                 failed = 1;
                 goto cleanup_headers_build;
             }
+            if (!ducknng_http_header_value_is_valid(values[i])) {
+                duckdb_scalar_function_set_error(info, "ducknng: headers_build requires header values without control characters");
+                failed = 1;
+                goto cleanup_headers_build;
+            }
             escaped_names[i] = ducknng_http_json_escape_dup(names[i]);
             escaped_values[i] = ducknng_http_json_escape_dup(values[i]);
             if (!escaped_names[i] || !escaped_values[i]) {
@@ -721,6 +726,15 @@ static void ducknng_add_stream_route_scalar(duckdb_function_info info, duckdb_da
             if (handler_sql) duckdb_free(handler_sql);
             if (content_type) duckdb_free(content_type);
             duckdb_scalar_function_set_error(info, "ducknng: service_name, method, path, and handler_sql are required");
+            return;
+        }
+        if (content_type && !ducknng_http_header_value_is_valid(content_type)) {
+            if (service_name) duckdb_free(service_name);
+            if (method) duckdb_free(method);
+            if (path) duckdb_free(path);
+            if (handler_sql) duckdb_free(handler_sql);
+            if (content_type) duckdb_free(content_type);
+            duckdb_scalar_function_set_error(info, "ducknng: stream content_type must not contain control characters");
             return;
         }
         svc = ducknng_runtime_find_service(ctx->rt, service_name);

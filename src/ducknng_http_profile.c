@@ -107,13 +107,7 @@ ducknng_http_profile_method_valid(const char *method)
 static int
 ducknng_http_profile_header_value_valid(const char *value)
 {
-    const unsigned char *p;
-
-    if (!value || !value[0]) return 0;
-    for (p = (const unsigned char *)value; *p; p++) {
-        if (*p < 0x20 || *p == 0x7f) return 0;
-    }
-    return 1;
+    return value && value[0] && ducknng_http_header_value_is_valid(value);
 }
 
 static int

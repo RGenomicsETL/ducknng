@@ -23,6 +23,15 @@ WHERE provider = 'ducknng_quack_batch'
 ----
 dynamic table
 
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010178040001012c016400808080808080808020660001640000660000ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: invalid fixed-size quack vector payload
+
 query IT
 SELECT a, b
 FROM ducknng_parse_body(

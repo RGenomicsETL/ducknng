@@ -152,6 +152,13 @@ DUCKDB_C_EXTENSION_HEADER_URL=$(BASE_HEADER_URL)/duckdb_extension.h
 
 configure: venv platform extension_version
 
+.PHONY: refresh_extension_version
+refresh_extension_version:
+	@$(VERSION_COMMAND)
+
+build_extension_with_metadata_debug: refresh_extension_version
+build_extension_with_metadata_release: refresh_extension_version
+
 debug: build_extension_library_debug build_extension_with_metadata_debug
 release: build_extension_library_release build_extension_with_metadata_release
 
