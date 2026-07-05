@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:43935</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:40073</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -1119,9 +1119,12 @@ generated fresh on every README render:</p>
 </tr>
 <tr class="even">
 <td><code>unstable_new_open_connect_functions</code></td>
-<td><code>duckdb_connection_get_arrow_options</code>,
-<code>duckdb_destroy_arrow_options</code></td>
-<td align="right">2</td>
+<td><code>duckdb_client_context_get_connection_id</code>,
+<code>duckdb_connection_get_arrow_options</code>,
+<code>duckdb_connection_get_client_context</code>,
+<code>duckdb_destroy_arrow_options</code>,
+<code>duckdb_destroy_client_context</code></td>
+<td align="right">5</td>
 </tr>
 <tr class="odd">
 <td><code>unstable_new_prepared_statement_functions</code></td>
@@ -1137,8 +1140,13 @@ generated fresh on every README render:</p>
 </tr>
 <tr class="odd">
 <td><code>unstable_new_scalar_function_functions</code></td>
-<td><code>duckdb_scalar_function_set_bind</code></td>
-<td align="right">1</td>
+<td><code>duckdb_scalar_function_bind_set_error</code>,
+<code>duckdb_scalar_function_get_bind_data</code>,
+<code>duckdb_scalar_function_get_client_context</code>,
+<code>duckdb_scalar_function_set_bind</code>,
+<code>duckdb_scalar_function_set_bind_data</code>,
+<code>duckdb_scalar_function_set_bind_data_copy</code></td>
+<td align="right">6</td>
 </tr>
 <tr class="even">
 <td><code>unstable_new_scalar_function_state_functions</code></td>
@@ -1151,6 +1159,11 @@ generated fresh on every README render:</p>
 <td align="right">1</td>
 </tr>
 <tr class="even">
+<td><code>unstable_new_table_function_functions</code></td>
+<td><code>duckdb_table_function_get_client_context</code></td>
+<td align="right">1</td>
+</tr>
+<tr class="odd">
 <td><code>unstable_new_vector_functions</code></td>
 <td><code>duckdb_unsafe_vector_assign_string_element_len</code></td>
 <td align="right">1</td>
@@ -1274,7 +1287,7 @@ the effective value.</td>
 <td><code>ducknng_list_servers</code></td>
 <td>table</td>
 <td></td>
-<td><code>TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_principal UBIGINT, max_reply_bytes_per_principal UBIGINT, max_session_open_rate_per_principal UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)</code></td>
+<td><code>TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_peer_identity UBIGINT, max_reply_bytes_per_peer_identity UBIGINT, max_session_open_rate_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)</code></td>
 <td>List registered ducknng services.</td>
 </tr>
 <tr class="even">
@@ -1646,7 +1659,7 @@ service.</td>
 <tr class="even">
 <td><code>ducknng_set_service_limits</code></td>
 <td>scalar</td>
-<td><code>name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]]</code></td>
+<td><code>name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]</code></td>
 <td><code>BOOLEAN</code></td>
 <td>Set service resource limits.</td>
 </tr>
@@ -1738,7 +1751,7 @@ body into a DuckDB table using the built-in body codec providers.</td>
 <tr class="odd">
 <td><code>ducknng_register_http_profile</code></td>
 <td>scalar</td>
-<td><code>profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms]</code></td>
+<td><code>profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]</code></td>
 <td><code>BOOLEAN</code></td>
 <td>Register or replace an outbound HTTP credential profile with
 fail-closed request scope.</td>
@@ -1754,7 +1767,7 @@ fail-closed request scope.</td>
 <td><code>ducknng_list_http_profiles</code></td>
 <td>table</td>
 <td></td>
-<td><code>TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)</code></td>
+<td><code>TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)</code></td>
 <td>List registered outbound HTTP profiles with redacted credential
 metadata.</td>
 </tr>
@@ -3723,7 +3736,7 @@ for a service.</p>
 <span id="cb47-3"><a href="#cb47-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
 <span id="cb47-4"><a href="#cb47-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
 <span id="cb47-5"><a href="#cb47-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb47-6"><a href="#cb47-6" tabindex="-1"></a>| <span class="dv">1722025696</span> | <span class="dv">1783185633549</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:60880</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb47-6"><a href="#cb47-6" tabindex="-1"></a>| <span class="dv">1321955895</span> | <span class="dv">1783277852809</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:46274</span> | <span class="kw">NULL</span>          |</span>
 <span id="cb47-7"><a href="#cb47-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb48"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb48-1"><a href="#cb48-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb48-2"><a href="#cb48-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
