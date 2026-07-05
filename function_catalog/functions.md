@@ -90,9 +90,9 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_ncurl_aio` | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]` | `UBIGINT` | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id. |
 | `ducknng_ncurl_aio_collect` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)` | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation. |
 | `ducknng_ncurl_table` | table | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]` | `TABLE(dynamic by response Content-Type)` | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
-| `ducknng_register_http_profile` | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms]` | `BOOLEAN` | Register or replace an outbound HTTP credential profile with fail-closed request scope. |
+| `ducknng_register_http_profile` | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]` | `BOOLEAN` | Register or replace an outbound HTTP credential profile with fail-closed request scope. |
 | `ducknng_drop_http_profile` | scalar | `profile_id` | `BOOLEAN` | Drop a registered outbound HTTP credential profile. |
-| `ducknng_list_http_profiles` | table |  | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)` | List registered outbound HTTP profiles with redacted credential metadata. |
+| `ducknng_list_http_profiles` | table |  | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)` | List registered outbound HTTP profiles with redacted credential metadata. |
 
 ## Body Codecs
 

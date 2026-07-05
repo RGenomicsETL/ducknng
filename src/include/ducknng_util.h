@@ -33,6 +33,12 @@ int ducknng_http_headers_json_get_header(const char *headers_json, const char *w
     int reject_duplicates, char **out_value, char **errmsg);
 int ducknng_json_object_get_string(const char *json, const char *wanted_name,
     int ascii_case_insensitive, int reject_duplicates, char **out_value, char **errmsg);
+/* Strict membership test against a JSON array of strings. Returns 1 when
+ * wanted is byte-for-byte equal to an entry, 0 when absent, -1 on malformed
+ * input (anything but a single array of strings). wanted may be NULL to
+ * validate the array shape only. out_count receives the entry count. */
+int ducknng_json_string_array_contains(const char *json, const char *wanted,
+    size_t *out_count, char **errmsg);
 int ducknng_query_string_get_param(const char *query_string, const char *wanted_name,
     int reject_duplicates, char **out_value, char **errmsg);
 int ducknng_cookie_header_get_value(const char *cookie_header, const char *wanted_name,

@@ -1042,6 +1042,152 @@ SUITE(string_path_properties)
     RUN_TEST(join_dotted_path_invariants_hold_for_random_pairs);
 }
 
+/* Append one JSON-escaped string literal to a fixed buffer. Returns 0, or -1
+ * when the buffer would overflow. */
+static int
+prop_json_escape_append(char *buf, size_t cap, size_t *len, const char *s)
+{
+    size_t i;
+
+    if (*len >= cap) return -1;
+    buf[(*len)++] = '"';
+    for (i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') {
+            if (*len + 2 > cap) return -1;
+            buf[(*len)++] = '\\';
+            buf[(*len)++] = (char)c;
+        } else if (c < 0x20) {
+            if (*len + 7 > cap) return -1;
+            snprintf(buf + *len, cap - *len, "\\u%04x", (unsigned)c);
+            *len += 6;
+        } else {
+            if (*len + 1 > cap) return -1;
+            buf[(*len)++] = (char)c;
+        }
+    }
+    if (*len + 1 > cap) return -1;
+    buf[(*len)++] = '"';
+    return 0;
+}
+
+TEST json_string_array_membership_is_exact(void)
+{
+    size_t count = 0xabcd;
+    char *errmsg = NULL;
+
+    /* Exact match admits; substrings, prefixes, and supersets never do. */
+    ASSERT_EQ(1, ducknng_json_string_array_contains("[\"alice\"]", "alice", &count, &errmsg));
+    ASSERT_EQ((size_t)1, count);
+    ASSERT_EQ(NULL, errmsg);
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[\"alice-api\"]", "alice", NULL, NULL));
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[\"alice\"]", "alice-api", NULL, NULL));
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[\"ali\"]", "alice", NULL, NULL));
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[\"alice\"]", "lice", NULL, NULL));
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[\"alice\"]", "ALICE", NULL, NULL));
+
+    /* Escapes are decoded before comparison. */
+    ASSERT_EQ(1, ducknng_json_string_array_contains("[\"a\\\"b\"]", "a\"b", NULL, NULL));
+    ASSERT_EQ(1, ducknng_json_string_array_contains("[\"tls:san:spiffe:\\/\\/x\"]",
+        "tls:san:spiffe://x", NULL, NULL));
+
+    /* Whitespace and multiple entries are tolerated; count reports entries. */
+    ASSERT_EQ(1, ducknng_json_string_array_contains(" [ \"a\" , \"b\" ] ", "b", &count, NULL));
+    ASSERT_EQ((size_t)2, count);
+
+    /* Empty array and NULL input contain nothing and are not malformed. */
+    ASSERT_EQ(0, ducknng_json_string_array_contains("[]", "a", &count, &errmsg));
+    ASSERT_EQ((size_t)0, count);
+    ASSERT_EQ(NULL, errmsg);
+    ASSERT_EQ(0, ducknng_json_string_array_contains(NULL, "a", &count, &errmsg));
+    ASSERT_EQ(NULL, errmsg);
+
+    /* Anything but a single array of strings is malformed and fails closed. */
+    {
+        static const char *bad[] = {
+            "{\"a\":1}", "[1]", "[\"a\"", "[\"a\",]", "[\"a\" \"b\"]",
+            "[[\"a\"]]", "[\"a\"]x", "\"a\"", "[null]"
+        };
+        size_t i;
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            errmsg = NULL;
+            ASSERT_EQ(-1, ducknng_json_string_array_contains(bad[i], "a", &count, &errmsg));
+            ASSERT(errmsg != NULL);
+            free(errmsg);
+        }
+    }
+    PASS();
+}
+
+/* Random byte streams sliced into entries: membership through the JSON parser
+ * must agree with plain strcmp membership over the same entries, and a probe
+ * string absent from the entry set must never be admitted. */
+static enum theft_trial_res
+prop_json_array_membership_matches_reference(struct theft *t, void *arg1)
+{
+    const struct prop_bytes *bytes = (const struct prop_bytes *)arg1;
+    char entries[64][8];
+    size_t entry_count = 0;
+    char json[8192];
+    size_t json_len = 0;
+    size_t i;
+    size_t parsed_count = 0;
+    char probe[16];
+
+    (void)t;
+    for (i = 0; i + 3 <= bytes->len && entry_count < 64; i += 3) {
+        size_t j;
+        for (j = 0; j < 3; j++) {
+            unsigned char c = bytes->data[i + j];
+            entries[entry_count][j] = c ? (char)c : (char)0x01;
+        }
+        entries[entry_count][3] = '\0';
+        entry_count++;
+    }
+    json[json_len++] = '[';
+    for (i = 0; i < entry_count; i++) {
+        if (i > 0) json[json_len++] = ',';
+        if (prop_json_escape_append(json, sizeof(json) - 2, &json_len,
+                entries[i]) != 0) {
+            return THEFT_TRIAL_SKIP;
+        }
+    }
+    json[json_len++] = ']';
+    json[json_len] = '\0';
+
+    if (ducknng_json_string_array_contains(json, NULL, &parsed_count, NULL) != 0) {
+        return THEFT_TRIAL_FAIL;
+    }
+    if (parsed_count != entry_count) return THEFT_TRIAL_FAIL;
+    for (i = 0; i < entry_count; i++) {
+        if (ducknng_json_string_array_contains(json, entries[i], NULL, NULL) != 1) {
+            return THEFT_TRIAL_FAIL;
+        }
+    }
+    /* A probe longer than every entry cannot be a member. */
+    if (entry_count > 0) {
+        snprintf(probe, sizeof(probe), "%s~", entries[0]);
+        if (ducknng_json_string_array_contains(json, probe, NULL, NULL) != 0) {
+            return THEFT_TRIAL_FAIL;
+        }
+    }
+    return THEFT_TRIAL_PASS;
+}
+
+TEST json_string_array_membership_matches_reference_for_random_entries(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("json string array membership matches reference",
+            prop_json_array_membership_matches_reference, &prop_random_bytes_info));
+    PASS();
+}
+
+SUITE(json_subject_array_properties)
+{
+    RUN_TEST(json_string_array_membership_is_exact);
+    RUN_TEST(json_string_array_membership_matches_reference_for_random_entries);
+}
+
 SUITE(wire_properties)
 {
     RUN_TEST(wire_rejects_or_decodes_random_bytes);
@@ -1072,6 +1218,7 @@ main(int argc, char **argv)
     GREATEST_MAIN_BEGIN();
     RUN_SUITE(size_checked_properties);
     RUN_SUITE(string_path_properties);
+    RUN_SUITE(json_subject_array_properties);
     RUN_SUITE(wire_properties);
     RUN_SUITE(transport_properties);
     RUN_SUITE(quack_properties);

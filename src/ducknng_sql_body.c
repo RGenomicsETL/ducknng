@@ -2044,10 +2044,22 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
         duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
         goto cleanup;
     }
-    if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
-            profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile");
-        goto cleanup;
+    if (profile_id && profile_id[0]) {
+        duckdb_client_context client_ctx = NULL;
+        uint64_t connection_id = 0;
+        int has_connection_id = 0;
+        duckdb_table_function_get_client_context(info, &client_ctx);
+        if (client_ctx) {
+            connection_id = (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+            has_connection_id = 1;
+            duckdb_destroy_client_context(&client_ctx);
+        }
+        if (ducknng_runtime_resolve_http_profile_headers(ctx->rt,
+                profile_id, url, method, headers_json, has_connection_id, connection_id,
+                &effective_headers_json, &errmsg) != 0) {
+            duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile");
+            goto cleanup;
+        }
     }
     if (ducknng_http_transact(url, method, effective_headers_json ? effective_headers_json : headers_json,
             (const uint8_t *)body_blob.data, (size_t)body_blob.size, timeout_ms, tls_opts,

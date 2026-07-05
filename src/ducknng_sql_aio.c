@@ -1333,8 +1333,12 @@ static void ducknng_ncurl_aio_scalar(duckdb_function_info info, duckdb_data_chun
                     timeout_ms, "ducknng: ncurl_aio requires url") != 0) return;
             continue;
         }
+        uint64_t profile_connection_id = 0;
+        int profile_has_connection_id =
+            ducknng_sql_scalar_connection_id(info, &profile_connection_id);
         if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
-                profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
+                profile_id, url, method, headers_json, profile_has_connection_id,
+                profile_connection_id, &effective_headers_json, &errmsg) != 0) {
             duckdb_free(url);
             if (method) duckdb_free(method);
             if (headers_json) duckdb_free(headers_json);
@@ -2341,7 +2345,7 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_close_query_raw_aio", 5, ducknng_close_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_cancel_query_raw_aio", 5, ducknng_cancel_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_aio", 6, ducknng_ncurl_aio_scalar, ctx, ncurl_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
-    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_aio", 7, ducknng_ncurl_aio_scalar, ctx, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_ncurl_aio", 7, ducknng_ncurl_aio_scalar, ducknng_sql_connection_bind_cb, ctx, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_send_socket_raw_aio", 3, ducknng_send_socket_raw_aio_scalar, ctx, request_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_recv_socket_raw_aio", 2, ducknng_recv_socket_raw_aio_scalar, ctx, recv_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_request_socket_raw_aio", 3, ducknng_request_socket_raw_aio_scalar, ctx, request_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;

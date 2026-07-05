@@ -1033,7 +1033,7 @@
       "name": "ducknng_register_http_profile",
       "kind": "scalar",
       "category": "HTTP Transport",
-      "signature": "ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms])",
+      "signature": "ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]])",
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
@@ -1045,10 +1045,13 @@
         "path_prefix must start with / and is segment-aware: /auth matches /auth and /auth/... but not /authz; use / or a trailing slash for deliberately broad scopes.",
         "method is an HTTP token or * for all methods.",
         "auth_header_name must be an HTTP token; the matching auth_header_value is stored in memory and never exposed by list/introspection.",
-        "expires_at_ms = 0 means no expiry check. Non-zero values are compared to Unix epoch milliseconds before each request."
+        "expires_at_ms = 0 means no expiry check. Non-zero values are compared to Unix epoch milliseconds before each request.",
+        "allow_subjects_json is an optional non-empty JSON array of execution subjects; NULL keeps the profile unrestricted. Restricted profiles resolve only while a matching current execution subject is installed, so they fail closed for ad-hoc SQL outside any request context.",
+        "The execution subject is installed by ducknng service dispatch and HTTP route handling from the verified peer identity and SQL authorizer principal, or by embedded hosts through the C API. It is never settable from SQL."
       ],
       "examples": [
-        "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');"
+        "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');",
+        "SELECT ducknng_register_http_profile('alice-api', 'https', 'api.example.org', NULL::INTEGER, '/v1', '*', true, 'Authorization', 'Bearer alice-token', 0::UBIGINT, '[\"alice\"]');"
       ]
     },
     {
@@ -1072,12 +1075,12 @@
       "kind": "table",
       "category": "HTTP Transport",
       "signature": "ducknng_list_http_profiles()",
-      "returns": "TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)",
+      "returns": "TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List registered outbound HTTP profiles with redacted credential metadata.",
       "notes": [
-        "Introspection exposes profile id, scope, auth header names, version, timestamps, and expiry only.",
+        "Introspection exposes profile id, scope, auth header names, version, timestamps, expiry, and subject allowlist only.",
         "Raw authentication header values are never returned."
       ],
       "examples": [

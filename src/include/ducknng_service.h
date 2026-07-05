@@ -163,6 +163,8 @@ typedef struct ducknng_service_sql_scope {
     int locked_runtime;
     int locked_service;
     size_t pool_index;
+    int subject_bound;
+    uint64_t subject_connection_id;
 } ducknng_service_sql_scope;
 
 struct ducknng_rep_ctx {
@@ -314,6 +316,16 @@ void ducknng_service_leave_http_route_sql(ducknng_service_sql_scope *scope);
 int ducknng_service_enter_authorizer_sql(ducknng_service *svc,
     const ducknng_authorizer_context *auth_ctx, ducknng_service_sql_scope *scope, char **errmsg);
 void ducknng_service_leave_authorizer_sql(ducknng_service_sql_scope *scope);
+/* Bracket host-owned SQL execution with the effective execution subject
+ * (defined in ducknng_runtime.h). begin fills *subject_ctx from the caller
+ * identity and authorizer decision and installs it as the current thread's
+ * subject; end clears it. Always pair them so error paths cannot leak the
+ * previous caller's subject into the next execution. */
+struct ducknng_execution_subject;
+void ducknng_service_execution_subject_begin(ducknng_service *svc,
+    struct ducknng_execution_subject *subject_ctx, const char *caller_identity,
+    const ducknng_authorizer_decision *auth_decision);
+void ducknng_service_execution_subject_end(ducknng_service *svc);
 void ducknng_http_route_reset(ducknng_http_route *route);
 int ducknng_http_route_copy(ducknng_http_route *dst, const ducknng_http_route *src);
 const char *ducknng_http_route_match_kind_name(uint8_t match_kind);

@@ -54,11 +54,15 @@ ducknng_register_http_profile_scalar(duckdb_function_info info,
         bool tls_required = arg_bool(duckdb_data_chunk_get_vector(input, 6), row, false);
         char *auth_header_name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 7), row);
         char *auth_header_value = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 8), row);
+        char *allow_subjects_json = NULL;
         uint64_t expires_at_ms = 0;
         char *errmsg = NULL;
 
         if (ncols > 9 && !arg_is_null(duckdb_data_chunk_get_vector(input, 9), row)) {
             expires_at_ms = arg_u64(duckdb_data_chunk_get_vector(input, 9), row, 0);
+        }
+        if (ncols > 10) {
+            allow_subjects_json = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 10), row);
         }
         if (!ctx || !ctx->rt) {
             duckdb_scalar_function_set_error(info, "ducknng: runtime not initialized");
@@ -66,7 +70,8 @@ ducknng_register_http_profile_scalar(duckdb_function_info info,
         }
         if (ducknng_runtime_upsert_http_profile(ctx->rt, profile_id, scheme, host,
                 port, has_port, path_prefix, method, tls_required ? 1 : 0,
-                auth_header_name, auth_header_value, expires_at_ms, &errmsg) != 0) {
+                auth_header_name, auth_header_value, expires_at_ms,
+                allow_subjects_json, &errmsg) != 0) {
             duckdb_scalar_function_set_error(info,
                 errmsg ? errmsg : "ducknng: failed to register HTTP profile");
             if (errmsg) duckdb_free(errmsg);
@@ -80,6 +85,7 @@ ducknng_register_http_profile_scalar(duckdb_function_info info,
         if (method) duckdb_free(method);
         if (auth_header_name) duckdb_free(auth_header_name);
         if (auth_header_value) duckdb_free(auth_header_value);
+        if (allow_subjects_json) duckdb_free(allow_subjects_json);
         continue;
 fail:
         if (profile_id) duckdb_free(profile_id);
@@ -89,6 +95,7 @@ fail:
         if (method) duckdb_free(method);
         if (auth_header_name) duckdb_free(auth_header_name);
         if (auth_header_value) duckdb_free(auth_header_value);
+        if (allow_subjects_json) duckdb_free(allow_subjects_json);
         return;
     }
 }
@@ -173,6 +180,9 @@ ducknng_list_http_profiles_bind(duckdb_bind_info info)
     duckdb_bind_add_result_column(info, "updated_ms", type);
     duckdb_bind_add_result_column(info, "expires_at_ms", type);
     duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "allow_subjects_json", type);
+    duckdb_destroy_logical_type(&type);
     duckdb_bind_set_bind_data(info, bind, destroy_http_profiles_bind_data);
     duckdb_bind_set_cardinality(info, bind->profile_count, true);
 }
@@ -248,6 +258,8 @@ ducknng_list_http_profiles_scan(duckdb_function_info info, duckdb_data_chunk out
         created[i] = row->created_ms;
         updated[i] = row->updated_ms;
         expires[i] = row->expires_at_ms;
+        if (row->allow_subjects_json) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 13), i, row->allow_subjects_json, (idx_t)strlen(row->allow_subjects_json));
+        else set_null(duckdb_data_chunk_get_vector(output, 13), i);
     }
     init->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
@@ -264,6 +276,10 @@ ducknng_register_sql_http_profiles(duckdb_connection con, ducknng_sql_context *c
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
+    duckdb_type register_subjects_types[11] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR,
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
     duckdb_type profile_id_types[1] = {DUCKDB_TYPE_VARCHAR};
 
     if (!ctx || !ctx->rt) return 0;
@@ -272,6 +288,9 @@ ducknng_register_sql_http_profiles(duckdb_connection con, ducknng_sql_context *c
             DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_profile", 10,
             ducknng_register_http_profile_scalar, ctx, register_expiry_types,
+            DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_profile", 11,
+            ducknng_register_http_profile_scalar, ctx, register_subjects_types,
             DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_drop_http_profile", 1,
             ducknng_drop_http_profile_scalar, ctx, profile_id_types,

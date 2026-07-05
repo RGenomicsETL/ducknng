@@ -30,6 +30,8 @@ static _Thread_local ducknng_runtime *g_thread_http_request_runtime = NULL;
 static _Thread_local const ducknng_http_request_context *g_thread_http_request_context = NULL;
 static _Thread_local ducknng_runtime *g_thread_authorizer_runtime = NULL;
 static _Thread_local const ducknng_authorizer_context *g_thread_authorizer_context = NULL;
+static _Thread_local ducknng_runtime *g_thread_execution_subject_runtime = NULL;
+static _Thread_local const ducknng_execution_subject *g_thread_execution_subject = NULL;
 
 static void reg_lock(void) { while (atomic_flag_test_and_set_explicit(&g_registry_lock, memory_order_acquire)) {} }
 static void reg_unlock(void) { atomic_flag_clear_explicit(&g_registry_lock, memory_order_release); }
@@ -475,6 +477,15 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->user_codec_cap = 0;
     }
     ducknng_runtime_http_profiles_reset(rt);
+    if (rt->subject_bindings) {
+        for (i = 0; i < rt->subject_binding_count; i++) {
+            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
+        }
+        duckdb_free(rt->subject_bindings);
+        rt->subject_bindings = NULL;
+        rt->subject_binding_count = 0;
+        rt->subject_binding_cap = 0;
+    }
     ducknng_method_registry_destroy(&rt->registry);
     ducknng_log_ring_destroy(&rt->log_ring);
     if (rt->execution_pool) {
@@ -624,6 +635,101 @@ void ducknng_runtime_current_authorizer_context_set(ducknng_runtime *rt,
 const ducknng_authorizer_context *ducknng_runtime_current_thread_authorizer_context_get(ducknng_runtime *rt) {
     if (!rt || g_thread_authorizer_runtime != rt) return NULL;
     return g_thread_authorizer_context;
+}
+
+void ducknng_runtime_current_execution_subject_set(ducknng_runtime *rt,
+    const ducknng_execution_subject *subject_ctx) {
+    if (!rt) return;
+    if (subject_ctx) {
+        g_thread_execution_subject_runtime = rt;
+        g_thread_execution_subject = subject_ctx;
+    } else if (g_thread_execution_subject_runtime == rt) {
+        g_thread_execution_subject_runtime = NULL;
+        g_thread_execution_subject = NULL;
+    }
+}
+
+const ducknng_execution_subject *ducknng_runtime_current_thread_execution_subject_get(
+    ducknng_runtime *rt) {
+    if (!rt || g_thread_execution_subject_runtime != rt) return NULL;
+    return g_thread_execution_subject;
+}
+
+int ducknng_runtime_execution_subject_bind_connection(ducknng_runtime *rt,
+    uint64_t connection_id, const char *subject) {
+    size_t i;
+    char *subject_dup;
+    if (!rt || !subject || !subject[0]) return -1;
+    subject_dup = ducknng_strdup(subject);
+    if (!subject_dup) return -1;
+    ducknng_mutex_lock(&rt->mu);
+    for (i = 0; i < rt->subject_binding_count; i++) {
+        if (rt->subject_bindings[i].connection_id == connection_id) {
+            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
+            rt->subject_bindings[i].subject = subject_dup;
+            ducknng_mutex_unlock(&rt->mu);
+            return 0;
+        }
+    }
+    if (rt->subject_binding_count >= rt->subject_binding_cap) {
+        size_t cap = rt->subject_binding_cap ? rt->subject_binding_cap * 2 : 4;
+        ducknng_subject_binding *next =
+            (ducknng_subject_binding *)duckdb_malloc(sizeof(*next) * cap);
+        if (!next) {
+            ducknng_mutex_unlock(&rt->mu);
+            duckdb_free(subject_dup);
+            return -1;
+        }
+        memset(next, 0, sizeof(*next) * cap);
+        if (rt->subject_bindings && rt->subject_binding_count > 0) {
+            memcpy(next, rt->subject_bindings, sizeof(*next) * rt->subject_binding_count);
+        }
+        if (rt->subject_bindings) duckdb_free(rt->subject_bindings);
+        rt->subject_bindings = next;
+        rt->subject_binding_cap = cap;
+    }
+    rt->subject_bindings[rt->subject_binding_count].connection_id = connection_id;
+    rt->subject_bindings[rt->subject_binding_count].subject = subject_dup;
+    rt->subject_binding_count++;
+    ducknng_mutex_unlock(&rt->mu);
+    return 0;
+}
+
+void ducknng_runtime_execution_subject_unbind_connection(ducknng_runtime *rt,
+    uint64_t connection_id) {
+    size_t i;
+    if (!rt) return;
+    ducknng_mutex_lock(&rt->mu);
+    for (i = 0; i < rt->subject_binding_count; i++) {
+        if (rt->subject_bindings[i].connection_id == connection_id) {
+            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
+            for (; i + 1 < rt->subject_binding_count; i++) {
+                rt->subject_bindings[i] = rt->subject_bindings[i + 1];
+            }
+            memset(&rt->subject_bindings[rt->subject_binding_count - 1], 0,
+                sizeof(rt->subject_bindings[0]));
+            rt->subject_binding_count--;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
+}
+
+char *ducknng_runtime_execution_subject_for_connection_dup(ducknng_runtime *rt,
+    uint64_t connection_id) {
+    size_t i;
+    char *out = NULL;
+    if (!rt) return NULL;
+    ducknng_mutex_lock(&rt->mu);
+    for (i = 0; i < rt->subject_binding_count; i++) {
+        if (rt->subject_bindings[i].connection_id == connection_id) {
+            out = rt->subject_bindings[i].subject ?
+                ducknng_strdup(rt->subject_bindings[i].subject) : NULL;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
+    return out;
 }
 
 ducknng_service *ducknng_runtime_find_service(ducknng_runtime *rt, const char *name) {

@@ -445,6 +445,49 @@ fail:
     return -1;
 }
 
+int ducknng_json_string_array_contains(const char *json, const char *wanted,
+    size_t *out_count, char **errmsg) {
+    const char *p = json;
+    size_t count = 0;
+    int found = 0;
+    if (out_count) *out_count = 0;
+    if (errmsg) *errmsg = NULL;
+    if (!json) return 0;
+    ducknng_json_skip_ws(&p);
+    if (*p != '[') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: expected JSON array of strings");
+        return -1;
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p != ']') {
+        for (;;) {
+            char *entry = ducknng_json_parse_string_dup(&p, errmsg);
+            if (!entry) return -1;
+            count++;
+            if (wanted && strcmp(entry, wanted) == 0) found = 1;
+            duckdb_free(entry);
+            ducknng_json_skip_ws(&p);
+            if (*p == ',') {
+                p++;
+                ducknng_json_skip_ws(&p);
+                continue;
+            }
+            if (*p == ']') break;
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or ']' in JSON array");
+            return -1;
+        }
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p != '\0') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after JSON array");
+        return -1;
+    }
+    if (out_count) *out_count = count;
+    return found;
+}
+
 int ducknng_http_headers_json_get_header(const char *headers_json, const char *wanted_name,
     int reject_duplicates, char **out_value, char **errmsg) {
     const char *p = headers_json;

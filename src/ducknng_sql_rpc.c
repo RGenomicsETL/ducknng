@@ -114,8 +114,8 @@ static void ducknng_destroy_logical_types(duckdb_logical_type *types, idx_t coun
 
 static int ducknng_register_struct_row_scalar_named(duckdb_connection con,
     ducknng_sql_context *ctx, const char *name, idx_t nparams, const duckdb_type *param_type_ids,
-    duckdb_scalar_function_t fn, idx_t nfields, const duckdb_type *field_type_ids,
-    const char **field_names) {
+    duckdb_scalar_function_t fn, duckdb_scalar_function_bind_t bind_fn, idx_t nfields,
+    const duckdb_type *field_type_ids, const char **field_names) {
     duckdb_logical_type *param_types = NULL;
     duckdb_logical_type *fields = NULL;
     duckdb_logical_type return_type;
@@ -133,8 +133,8 @@ static int ducknng_register_struct_row_scalar_named(duckdb_connection con,
     for (i = 0; i < nparams; i++) param_types[i] = duckdb_create_logical_type(param_type_ids[i]);
     for (i = 0; i < nfields; i++) fields[i] = duckdb_create_logical_type(field_type_ids[i]);
     return_type = duckdb_create_struct_type(fields, field_names, nfields);
-    ok = DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(con, name, nparams, fn, ctx,
-        param_types, return_type);
+    ok = ducknng_sql_register_volatile_scalar_logical_types_with_bind(con, name, nparams, fn,
+        bind_fn, ctx, param_types, return_type);
     ducknng_destroy_logical_types(param_types, nparams);
     ducknng_destroy_logical_types(fields, nfields);
     if (param_types) duckdb_free(param_types);
@@ -2136,9 +2136,14 @@ static void ducknng_ncurl_row_scalar(duckdb_function_info info, duckdb_data_chun
         tls_config_id = arg_u64(tls_vec, row, 0);
         if (profile_vec && !arg_is_null(profile_vec, row)) profile_id = arg_varchar_dup(profile_vec, row);
         if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) goto emit_error;
-        if (profile_id && profile_id[0] && ducknng_runtime_resolve_http_profile_headers(ctx->rt,
-                profile_id, url, method, headers_json, &effective_headers_json, &errmsg) != 0) {
-            goto emit_error;
+        if (profile_id && profile_id[0]) {
+            uint64_t connection_id = 0;
+            int has_connection_id = ducknng_sql_scalar_connection_id(info, &connection_id);
+            if (ducknng_runtime_resolve_http_profile_headers(ctx->rt,
+                    profile_id, url, method, headers_json, has_connection_id, connection_id,
+                    &effective_headers_json, &errmsg) != 0) {
+                goto emit_error;
+            }
         }
         if (ducknng_http_transact(url, method,
                 effective_headers_json ? effective_headers_json : headers_json,
@@ -2257,9 +2262,10 @@ static int register_http_result_table_named(duckdb_connection con, ducknng_sql_c
     (void)name;
     if (!ctx || !ctx->rt) return 0;
     if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 6,
-            param_types, ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
+            param_types, ducknng_ncurl_row_scalar, NULL, 6, field_types, field_names)) return 0;
     if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 7,
-            profile_param_types, ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
+            profile_param_types, ducknng_ncurl_row_scalar, ducknng_sql_connection_bind_cb,
+            6, field_types, field_names)) return 0;
     return execute_sql(con, sql);
 }
 

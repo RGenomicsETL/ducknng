@@ -1,4 +1,5 @@
 #include "ducknng_http_compat.h"
+#include "ducknng_runtime.h"
 #include "ducknng_service.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
@@ -1243,6 +1244,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
     int have_remote_addr = 0;
     nng_http_res *res = NULL;
     int rv = 0;
+    int handler_rc = 0;
     int stopping = 0;
     int service_stopping = 0;
     ducknng_http_route route;
@@ -1389,18 +1391,9 @@ static void ducknng_http_route_handler(nng_aio *aio) {
         }
         if (route.auth_allow_identities_json && route.auth_allow_identities_json[0] &&
             caller_identity && caller_identity[0]) {
-            /* simple substring check for "\"identity\"" in the JSON array */
-            size_t id_len = strlen(caller_identity);
-            char *needle = (char *)duckdb_malloc(id_len + 3);
-            int id_allowed = 0;
-            if (needle) {
-                needle[0] = '"';
-                memcpy(needle + 1, caller_identity, id_len);
-                needle[id_len + 1] = '"';
-                needle[id_len + 2] = '\0';
-                id_allowed = strstr(route.auth_allow_identities_json, needle) != NULL;
-                duckdb_free(needle);
-            }
+            /* exact-match membership; malformed allowlists fail closed */
+            int id_allowed = ducknng_json_string_array_contains(
+                route.auth_allow_identities_json, caller_identity, NULL, NULL) == 1;
             if (!id_allowed) {
                 ducknng_authorizer_decision_reset(&decision);
                 ducknng_service_end_request(state->svc, caller_identity, 0);
@@ -1416,9 +1409,15 @@ static void ducknng_http_route_handler(nng_aio *aio) {
                 rv = ducknng_http_alloc_text_response(&res, 503, "ducknng: HTTP server is stopping");
                 goto done;
             }
+            {
+                ducknng_execution_subject subject_ctx;
+                ducknng_service_execution_subject_begin(state->svc, &subject_ctx,
+                    caller_identity, &decision);
+                /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
+                ducknng_http_serve_stream_route(conn, aio, state, req, &request_ctx, caller_identity);
+                ducknng_service_execution_subject_end(state->svc);
+            }
             ducknng_authorizer_decision_reset(&decision);
-            /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
-            ducknng_http_serve_stream_route(conn, aio, state, req, &request_ctx, caller_identity);
             ducknng_service_end_request(state->svc, caller_identity, 0);
             if (request_path) duckdb_free(request_path);
             if (headers_json) duckdb_free(headers_json);
@@ -1430,7 +1429,15 @@ static void ducknng_http_route_handler(nng_aio *aio) {
             ducknng_http_server_stream_end(state);
             return;
         }
-        if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
+        {
+            ducknng_execution_subject subject_ctx;
+            ducknng_service_execution_subject_begin(state->svc, &subject_ctx,
+                caller_identity, &decision);
+            handler_rc = ducknng_service_handle_http_route(state->svc, &request_ctx,
+                &route_reply, &handler_err);
+            ducknng_service_execution_subject_end(state->svc);
+        }
+        if (handler_rc != 0) {
             rv = ducknng_http_alloc_text_response(&res, 500,
                 handler_err ? handler_err : "ducknng: HTTP route handler failed");
             if (handler_err) duckdb_free(handler_err);

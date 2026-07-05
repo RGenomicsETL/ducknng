@@ -19,6 +19,7 @@ ducknng_http_profile_reset(ducknng_http_profile *p)
     if (p->method) duckdb_free(p->method);
     if (p->auth_header_name) duckdb_free(p->auth_header_name);
     if (p->auth_header_value) duckdb_free(p->auth_header_value);
+    if (p->allow_subjects_json) duckdb_free(p->allow_subjects_json);
     memset(p, 0, sizeof(*p));
 }
 
@@ -137,10 +138,12 @@ ducknng_http_profile_copy(ducknng_http_profile *dst, const ducknng_http_profile 
     dst->method = src->method ? ducknng_strdup(src->method) : NULL;
     dst->auth_header_name = src->auth_header_name ? ducknng_strdup(src->auth_header_name) : NULL;
     dst->auth_header_value = src->auth_header_value ? ducknng_strdup(src->auth_header_value) : NULL;
+    dst->allow_subjects_json = src->allow_subjects_json ? ducknng_strdup(src->allow_subjects_json) : NULL;
     if ((src->profile_id && !dst->profile_id) || (src->scheme && !dst->scheme) ||
         (src->host && !dst->host) || (src->path_prefix && !dst->path_prefix) ||
         (src->method && !dst->method) || (src->auth_header_name && !dst->auth_header_name) ||
-        (src->auth_header_value && !dst->auth_header_value)) {
+        (src->auth_header_value && !dst->auth_header_value) ||
+        (src->allow_subjects_json && !dst->allow_subjects_json)) {
         ducknng_http_profile_reset(dst);
         return -1;
     }
@@ -164,6 +167,7 @@ ducknng_http_profile_info_reset(ducknng_http_profile_info *info)
     if (info->path_prefix) duckdb_free(info->path_prefix);
     if (info->method) duckdb_free(info->method);
     if (info->auth_header_names_json) duckdb_free(info->auth_header_names_json);
+    if (info->allow_subjects_json) duckdb_free(info->allow_subjects_json);
     memset(info, 0, sizeof(*info));
 }
 
@@ -194,6 +198,10 @@ ducknng_http_profile_public_copy(ducknng_http_profile_info *dst,
     if (!dst->auth_header_names_json) goto fail;
     snprintf(dst->auth_header_names_json, need, "[\"%s\"]",
         src->auth_header_name ? src->auth_header_name : "");
+    if (src->allow_subjects_json) {
+        dst->allow_subjects_json = ducknng_strdup(src->allow_subjects_json);
+        if (!dst->allow_subjects_json) goto fail;
+    }
     dst->port = src->port;
     dst->has_port = src->has_port;
     dst->tls_required = src->tls_required;
@@ -237,7 +245,7 @@ ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
     const char *scheme, const char *host, int32_t port, int has_port,
     const char *path_prefix, const char *method, int tls_required,
     const char *auth_header_name, const char *auth_header_value,
-    uint64_t expires_at_ms, char **errmsg)
+    uint64_t expires_at_ms, const char *allow_subjects_json, char **errmsg)
 {
     ducknng_http_profile next;
     size_t i;
@@ -249,6 +257,20 @@ ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
     if (!rt) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: runtime not initialized");
         return -1;
+    }
+    if (allow_subjects_json && allow_subjects_json[0]) {
+        size_t subject_count = 0;
+        char *parse_err = NULL;
+        if (ducknng_json_string_array_contains(allow_subjects_json, NULL,
+                &subject_count, &parse_err) < 0) {
+            if (parse_err) duckdb_free(parse_err);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile allow_subjects_json must be a JSON array of strings");
+            return -1;
+        }
+        if (subject_count == 0) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile allow_subjects_json must list at least one subject; pass NULL for an unrestricted profile");
+            return -1;
+        }
     }
     if (!ducknng_http_profile_string_clean(profile_id)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile id must be a non-empty string without control characters");
@@ -281,8 +303,11 @@ ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile_id,
     next.method = ducknng_http_profile_dup_trim_upper(method && method[0] ? method : "*");
     next.auth_header_name = ducknng_strdup(auth_header_name);
     next.auth_header_value = ducknng_strdup(auth_header_value);
+    next.allow_subjects_json = allow_subjects_json && allow_subjects_json[0] ?
+        ducknng_strdup(allow_subjects_json) : NULL;
     if (!next.profile_id || !next.scheme || !next.host || !next.path_prefix ||
-        !next.method || !next.auth_header_name || !next.auth_header_value) {
+        !next.method || !next.auth_header_name || !next.auth_header_value ||
+        (allow_subjects_json && allow_subjects_json[0] && !next.allow_subjects_json)) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP profile");
         goto done;
     }
@@ -609,7 +634,8 @@ oom:
 int
 ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
     const char *profile_id, const char *url, const char *method,
-    const char *headers_json, char **out_headers_json, char **errmsg)
+    const char *headers_json, int has_connection_id, uint64_t connection_id,
+    char **out_headers_json, char **errmsg)
 {
     ducknng_http_profile profile;
     ducknng_transport_url transport;
@@ -636,6 +662,26 @@ ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
     if (profile.expires_at_ms != 0 && ducknng_wall_clock_ms() > profile.expires_at_ms) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile expired");
         goto done;
+    }
+    if (profile.allow_subjects_json && profile.allow_subjects_json[0]) {
+        const ducknng_execution_subject *subject_ctx =
+            ducknng_runtime_current_thread_execution_subject_get(rt);
+        const char *subject = subject_ctx ? subject_ctx->subject : NULL;
+        char *connection_subject = NULL;
+        int admitted;
+        if ((!subject || !subject[0]) && has_connection_id) {
+            connection_subject =
+                ducknng_runtime_execution_subject_for_connection_dup(rt, connection_id);
+            subject = connection_subject;
+        }
+        admitted = subject && subject[0] &&
+            ducknng_json_string_array_contains(profile.allow_subjects_json,
+                subject, NULL, NULL) == 1;
+        if (connection_subject) duckdb_free(connection_subject);
+        if (!admitted) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP profile admission rejected request subject");
+            goto done;
+        }
     }
     if (ducknng_transport_url_parse(url, &transport, errmsg) != 0) goto done;
     if (!ducknng_transport_url_is_http(&transport)) {

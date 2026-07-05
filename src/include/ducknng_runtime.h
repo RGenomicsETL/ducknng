@@ -145,6 +145,7 @@ typedef struct ducknng_http_profile {
     int tls_required;
     char *auth_header_name;
     char *auth_header_value; /* secret: never exposed by introspection */
+    char *allow_subjects_json; /* JSON array of strings; NULL = no subject restriction */
     uint64_t version;
     uint64_t created_ms;
     uint64_t updated_ms;
@@ -161,11 +162,33 @@ typedef struct ducknng_http_profile_info {
     char *method;
     int tls_required;
     char *auth_header_names_json;
+    char *allow_subjects_json;
     uint64_t version;
     uint64_t created_ms;
     uint64_t updated_ms;
     uint64_t expires_at_ms;
 } ducknng_http_profile_info;
+
+/* Effective execution subject supplied by the host or service layer while it
+ * runs SQL on behalf of a caller. All strings are borrowed: the setter caller
+ * owns the storage and must clear the context before releasing it. This is a
+ * host/internal C surface only; it must never be reachable from SQL, or a
+ * query could mint its own subject and defeat profile admission. */
+typedef struct ducknng_execution_subject {
+    const char *peer_identity; /* verified transport identity when available */
+    const char *subject;       /* effective capability/accounting subject */
+    const char *principal;     /* mapped application principal when available */
+    const char *claims_json;   /* optional context; not interpreted by profile admission */
+} ducknng_execution_subject;
+
+/* One request-scoped subject bound to the DuckDB connection executing that
+ * request's SQL. DuckDB runs query pipelines on worker threads, so the
+ * connection id is the carrier that survives thread hops; bindings live only
+ * between enter/leave of a request SQL scope. */
+typedef struct ducknng_subject_binding {
+    uint64_t connection_id;
+    char *subject;
+} ducknng_subject_binding;
 
 typedef struct ducknng_runtime {
     duckdb_database db;
@@ -205,6 +228,9 @@ typedef struct ducknng_runtime {
     ducknng_http_profile *http_profiles;
     size_t http_profile_count;
     size_t http_profile_cap;
+    ducknng_subject_binding *subject_bindings;
+    size_t subject_binding_count;
+    size_t subject_binding_cap;
     uint64_t next_service_id;
     uint64_t next_client_socket_id;
     uint64_t next_client_aio_id;
@@ -230,15 +256,20 @@ int ducknng_runtime_upsert_http_profile(ducknng_runtime *rt, const char *profile
     const char *scheme, const char *host, int32_t port, int has_port,
     const char *path_prefix, const char *method, int tls_required,
     const char *auth_header_name, const char *auth_header_value,
-    uint64_t expires_at_ms, char **errmsg);
+    uint64_t expires_at_ms, const char *allow_subjects_json, char **errmsg);
 int ducknng_runtime_drop_http_profile(ducknng_runtime *rt, const char *profile_id);
 int ducknng_runtime_http_profiles_snapshot(ducknng_runtime *rt,
     ducknng_http_profile_info **out_profiles, size_t *out_count, char **errmsg);
 void ducknng_runtime_http_profiles_snapshot_free(ducknng_http_profile_info *profiles, size_t count);
 void ducknng_runtime_http_profiles_reset(ducknng_runtime *rt);
+/* has_connection_id/connection_id identify the DuckDB connection executing
+ * the calling query, when known; subject-restricted profiles are admitted
+ * against the current thread's execution subject or the subject bound to that
+ * connection. */
 int ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
     const char *profile_id, const char *url, const char *method,
-    const char *headers_json, char **out_headers_json, char **errmsg);
+    const char *headers_json, int has_connection_id, uint64_t connection_id,
+    char **out_headers_json, char **errmsg);
 
 int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info info,
     struct duckdb_extension_access *access, ducknng_runtime **out_rt, int *out_created);
@@ -286,6 +317,18 @@ const ducknng_http_request_context *ducknng_runtime_current_thread_http_request_
 void ducknng_runtime_current_authorizer_context_set(ducknng_runtime *rt,
     const ducknng_authorizer_context *auth_ctx);
 const ducknng_authorizer_context *ducknng_runtime_current_thread_authorizer_context_get(ducknng_runtime *rt);
+void ducknng_runtime_current_execution_subject_set(ducknng_runtime *rt,
+    const ducknng_execution_subject *subject_ctx);
+const ducknng_execution_subject *ducknng_runtime_current_thread_execution_subject_get(
+    ducknng_runtime *rt);
+int ducknng_runtime_execution_subject_bind_connection(ducknng_runtime *rt,
+    uint64_t connection_id, const char *subject);
+void ducknng_runtime_execution_subject_unbind_connection(ducknng_runtime *rt,
+    uint64_t connection_id);
+/* Returns a duckdb-allocated copy of the subject bound to connection_id, or
+ * NULL when no binding is installed. Caller frees with duckdb_free. */
+char *ducknng_runtime_execution_subject_for_connection_dup(ducknng_runtime *rt,
+    uint64_t connection_id);
 
 /* Log ring helpers */
 void ducknng_log_ring_init(ducknng_log_ring *ring);

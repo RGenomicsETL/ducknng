@@ -298,6 +298,26 @@ int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_
         return -1;
     }
     ducknng_runtime_current_request_service_set(svc->rt, svc);
+    /* Bind the current request's execution subject to the connection about to
+     * run its SQL, so profile admission still sees it when DuckDB executes
+     * pipelines on worker threads. */
+    {
+        const ducknng_execution_subject *subject_ctx =
+            ducknng_runtime_current_thread_execution_subject_get(svc->rt);
+        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
+            duckdb_client_context client_ctx = NULL;
+            duckdb_connection_get_client_context(scope->con, &client_ctx);
+            if (client_ctx) {
+                scope->subject_connection_id =
+                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+                duckdb_destroy_client_context(&client_ctx);
+                if (ducknng_runtime_execution_subject_bind_connection(svc->rt,
+                        scope->subject_connection_id, subject_ctx->subject) == 0) {
+                    scope->subject_bound = 1;
+                }
+            }
+        }
+    }
     return 0;
 }
 
@@ -305,6 +325,10 @@ void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
     ducknng_service *svc;
     if (!scope || !scope->svc) return;
     svc = scope->svc;
+    if (scope->subject_bound && svc->rt) {
+        ducknng_runtime_execution_subject_unbind_connection(svc->rt,
+            scope->subject_connection_id);
+    }
     if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     if (scope->owns_connection) ducknng_service_release_execution_connection(svc, scope->pool_index);
     if (scope->locked_service && svc->execution_mu_initialized) ducknng_mutex_unlock(&svc->execution_mu);
@@ -345,6 +369,23 @@ void ducknng_service_leave_authorizer_sql(ducknng_service_sql_scope *scope) {
     ducknng_service *svc = scope ? scope->svc : NULL;
     if (svc && svc->rt) ducknng_runtime_current_authorizer_context_set(svc->rt, NULL);
     ducknng_service_leave_request_sql(scope);
+}
+
+void ducknng_service_execution_subject_begin(ducknng_service *svc,
+    struct ducknng_execution_subject *subject_ctx, const char *caller_identity,
+    const ducknng_authorizer_decision *auth_decision) {
+    if (!subject_ctx) return;
+    memset(subject_ctx, 0, sizeof(*subject_ctx));
+    subject_ctx->peer_identity = caller_identity;
+    subject_ctx->principal = auth_decision ? auth_decision->principal : NULL;
+    subject_ctx->subject = (subject_ctx->principal && subject_ctx->principal[0])
+        ? subject_ctx->principal : caller_identity;
+    subject_ctx->claims_json = auth_decision ? auth_decision->claims_json : NULL;
+    if (svc && svc->rt) ducknng_runtime_current_execution_subject_set(svc->rt, subject_ctx);
+}
+
+void ducknng_service_execution_subject_end(ducknng_service *svc) {
+    if (svc && svc->rt) ducknng_runtime_current_execution_subject_set(svc->rt, NULL);
 }
 
 static void ducknng_pipe_event_reset(ducknng_pipe_event *event) {
@@ -1536,10 +1577,18 @@ static nng_msg *ducknng_dispatch_request(ducknng_service *svc, const ducknng_fra
     req_ctx.caller_identity = caller_identity;
     req_ctx.auth_principal = auth_decision ? auth_decision->principal : NULL;
     req_ctx.auth_claims_json = auth_decision ? auth_decision->claims_json : NULL;
-    if (method->handler(svc, method, &req_ctx, &reply) != 0 && reply.type != DUCKNNG_RPC_ERROR) {
-        ducknng_method_reply_reset(&reply);
-        return ducknng_error_msg(method->name, DUCKNNG_STATUS_INTERNAL,
-            "ducknng: method handler failed without structured error reply");
+    {
+        ducknng_execution_subject subject_ctx;
+        int handler_rc;
+        ducknng_service_execution_subject_begin(svc, &subject_ctx,
+            caller_identity, auth_decision);
+        handler_rc = method->handler(svc, method, &req_ctx, &reply);
+        ducknng_service_execution_subject_end(svc);
+        if (handler_rc != 0 && reply.type != DUCKNNG_RPC_ERROR) {
+            ducknng_method_reply_reset(&reply);
+            return ducknng_error_msg(method->name, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: method handler failed without structured error reply");
+        }
     }
     if (reply.type == DUCKNNG_RPC_RESULT && (reply.flags & ~method->emitted_reply_flags)) {
         ducknng_method_reply_reset(&reply);
