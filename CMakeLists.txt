@@ -122,6 +122,7 @@ set(EXTENSION_SOURCES
     src/ducknng_http_compat.c
     src/ducknng_net_backend.c
     src/ducknng_wasm_http_fetch.c
+    src/ducknng_wasm_builtins.c
     src/ducknng_nng_compat.c
     src/ducknng_util.c
     third_party/nanoarrow/src/nanoarrow/common/array.c
