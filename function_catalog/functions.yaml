@@ -95,7 +95,7 @@
       "kind": "table",
       "category": "Introspection",
       "signature": "ducknng_list_servers()",
-      "returns": "TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_principal UBIGINT, max_reply_bytes_per_principal UBIGINT, max_session_open_rate_per_principal UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)",
+      "returns": "TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_peer_identity UBIGINT, max_reply_bytes_per_peer_identity UBIGINT, max_session_open_rate_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List registered ducknng services.",
@@ -629,7 +629,7 @@
       "name": "ducknng_set_service_limits",
       "kind": "scalar",
       "category": "Transport Security",
-      "signature": "ducknng_set_service_limits(name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]])",
+      "signature": "ducknng_set_service_limits(name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]])",
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
@@ -643,10 +643,10 @@
         "The three-argument form preserves the current max_inflight_requests value.",
         "max_sessions_per_peer_identity limits concurrently open query sessions for each verified TLS peer identity; 0 means unlimited.",
         "The four-argument form preserves the current max_sessions_per_peer_identity value.",
-        "max_inflight_per_principal limits concurrent in-flight requests for each verified TLS peer identity; 0 means unlimited. Exceeded requests fail with ducknng: max inflight requests per principal exceeded.",
-        "max_reply_bytes_per_principal is a cumulative reply byte budget per principal since service start; 0 means unlimited. Exceeded requests fail with ducknng: reply byte quota for principal exceeded.",
-        "max_session_open_rate_per_principal is a cumulative session-open count cap per principal since service start; 0 means unlimited. Exceeded requests fail with ducknng: session open rate per principal exceeded.",
-        "Per-principal limits require a verified TLS peer identity; they have no effect when TLS authentication is not active."
+        "max_inflight_per_peer_identity limits concurrent in-flight requests for each verified TLS peer identity; 0 means unlimited. Exceeded requests fail with ducknng: max inflight requests per peer identity exceeded.",
+        "max_reply_bytes_per_peer_identity is a cumulative reply byte budget per peer identity since service start; 0 means unlimited. Exceeded requests fail with ducknng: reply byte quota for peer identity exceeded.",
+        "max_session_open_rate_per_peer_identity is a cumulative session-open count cap per peer identity since service start; 0 means unlimited. Exceeded requests fail with ducknng: session open rate per peer identity exceeded.",
+        "These limits are pre-authorizer peer-identity limits: they are keyed by the verified TLS peer identity and enforced before the SQL authorizer maps a principal, so they protect the service from pre-auth pressure. They require a verified TLS peer identity and have no effect when TLS authentication is not active. Post-auth per-subject quotas would be a separate layer."
       ],
       "examples": [
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT);",
@@ -657,7 +657,7 @@
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT, 4::UBIGINT, 1048576::UBIGINT);",
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT, 4::UBIGINT, 1048576::UBIGINT, 10::UBIGINT);"
       ],
-      "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]]"
+      "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]"
     },
     {
       "name": "ducknng_service_inflight",

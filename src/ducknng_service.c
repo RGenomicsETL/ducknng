@@ -1885,8 +1885,8 @@ ducknng_service *ducknng_service_create(ducknng_runtime *rt, const char *name, c
     return svc;
 }
 
-static void ducknng_service_clear_principals(ducknng_service *svc);
-static ducknng_principal_state *ducknng_service_find_or_create_principal_locked(ducknng_service *svc, const char *identity);
+static void ducknng_service_clear_peer_identity_states(ducknng_service *svc);
+static ducknng_peer_identity_state *ducknng_service_find_or_create_peer_identity_locked(ducknng_service *svc, const char *identity);
 
 static void ducknng_http_worker_destroy(ducknng_http_worker *w) {
     if (!w) return;
@@ -1947,7 +1947,7 @@ void ducknng_service_destroy(ducknng_service *svc) {
     ducknng_service_clear_http_routes(svc);
     ducknng_service_clear_pipe_events(svc);
     ducknng_service_clear_pipe_states(svc);
-    ducknng_service_clear_principals(svc);
+    ducknng_service_clear_peer_identity_states(svc);
     for (i = 0; i < session_count; i++) {
         if (sessions && sessions[i]) ducknng_session_destroy(sessions[i]);
     }
@@ -3105,9 +3105,9 @@ int ducknng_service_authorizer_active(const ducknng_service *svc) {
 int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     uint64_t max_active_pipes, uint64_t max_inflight_requests,
     uint64_t max_sessions_per_peer_identity,
-    uint64_t max_inflight_per_principal,
-    uint64_t max_reply_bytes_per_principal,
-    uint64_t max_session_open_rate_per_principal, char **errmsg) {
+    uint64_t max_inflight_per_peer_identity,
+    uint64_t max_reply_bytes_per_peer_identity,
+    uint64_t max_session_open_rate_per_peer_identity, char **errmsg) {
     if (errmsg) *errmsg = NULL;
     if (!svc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: service not found");
@@ -3118,9 +3118,9 @@ int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     svc->max_active_pipes = max_active_pipes;
     svc->max_inflight_requests = max_inflight_requests;
     svc->max_sessions_per_peer_identity = max_sessions_per_peer_identity;
-    svc->max_inflight_per_principal = max_inflight_per_principal;
-    svc->max_reply_bytes_per_principal = max_reply_bytes_per_principal;
-    svc->max_session_open_rate_per_principal = max_session_open_rate_per_principal;
+    svc->max_inflight_per_peer_identity = max_inflight_per_peer_identity;
+    svc->max_reply_bytes_per_peer_identity = max_reply_bytes_per_peer_identity;
+    svc->max_session_open_rate_per_peer_identity = max_session_open_rate_per_peer_identity;
     if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
     return 0;
 }
@@ -3180,19 +3180,19 @@ uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *s
     return svc->max_sessions_per_peer_identity;
 }
 
-uint64_t ducknng_service_max_inflight_per_principal(const ducknng_service *svc) {
+uint64_t ducknng_service_max_inflight_per_peer_identity(const ducknng_service *svc) {
     if (!svc) return 0;
-    return svc->max_inflight_per_principal;
+    return svc->max_inflight_per_peer_identity;
 }
 
-uint64_t ducknng_service_max_reply_bytes_per_principal(const ducknng_service *svc) {
+uint64_t ducknng_service_max_reply_bytes_per_peer_identity(const ducknng_service *svc) {
     if (!svc) return 0;
-    return svc->max_reply_bytes_per_principal;
+    return svc->max_reply_bytes_per_peer_identity;
 }
 
-uint64_t ducknng_service_max_session_open_rate_per_principal(const ducknng_service *svc) {
+uint64_t ducknng_service_max_session_open_rate_per_peer_identity(const ducknng_service *svc) {
     if (!svc) return 0;
-    return svc->max_session_open_rate_per_principal;
+    return svc->max_session_open_rate_per_peer_identity;
 }
 
 const char *ducknng_service_execution_model(const ducknng_service *svc) {
@@ -3234,65 +3234,65 @@ size_t ducknng_service_inflight_request_count(const ducknng_service *svc) {
     return atomic_load_explicit(&svc->inflight_request_count_visible, memory_order_acquire);
 }
 
-/* --- Per-principal state helpers (caller must hold svc->mu) --- */
+/* --- Per-peer-identity state helpers (caller must hold svc->mu) --- */
 
-static ducknng_principal_state *ducknng_service_find_or_create_principal_locked(
+static ducknng_peer_identity_state *ducknng_service_find_or_create_peer_identity_locked(
     ducknng_service *svc, const char *identity) {
     size_t i;
-    ducknng_principal_state *p;
-    ducknng_principal_state *new_principals;
+    ducknng_peer_identity_state *p;
+    ducknng_peer_identity_state *new_peer_identity_states;
     size_t new_cap;
     if (!svc || !identity || !identity[0]) return NULL;
-    for (i = 0; i < svc->principal_count; i++) {
-        if (svc->principals[i].identity && strcmp(svc->principals[i].identity, identity) == 0)
-            return &svc->principals[i];
+    for (i = 0; i < svc->peer_identity_state_count; i++) {
+        if (svc->peer_identity_states[i].identity && strcmp(svc->peer_identity_states[i].identity, identity) == 0)
+            return &svc->peer_identity_states[i];
     }
     /* not found – allocate a new slot */
-    if (svc->principal_count == svc->principal_cap) {
-        new_cap = svc->principal_cap ? svc->principal_cap * 2 : 8;
-        new_principals = (ducknng_principal_state *)duckdb_malloc(
-            sizeof(*new_principals) * new_cap);
-        if (!new_principals) return NULL;
-        memset(new_principals, 0, sizeof(*new_principals) * new_cap);
-        if (svc->principals && svc->principal_count)
-            memcpy(new_principals, svc->principals,
-                sizeof(*new_principals) * svc->principal_count);
-        if (svc->principals) duckdb_free(svc->principals);
-        svc->principals = new_principals;
-        svc->principal_cap = new_cap;
+    if (svc->peer_identity_state_count == svc->peer_identity_state_cap) {
+        new_cap = svc->peer_identity_state_cap ? svc->peer_identity_state_cap * 2 : 8;
+        new_peer_identity_states = (ducknng_peer_identity_state *)duckdb_malloc(
+            sizeof(*new_peer_identity_states) * new_cap);
+        if (!new_peer_identity_states) return NULL;
+        memset(new_peer_identity_states, 0, sizeof(*new_peer_identity_states) * new_cap);
+        if (svc->peer_identity_states && svc->peer_identity_state_count)
+            memcpy(new_peer_identity_states, svc->peer_identity_states,
+                sizeof(*new_peer_identity_states) * svc->peer_identity_state_count);
+        if (svc->peer_identity_states) duckdb_free(svc->peer_identity_states);
+        svc->peer_identity_states = new_peer_identity_states;
+        svc->peer_identity_state_cap = new_cap;
     }
-    p = &svc->principals[svc->principal_count];
+    p = &svc->peer_identity_states[svc->peer_identity_state_count];
     memset(p, 0, sizeof(*p));
     p->identity = ducknng_strdup(identity);
     if (!p->identity) return NULL;
-    svc->principal_count++;
+    svc->peer_identity_state_count++;
     return p;
 }
 
-static void ducknng_service_clear_principals(ducknng_service *svc) {
+static void ducknng_service_clear_peer_identity_states(ducknng_service *svc) {
     size_t i;
-    if (!svc || !svc->principals) return;
-    for (i = 0; i < svc->principal_count; i++) {
-        if (svc->principals[i].identity) duckdb_free(svc->principals[i].identity);
-        if (svc->principals[i].session_open_times) duckdb_free(svc->principals[i].session_open_times);
+    if (!svc || !svc->peer_identity_states) return;
+    for (i = 0; i < svc->peer_identity_state_count; i++) {
+        if (svc->peer_identity_states[i].identity) duckdb_free(svc->peer_identity_states[i].identity);
+        if (svc->peer_identity_states[i].session_open_times) duckdb_free(svc->peer_identity_states[i].session_open_times);
     }
-    duckdb_free(svc->principals);
-    svc->principals = NULL;
-    svc->principal_count = 0;
-    svc->principal_cap = 0;
+    duckdb_free(svc->peer_identity_states);
+    svc->peer_identity_states = NULL;
+    svc->peer_identity_state_count = 0;
+    svc->peer_identity_state_cap = 0;
 }
 
 int ducknng_service_check_and_record_session_open_locked(ducknng_service *svc,
     const char *identity, uint64_t now_ms, char **errmsg) {
-    ducknng_principal_state *ps;
+    ducknng_peer_identity_state *ps;
     uint64_t *new_times;
     size_t new_cap;
     size_t valid;
     size_t i;
     if (errmsg) *errmsg = NULL;
     if (!svc || !identity || !identity[0]) return 0;
-    if (svc->max_session_open_rate_per_principal == 0) return 0;
-    ps = ducknng_service_find_or_create_principal_locked(svc, identity);
+    if (svc->max_session_open_rate_per_peer_identity == 0) return 0;
+    ps = ducknng_service_find_or_create_peer_identity_locked(svc, identity);
     if (!ps) return 0; /* OOM: silently allow */
     /* Expire entries older than 1 second */
     valid = 0;
@@ -3306,8 +3306,8 @@ int ducknng_service_check_and_record_session_open_locked(ducknng_service *svc,
     ps->session_open_count = valid;
     ps->session_open_head = 0;
     /* Check rate */
-    if (ps->session_open_count >= (size_t)svc->max_session_open_rate_per_principal) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: session open rate per principal exceeded");
+    if (ps->session_open_count >= (size_t)svc->max_session_open_rate_per_peer_identity) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: session open rate per peer identity exceeded");
         return -1;
     }
     /* Record this open */
@@ -3344,18 +3344,18 @@ int ducknng_service_begin_request(ducknng_service *svc, const char *caller_ident
         return -1;
     }
     if (caller_identity && caller_identity[0]) {
-        ducknng_principal_state *ps = ducknng_service_find_or_create_principal_locked(svc, caller_identity);
+        ducknng_peer_identity_state *ps = ducknng_service_find_or_create_peer_identity_locked(svc, caller_identity);
         if (ps) {
-            if (svc->max_inflight_per_principal > 0 &&
-                ps->inflight_count >= (size_t)svc->max_inflight_per_principal) {
+            if (svc->max_inflight_per_peer_identity > 0 &&
+                ps->inflight_count >= (size_t)svc->max_inflight_per_peer_identity) {
                 if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
-                if (errmsg) *errmsg = ducknng_strdup("ducknng: max inflight requests per principal exceeded");
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: max inflight requests per peer identity exceeded");
                 return -1;
             }
-            if (svc->max_reply_bytes_per_principal > 0 &&
-                ps->cumulative_reply_bytes >= svc->max_reply_bytes_per_principal) {
+            if (svc->max_reply_bytes_per_peer_identity > 0 &&
+                ps->cumulative_reply_bytes >= svc->max_reply_bytes_per_peer_identity) {
                 if (svc->mu_initialized) ducknng_mutex_unlock(&svc->mu);
-                if (errmsg) *errmsg = ducknng_strdup("ducknng: reply byte quota for principal exceeded");
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: reply byte quota for peer identity exceeded");
                 return -1;
             }
             ps->inflight_count++;
@@ -3374,10 +3374,10 @@ void ducknng_service_end_request(ducknng_service *svc, const char *caller_identi
     atomic_store_explicit(&svc->inflight_request_count_visible, svc->inflight_request_count, memory_order_release);
     if (caller_identity && caller_identity[0]) {
         size_t i;
-        for (i = 0; i < svc->principal_count; i++) {
-            if (svc->principals[i].identity && strcmp(svc->principals[i].identity, caller_identity) == 0) {
-                if (svc->principals[i].inflight_count > 0) svc->principals[i].inflight_count--;
-                svc->principals[i].cumulative_reply_bytes += (uint64_t)reply_bytes;
+        for (i = 0; i < svc->peer_identity_state_count; i++) {
+            if (svc->peer_identity_states[i].identity && strcmp(svc->peer_identity_states[i].identity, caller_identity) == 0) {
+                if (svc->peer_identity_states[i].inflight_count > 0) svc->peer_identity_states[i].inflight_count--;
+                svc->peer_identity_states[i].cumulative_reply_bytes += (uint64_t)reply_bytes;
                 break;
             }
         }

@@ -106,7 +106,7 @@ typedef struct ducknng_http_route {
     char *auth_allow_identities_json; /* JSON array of allowed identities; NULL = any */
 } ducknng_http_route;
 
-typedef struct ducknng_principal_state {
+typedef struct ducknng_peer_identity_state {
     char *identity;
     size_t inflight_count;
     uint64_t cumulative_reply_bytes;
@@ -115,7 +115,7 @@ typedef struct ducknng_principal_state {
     size_t session_open_head;      /* index of oldest entry */
     size_t session_open_count;     /* number of valid entries */
     size_t session_open_cap;       /* allocated capacity */
-} ducknng_principal_state;
+} ducknng_peer_identity_state;
 
 typedef struct ducknng_http_worker {
     char *name;
@@ -237,12 +237,12 @@ struct ducknng_service {
     uint64_t max_active_pipes;
     uint64_t max_inflight_requests;
     uint64_t max_sessions_per_peer_identity;
-    uint64_t max_inflight_per_principal;
-    uint64_t max_reply_bytes_per_principal;
-    uint64_t max_session_open_rate_per_principal;
-    ducknng_principal_state *principals;
-    size_t principal_count;
-    size_t principal_cap;
+    uint64_t max_inflight_per_peer_identity;
+    uint64_t max_reply_bytes_per_peer_identity;
+    uint64_t max_session_open_rate_per_peer_identity;
+    ducknng_peer_identity_state *peer_identity_states;
+    size_t peer_identity_state_count;
+    size_t peer_identity_state_cap;
     ducknng_http_worker **http_workers;
     size_t http_worker_count;
     size_t http_worker_cap;
@@ -288,18 +288,18 @@ int ducknng_service_authorizer_active(const ducknng_service *svc);
 int ducknng_service_set_limits(ducknng_service *svc, uint64_t max_open_sessions,
     uint64_t max_active_pipes, uint64_t max_inflight_requests,
     uint64_t max_sessions_per_peer_identity,
-    uint64_t max_inflight_per_principal,
-    uint64_t max_reply_bytes_per_principal,
-    uint64_t max_session_open_rate_per_principal, char **errmsg);
+    uint64_t max_inflight_per_peer_identity,
+    uint64_t max_reply_bytes_per_peer_identity,
+    uint64_t max_session_open_rate_per_peer_identity, char **errmsg);
 int ducknng_service_set_execution_model(ducknng_service *svc, const char *model, char **errmsg);
 const char *ducknng_execution_model_name(int model);
 uint64_t ducknng_service_max_open_sessions(const ducknng_service *svc);
 uint64_t ducknng_service_max_active_pipes(const ducknng_service *svc);
 uint64_t ducknng_service_max_inflight_requests(const ducknng_service *svc);
 uint64_t ducknng_service_max_sessions_per_peer_identity(const ducknng_service *svc);
-uint64_t ducknng_service_max_inflight_per_principal(const ducknng_service *svc);
-uint64_t ducknng_service_max_reply_bytes_per_principal(const ducknng_service *svc);
-uint64_t ducknng_service_max_session_open_rate_per_principal(const ducknng_service *svc);
+uint64_t ducknng_service_max_inflight_per_peer_identity(const ducknng_service *svc);
+uint64_t ducknng_service_max_reply_bytes_per_peer_identity(const ducknng_service *svc);
+uint64_t ducknng_service_max_session_open_rate_per_peer_identity(const ducknng_service *svc);
 const char *ducknng_service_execution_model(const ducknng_service *svc);
 const char *ducknng_service_peer_identity_format(const ducknng_service *svc);
 void ducknng_service_manifest_security(const ducknng_service *svc, ducknng_manifest_security *security);
