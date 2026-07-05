@@ -53,6 +53,13 @@ typedef struct ducknng_net_backend {
 /* The build-target backend; never NULL after extension load. */
 const ducknng_net_backend *ducknng_net_backend_get(void);
 
+/* All build targets' capability descriptors, as data, in every build; the
+ * docs matrix and conformance harness render from this instead of prose. */
+const ducknng_net_caps *ducknng_net_caps_all(size_t *out_count);
+
+const char *ducknng_net_cap_name(ducknng_net_cap cap);
+const char *ducknng_net_tls_owner_name(ducknng_net_tls_owner owner);
+
 /* Render a capability descriptor as a JSON object (duckdb_malloc; caller
  * frees). Returns NULL on allocation failure. */
 char *ducknng_net_caps_to_json(const ducknng_net_caps *caps);

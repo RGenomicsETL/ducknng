@@ -29,3 +29,30 @@ SELECT json_extract(c, '$.async_is_real')::BOOLEAN,
 FROM (SELECT ducknng_transport_capabilities()::JSON AS c)
 ----
 true	true	true	native
+
+# The full contract table carries every build target as data; exactly one row
+# is active and it must agree with the scalar descriptor.
+query TTT
+SELECT target, inproc, tls_owner FROM ducknng_list_transport_capabilities() ORDER BY target
+----
+native	supported	native
+wasm_eh	unsupported	browser_managed
+wasm_threads	experimental	browser_managed
+
+query I
+SELECT target FROM ducknng_list_transport_capabilities() WHERE active
+----
+native
+
+query I
+SELECT count(*)::INTEGER
+FROM ducknng_list_transport_capabilities() t,
+     (SELECT ducknng_transport_capabilities()::JSON AS c) s
+WHERE t.active
+  AND t.target = json_extract_string(s.c, '$.backend')
+  AND t.http = json_extract_string(s.c, '$.http')
+  AND t.websocket = json_extract_string(s.c, '$.websocket')
+  AND t.async_is_real = json_extract(s.c, '$.async_is_real')::BOOLEAN
+  AND t.tls_owner = json_extract_string(s.c, '$.tls_owner')
+----
+1

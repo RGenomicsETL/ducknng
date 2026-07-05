@@ -480,6 +480,107 @@ static void ducknng_transport_capabilities_scalar(duckdb_function_info info,
     duckdb_free(json);
 }
 
+typedef struct {
+    idx_t offset;
+} ducknng_caps_init_data;
+
+static void destroy_caps_init_data(void *ptr) {
+    if (ptr) duckdb_free(ptr);
+}
+
+static void ducknng_list_transport_capabilities_bind(duckdb_bind_info info) {
+    duckdb_logical_type type;
+    size_t count = 0;
+    (void)ducknng_net_caps_all(&count);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "target", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    duckdb_bind_add_result_column(info, "active", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "http", type);
+    duckdb_bind_add_result_column(info, "https", type);
+    duckdb_bind_add_result_column(info, "inproc", type);
+    duckdb_bind_add_result_column(info, "tcp", type);
+    duckdb_bind_add_result_column(info, "ipc", type);
+    duckdb_bind_add_result_column(info, "tls_tcp", type);
+    duckdb_bind_add_result_column(info, "websocket", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    duckdb_bind_add_result_column(info, "async_is_real", type);
+    duckdb_bind_add_result_column(info, "honors_timeout", type);
+    duckdb_bind_add_result_column(info, "honors_cancel", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "tls_owner", type);
+    duckdb_destroy_logical_type(&type);
+    duckdb_bind_set_cardinality(info, (idx_t)count, true);
+}
+
+static void ducknng_list_transport_capabilities_init(duckdb_init_info info) {
+    ducknng_caps_init_data *init =
+        (ducknng_caps_init_data *)duckdb_malloc(sizeof(*init));
+    if (!init) {
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    init->offset = 0;
+    duckdb_init_set_max_threads(info, 1);
+    duckdb_init_set_init_data(info, init, destroy_caps_init_data);
+}
+
+static void ducknng_list_transport_capabilities_scan(duckdb_function_info info,
+    duckdb_data_chunk output) {
+    ducknng_caps_init_data *init =
+        (ducknng_caps_init_data *)duckdb_function_get_init_data(info);
+    size_t count = 0;
+    const ducknng_net_caps *all = ducknng_net_caps_all(&count);
+    const ducknng_net_caps *active = ducknng_net_backend_get()->capabilities();
+    bool *actives;
+    bool *async_real;
+    bool *timeouts;
+    bool *cancels;
+    idx_t emitted = 0;
+    idx_t i;
+
+    if (!init || !all || init->offset >= (idx_t)count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    actives = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1));
+    async_real = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 9));
+    timeouts = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
+    cancels = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
+    for (i = init->offset; i < (idx_t)count && emitted < duckdb_vector_size(); i++, emitted++) {
+        const ducknng_net_caps *row = &all[i];
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), emitted,
+            row->backend_name ? row->backend_name : "unknown");
+        actives[emitted] = row == active;
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 2), emitted,
+            ducknng_net_cap_name(row->http));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), emitted,
+            ducknng_net_cap_name(row->https));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), emitted,
+            ducknng_net_cap_name(row->inproc));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), emitted,
+            ducknng_net_cap_name(row->tcp));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), emitted,
+            ducknng_net_cap_name(row->ipc));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), emitted,
+            ducknng_net_cap_name(row->tls_tcp));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 8), emitted,
+            ducknng_net_cap_name(row->websocket));
+        async_real[emitted] = row->async_is_real != 0;
+        timeouts[emitted] = row->honors_timeout != 0;
+        cancels[emitted] = row->honors_cancel != 0;
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 12), emitted,
+            ducknng_net_tls_owner_name(row->tls_owner));
+    }
+    init->offset = i;
+    duckdb_data_chunk_set_size(output, emitted);
+}
+
 static void ducknng_set_execution_pool_max_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
@@ -528,6 +629,9 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     if (!ctx || !ctx->rt) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_nng_version", 0, ducknng_nng_version_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_transport_capabilities", 0, ducknng_transport_capabilities_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_transport_capabilities", ctx, 0, NULL,
+            ducknng_list_transport_capabilities_bind, ducknng_list_transport_capabilities_init,
+            ducknng_list_transport_capabilities_scan)) return 0;
     {
         duckdb_type inflight_types[1] = {DUCKDB_TYPE_VARCHAR};
         if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_service_inflight", 1, ducknng_service_inflight_scalar, ctx, inflight_types, DUCKDB_TYPE_UBIGINT)) return 0;

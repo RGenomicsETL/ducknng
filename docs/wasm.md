@@ -299,7 +299,23 @@ operation and obscure the first blocking boundary.
 Browser wasm is not a POSIX host. `ipc://` and raw TCP listeners do not map to a
 normal browser runtime. NNG may be buildable through Emscripten, as nanonext
 shows for pthread wasm, but each transport still needs runtime-specific testing.
-The current compatibility matrix is:
+
+The per-target transport capability contract is compiled into the extension and
+queryable as `SELECT * FROM ducknng_list_transport_capabilities()` (the active
+target's descriptor is `ducknng_transport_capabilities()`). The table below is
+rendered from that contract by `make wasm_matrix`; edit
+`src/ducknng_net_backend.c`, not this block.
+
+<!-- BEGIN GENERATED TRANSPORT MATRIX (make wasm_matrix) -->
+| target | http | https | inproc | tcp | ipc | tls+tcp | ws/wss | real async | timeout | cancel | TLS owner |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `native` | supported | supported | supported | supported | supported | supported | supported | yes | yes | yes | native |
+| `wasm_eh` | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported | no | no | no | browser_managed |
+| `wasm_threads` | supported | supported | experimental | unsupported | unsupported | unsupported | unsupported | no | no | no | browser_managed |
+<!-- END GENERATED TRANSPORT MATRIX -->
+
+The evidence log below records what has been proven in real browsers, which is
+a stricter statement than the contract above:
 
 | Runtime / carrier | Current status |
 | --- | --- |

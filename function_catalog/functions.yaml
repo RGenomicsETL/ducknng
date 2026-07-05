@@ -711,11 +711,29 @@
       "description": "Return the active net backend's capability descriptor as a JSON object.",
       "notes": [
         "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
-        "The native backend reports every transport supported with real async and native TLS. The browser backend reports http/https with browser-managed TLS, terminal-at-launch AIO handles, and inproc as experimental only in the pthread build.",
+        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS; the wasm targets report http/https with browser-managed TLS and terminal-at-launch AIO handles, with inproc experimental only under wasm_threads.",
         "Harnesses should gate assertions on this descriptor instead of maintaining per-target probe lists; claiming a capability that fails, or passing one that is claimed unsupported, is a bug in either the claim or the behavior."
       ],
       "examples": [
         "SELECT json_extract_string(ducknng_transport_capabilities()::JSON, '$.backend');"
+      ],
+      "parameters": ""
+    },
+    {
+      "name": "ducknng_list_transport_capabilities",
+      "kind": "table",
+      "category": "Service Control",
+      "signature": "ducknng_list_transport_capabilities()",
+      "returns": "TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "List the capability contract for every build target; exactly one row is active.",
+      "notes": [
+        "The contract is compiled data, identical in every build, so a native binary can render the full support matrix including the wasm targets; docs/wasm.md's transport matrix is generated from this table by make wasm_matrix.",
+        "active marks the build target of the loaded extension and always agrees with ducknng_transport_capabilities()."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_list_transport_capabilities();"
       ],
       "parameters": ""
     },

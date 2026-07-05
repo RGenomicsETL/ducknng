@@ -11,6 +11,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_service_inflight` | scalar | `name` | `UBIGINT` | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
 | `ducknng_set_service_execution_model` | scalar | `name, model` | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL. |
 | `ducknng_transport_capabilities` | scalar |  | `VARCHAR` | Return the active net backend's capability descriptor as a JSON object. |
+| `ducknng_list_transport_capabilities` | table |  | `TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)` | List the capability contract for every build target; exactly one row is active. |
 | `ducknng_set_execution_pool_max` | scalar | `n` | `UBIGINT` | Set the runtime execution-connection pool grow ceiling and return the effective value. |
 | `ducknng_execution_pool_max` | scalar |  | `UBIGINT` | Return the current execution-connection pool grow ceiling. |
 

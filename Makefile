@@ -1,4 +1,4 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r
+.PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
 .PHONY: rpc_bench rpc_bulk_compare http_smoke subscriber_gateway_rdm
 .PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean
 
@@ -222,6 +222,9 @@ clean_all: clean clean_configure
 
 function_catalog:
 	python3 function_catalog/generate_function_catalog.py
+
+wasm_matrix: release
+	./configure/venv/bin/python3 scripts/generate_wasm_matrix.py
 
 rdm: function_catalog
 	R -e "rmarkdown::render('README.Rmd')"
