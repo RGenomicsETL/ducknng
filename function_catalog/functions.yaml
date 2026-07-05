@@ -701,6 +701,25 @@
       "parameters": "name, model"
     },
     {
+      "name": "ducknng_transport_capabilities",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_transport_capabilities()",
+      "returns": "VARCHAR",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Return the active net backend's capability descriptor as a JSON object.",
+      "notes": [
+        "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
+        "The native backend reports every transport supported with real async and native TLS. The browser backend reports http/https with browser-managed TLS, terminal-at-launch AIO handles, and inproc as experimental only in the pthread build.",
+        "Harnesses should gate assertions on this descriptor instead of maintaining per-target probe lists; claiming a capability that fails, or passing one that is claimed unsupported, is a bug in either the claim or the behavior."
+      ],
+      "examples": [
+        "SELECT json_extract_string(ducknng_transport_capabilities()::JSON, '$.backend');"
+      ],
+      "parameters": ""
+    },
+    {
       "name": "ducknng_set_execution_pool_max",
       "kind": "scalar",
       "category": "Service Control",

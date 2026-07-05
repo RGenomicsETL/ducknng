@@ -14,6 +14,18 @@ int ducknng_http_transact(const char *url, const char *method, const char *heade
     const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
     uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
     char **errmsg);
+/* Per-target implementations bound by the net backend (ducknng_net_backend.h);
+ * shared code calls ducknng_http_transact, never these directly. */
+int ducknng_http_transact_native(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg);
+#ifdef __EMSCRIPTEN__
+int ducknng_http_transact_browser(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg);
+#endif
 int ducknng_http_transact_aio_prepare(const char *url, const char *method, const char *headers_json,
     const uint8_t *body, size_t body_len, const ducknng_tls_opts *tls_opts,
     nng_url **out_url, nng_http_client **out_client, nng_http_req **out_req,

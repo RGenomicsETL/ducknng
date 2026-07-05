@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:40073 |
+| tls+tcp://127.0.0.1:35839 |
 +---------------------------+
 
 +--------+
@@ -543,6 +543,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN` | Stop a named ducknng service.                                                                                                                      |
 | `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT` | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
 | `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
+| `ducknng_transport_capabilities`      | scalar |                                                                                               | `VARCHAR` | Return the active net backend’s capability descriptor as a JSON object.                                                                            |
 | `ducknng_set_execution_pool_max`      | scalar | `n`                                                                                           | `UBIGINT` | Set the runtime execution-connection pool grow ceiling and return the effective value.                                                             |
 | `ducknng_execution_pool_max`          | scalar |                                                                                               | `UBIGINT` | Return the current execution-connection pool grow ceiling.                                                                                         |
 
@@ -2184,11 +2185,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1321955895 | 1783277852809 | 127.0.0.1:46274 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 124241093 | 1783283683392 | 127.0.0.1:51820 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

@@ -1,4 +1,5 @@
 #include "ducknng_sql_shared.h"
+#include "ducknng_net_backend.h"
 #include "ducknng_service.h"
 #include "ducknng_util.h"
 #include <nng/nng.h>
@@ -464,6 +465,21 @@ static void ducknng_nng_version_scalar(duckdb_function_info info, duckdb_data_ch
     }
 }
 
+static void ducknng_transport_capabilities_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    char *json = ducknng_net_caps_to_json(ducknng_net_backend_get()->capabilities());
+    idx_t row;
+    if (!json) {
+        duckdb_scalar_function_set_error(info, "ducknng: out of memory rendering transport capabilities");
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        duckdb_vector_assign_string_element(output, row, json);
+    }
+    duckdb_free(json);
+}
+
 static void ducknng_set_execution_pool_max_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
@@ -511,6 +527,7 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     duckdb_type execution_model_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_nng_version", 0, ducknng_nng_version_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_transport_capabilities", 0, ducknng_transport_capabilities_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
     {
         duckdb_type inflight_types[1] = {DUCKDB_TYPE_VARCHAR};
         if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_service_inflight", 1, ducknng_service_inflight_scalar, ctx, inflight_types, DUCKDB_TYPE_UBIGINT)) return 0;

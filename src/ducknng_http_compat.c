@@ -1,4 +1,5 @@
 #include "ducknng_http_compat.h"
+#include "ducknng_net_backend.h"
 #include "ducknng_runtime.h"
 #include "ducknng_service.h"
 #include "ducknng_transport.h"
@@ -702,6 +703,69 @@ int ducknng_http_transact(const char *url, const char *method, const char *heade
     const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
     uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
     char **errmsg) {
+    return ducknng_net_backend_get()->http_transact(url, method, headers_json,
+        body, body_len, timeout_ms, tls_opts, out_status, out_headers_json,
+        out_body, out_body_len, errmsg);
+}
+
+#ifdef __EMSCRIPTEN__
+/* In the browser there is no native socket layer for the NNG HTTP client.
+ * Route http:// and https:// through the synchronous XHR bridge.
+ * TLS is browser-managed, so an explicit TLS configuration is rejected. */
+int ducknng_http_transact_browser(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg) {
+    ducknng_transport_url parsed;
+    char *header_block = NULL;
+    int frc;
+    if (out_status) *out_status = 0;
+    if (out_headers_json) *out_headers_json = NULL;
+    if (out_body) *out_body = NULL;
+    if (out_body_len) *out_body_len = 0;
+    if (errmsg) *errmsg = NULL;
+    if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
+    if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
+    if (ducknng_http_tls_requested(tls_opts)) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
+        return -1;
+    }
+    if (method && method[0] && !ducknng_http_token_is_valid(method)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP method must be an HTTP token");
+        return -1;
+    }
+    if (headers_json && headers_json[0] &&
+        ducknng_http_validate_headers_json(headers_json, errmsg) != 0) {
+        return -1;
+    }
+    frc = ducknng_wasm_http_fetch_perform(url, method, headers_json, body, body_len,
+        timeout_ms, out_status, &header_block, out_body, out_body_len, errmsg);
+    if (frc != 0) {
+        if (header_block) duckdb_free(header_block);
+        return -1;
+    }
+    if (out_headers_json) {
+        *out_headers_json = ducknng_http_headers_block_to_json(header_block, errmsg);
+        if (!*out_headers_json) {
+            if (header_block) duckdb_free(header_block);
+            if (out_body && *out_body) {
+                duckdb_free(*out_body);
+                *out_body = NULL;
+            }
+            if (out_body_len) *out_body_len = 0;
+            return -1;
+        }
+    }
+    if (header_block) duckdb_free(header_block);
+    return 0;
+}
+#endif
+
+int ducknng_http_transact_native(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg) {
     ducknng_transport_url parsed;
     nng_url *parsed_url = NULL;
     nng_http_client *client = NULL;
@@ -720,48 +784,6 @@ int ducknng_http_transact(const char *url, const char *method, const char *heade
     if (errmsg) *errmsg = NULL;
     if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
     if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
-#ifdef __EMSCRIPTEN__
-    /* In the browser there is no native socket layer for the NNG HTTP client.
-     * Route http:// and https:// through the synchronous XHR bridge.
-     * TLS is browser-managed, so an explicit TLS configuration is rejected. */
-    {
-        char *header_block = NULL;
-        int frc;
-        if (ducknng_http_tls_requested(tls_opts)) {
-            if (errmsg) *errmsg = ducknng_strdup(
-                "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
-            return -1;
-        }
-        if (method && method[0] && !ducknng_http_token_is_valid(method)) {
-            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP method must be an HTTP token");
-            return -1;
-        }
-        if (headers_json && headers_json[0] &&
-            ducknng_http_validate_headers_json(headers_json, errmsg) != 0) {
-            return -1;
-        }
-        frc = ducknng_wasm_http_fetch_perform(url, method, headers_json, body, body_len,
-            timeout_ms, out_status, &header_block, out_body, out_body_len, errmsg);
-        if (frc != 0) {
-            if (header_block) duckdb_free(header_block);
-            return -1;
-        }
-        if (out_headers_json) {
-            *out_headers_json = ducknng_http_headers_block_to_json(header_block, errmsg);
-            if (!*out_headers_json) {
-                if (header_block) duckdb_free(header_block);
-                if (out_body && *out_body) {
-                    duckdb_free(*out_body);
-                    *out_body = NULL;
-                }
-                if (out_body_len) *out_body_len = 0;
-                return -1;
-            }
-        }
-        if (header_block) duckdb_free(header_block);
-        return 0;
-    }
-#endif
     if (ducknng_http_tls_requested(tls_opts) && !parsed.uses_tls) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: TLS configuration requires an https:// URL");
         return -1;

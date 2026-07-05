@@ -1,0 +1,31 @@
+# name: test/sql/ducknng_transport_capabilities.test
+# group: [ducknng]
+
+require ducknng
+
+# The native backend advertises full transport support with real async and
+# native TLS ownership. This is the machine-readable form of the support
+# matrix; the browser lanes assert their own descriptor in the browser
+# harness.
+query I
+SELECT json_extract_string(ducknng_transport_capabilities()::JSON, '$.backend')
+----
+native
+
+query IIIIIII
+SELECT json_extract_string(c, '$.http'), json_extract_string(c, '$.https'),
+       json_extract_string(c, '$.inproc'), json_extract_string(c, '$.tcp'),
+       json_extract_string(c, '$.ipc'), json_extract_string(c, '$.tls_tcp'),
+       json_extract_string(c, '$.websocket')
+FROM (SELECT ducknng_transport_capabilities()::JSON AS c)
+----
+supported	supported	supported	supported	supported	supported	supported
+
+query IIII
+SELECT json_extract(c, '$.async_is_real')::BOOLEAN,
+       json_extract(c, '$.honors_timeout')::BOOLEAN,
+       json_extract(c, '$.honors_cancel')::BOOLEAN,
+       json_extract_string(c, '$.tls_owner')
+FROM (SELECT ducknng_transport_capabilities()::JSON AS c)
+----
+true	true	true	native
