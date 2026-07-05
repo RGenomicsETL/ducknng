@@ -664,15 +664,22 @@ ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
         goto done;
     }
     if (profile.allow_subjects_json && profile.allow_subjects_json[0]) {
-        const ducknng_execution_subject *subject_ctx =
-            ducknng_runtime_current_thread_execution_subject_get(rt);
-        const char *subject = subject_ctx ? subject_ctx->subject : NULL;
+        const char *subject = NULL;
         char *connection_subject = NULL;
         int admitted;
-        if ((!subject || !subject[0]) && has_connection_id) {
+        /* The connection binding takes precedence over the thread-local
+         * subject: a session connection carries its opener's subject, which
+         * must govern the session's SQL even when a different caller's fetch
+         * request is driving execution on this thread. */
+        if (has_connection_id) {
             connection_subject =
                 ducknng_runtime_execution_subject_for_connection_dup(rt, connection_id);
             subject = connection_subject;
+        }
+        if (!subject || !subject[0]) {
+            const ducknng_execution_subject *subject_ctx =
+                ducknng_runtime_current_thread_execution_subject_get(rt);
+            subject = subject_ctx ? subject_ctx->subject : NULL;
         }
         admitted = subject && subject[0] &&
             ducknng_json_string_array_contains(profile.allow_subjects_json,

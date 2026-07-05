@@ -446,6 +446,27 @@ FROM ducknng_ncurl(
 ----
 0	1
 
+# The opener's subject governs the whole session even when a later request in
+# the same session is authorized as a different principal: query_open maps to
+# alice, fetch maps to bob, and the session SQL still resolves as alice.
+query I
+SELECT CASE WHEN ducknng_set_service_authorizer(
+  'http_profile_sess',
+  'SELECT true AS allow, CASE WHEN rpc_method = ''query_open'' THEN ''alice'' ELSE ''bob'' END AS principal FROM ducknng_auth_context()'
+) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT ok_flag, authorized_flag
+FROM ducknng_query_rpc('ipc:///tmp/ducknng_http_profile_sess.ipc',
+  'SELECT CASE WHEN ok THEN 1 ELSE 0 END AS ok_flag, CASE WHEN body_text = ''authorized'' THEN 1 ELSE 0 END AS authorized_flag FROM ducknng_ncurl(''' ||
+    getvariable('http_profile_base')::VARCHAR ||
+    '/auth/check'', ''GET'', NULL, NULL, 2000, 0::UBIGINT, ''profile-alice'')',
+  0::UBIGINT)
+----
+1	1
+
 query I
 SELECT CASE WHEN ducknng_stop_server('http_profile_sess') THEN 1 ELSE 0 END
 ----

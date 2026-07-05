@@ -48,11 +48,10 @@ ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt, duckdb_bind_info inf
 
     if (!rt || !profiles || count == 0) return count;
     in_request = ducknng_runtime_current_thread_request_service_get(rt) != NULL;
-    subject_ctx = ducknng_runtime_current_thread_execution_subject_get(rt);
-    if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
-        subject = ducknng_strdup(subject_ctx->subject);
-        in_request = 1;
-    } else {
+    /* Connection binding first: a session connection carries its opener's
+     * subject, which governs visibility even when another caller's fetch
+     * request is driving execution on this thread. */
+    {
         duckdb_client_context client_ctx = NULL;
         duckdb_table_function_get_client_context(info, &client_ctx);
         if (client_ctx) {
@@ -60,6 +59,13 @@ ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt, duckdb_bind_info inf
                 (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
             duckdb_destroy_client_context(&client_ctx);
             if (subject) in_request = 1;
+        }
+    }
+    if (!subject) {
+        subject_ctx = ducknng_runtime_current_thread_execution_subject_get(rt);
+        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
+            subject = ducknng_strdup(subject_ctx->subject);
+            in_request = 1;
         }
     }
     if (!in_request) {
