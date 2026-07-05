@@ -83,11 +83,17 @@ static const ducknng_net_caps *ducknng_active_capabilities(void) {
 static const ducknng_net_backend ducknng_active_backend = {
     .capabilities = ducknng_active_capabilities,
     .http_transact = ducknng_http_transact_browser,
+    .frame_client_open = ducknng_http_frame_client_open_browser,
+    .frame_client_transact = ducknng_http_frame_client_transact_browser,
+    .frame_client_transact_msg = ducknng_http_frame_client_transact_msg_browser,
 };
 #else
 static const ducknng_net_backend ducknng_active_backend = {
     .capabilities = ducknng_active_capabilities,
     .http_transact = ducknng_http_transact_native,
+    .frame_client_open = ducknng_http_frame_client_open_native,
+    .frame_client_transact = ducknng_http_frame_client_transact_native,
+    .frame_client_transact_msg = ducknng_http_frame_client_transact_msg_native,
 };
 #endif
 

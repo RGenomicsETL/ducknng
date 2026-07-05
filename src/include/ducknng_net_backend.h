@@ -41,6 +41,8 @@ typedef struct ducknng_net_caps {
     ducknng_net_tls_owner tls_owner;
 } ducknng_net_caps;
 
+struct ducknng_http_frame_client;
+
 typedef struct ducknng_net_backend {
     const ducknng_net_caps *(*capabilities)(void);
     /* One synchronous HTTP exchange; the contract of ducknng_http_transact. */
@@ -48,6 +50,16 @@ typedef struct ducknng_net_backend {
         const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
         uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
         char **errmsg);
+    /* HTTP frame carrier: send one framed request, await the reply frame.
+     * Contracts of the ducknng_http_frame_client_* functions. */
+    int (*frame_client_open)(const char *url, const ducknng_tls_opts *tls_opts,
+        struct ducknng_http_frame_client **out_client, char **errmsg);
+    int (*frame_client_transact)(struct ducknng_http_frame_client *client,
+        const uint8_t *frame, size_t frame_len, int timeout_ms,
+        uint8_t **out_frame, size_t *out_frame_len, char **errmsg);
+    int (*frame_client_transact_msg)(struct ducknng_http_frame_client *client,
+        const uint8_t *frame, size_t frame_len, int timeout_ms,
+        nng_msg **out_msg, char **errmsg);
 } ducknng_net_backend;
 
 /* The build-target backend; never NULL after extension load. */

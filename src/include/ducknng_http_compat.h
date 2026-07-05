@@ -48,6 +48,26 @@ int ducknng_http_frame_client_transact_msg(ducknng_http_frame_client *client,
     const uint8_t *frame, size_t frame_len, int timeout_ms,
     nng_msg **out_msg, char **errmsg);
 void ducknng_http_frame_client_close(ducknng_http_frame_client *client);
+/* Per-target frame client implementations bound by the net backend; shared
+ * code calls the unsuffixed functions above, never these directly. */
+int ducknng_http_frame_client_open_native(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg);
+int ducknng_http_frame_client_transact_native(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg);
+int ducknng_http_frame_client_transact_msg_native(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg);
+#ifdef __EMSCRIPTEN__
+int ducknng_http_frame_client_open_browser(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg);
+int ducknng_http_frame_client_transact_browser(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg);
+int ducknng_http_frame_client_transact_msg_browser(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg);
+#endif
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
     char **out_resolved_url, char **errmsg);
 void ducknng_http_server_stop(ducknng_http_server_state *state);
