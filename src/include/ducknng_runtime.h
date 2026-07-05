@@ -261,6 +261,7 @@ int ducknng_runtime_drop_http_profile(ducknng_runtime *rt, const char *profile_i
 int ducknng_runtime_http_profiles_snapshot(ducknng_runtime *rt,
     ducknng_http_profile_info **out_profiles, size_t *out_count, char **errmsg);
 void ducknng_runtime_http_profiles_snapshot_free(ducknng_http_profile_info *profiles, size_t count);
+void ducknng_http_profile_info_reset(ducknng_http_profile_info *info);
 void ducknng_runtime_http_profiles_reset(ducknng_runtime *rt);
 /* has_connection_id/connection_id identify the DuckDB connection executing
  * the calling query, when known; subject-restricted profiles are admitted

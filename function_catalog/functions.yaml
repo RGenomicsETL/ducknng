@@ -1081,7 +1081,8 @@
       "description": "List registered outbound HTTP profiles with redacted credential metadata.",
       "notes": [
         "Introspection exposes profile id, scope, auth header names, version, timestamps, expiry, and subject allowlist only.",
-        "Raw authentication header values are never returned."
+        "Raw authentication header values are never returned.",
+        "Inside service-handled SQL the listing is subject-scoped: only unrestricted profiles and profiles admitted to the current execution subject are returned, and allow_subjects_json is NULL. Host/local SQL outside any request context sees the full redacted listing including the allowlist."
       ],
       "examples": [
         "SELECT * FROM ducknng_list_http_profiles();"

@@ -318,6 +318,25 @@ FROM ducknng_ncurl(
 ----
 1	1
 
+# Listing is subject-scoped inside service execution: the alice subject sees
+# the restricted profile it may use, with the allowlist column withheld.
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_profile_proxy', 'GET', '/profiles',
+  'SELECT * FROM ducknng_http_text(200, (SELECT coalesce(string_agg(profile_id || '':'' || coalesce(allow_subjects_json, ''withheld''), '','' ORDER BY profile_id), ''none'') FROM ducknng_list_http_profiles()))'
+) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT ok, body_text = 'profile-alice:withheld,profile-main:withheld'
+FROM ducknng_ncurl(
+  getvariable('http_profile_proxy_base')::VARCHAR || '/profiles',
+  'GET', NULL, NULL, 4000, 0::UBIGINT
+)
+----
+1	1
+
 # The same route under principal 'bob' is rejected before sending.
 query I
 SELECT CASE WHEN ducknng_set_service_authorizer(
@@ -336,7 +355,18 @@ FROM ducknng_ncurl(
 ----
 1	1
 
-# The subject is cleared after service requests: ad-hoc SQL still has none.
+# Under the bob subject the restricted profile disappears from the listing.
+query II
+SELECT ok, body_text = 'profile-main:withheld'
+FROM ducknng_ncurl(
+  getvariable('http_profile_proxy_base')::VARCHAR || '/profiles',
+  'GET', NULL, NULL, 4000, 0::UBIGINT
+)
+----
+1	1
+
+# The subject is cleared after service requests: ad-hoc SQL still has none,
+# and the host-side listing keeps the full allowlist column.
 query II
 SELECT ok, position('admission rejected' IN error) > 0
 FROM ducknng_ncurl(
@@ -345,6 +375,12 @@ FROM ducknng_ncurl(
 )
 ----
 0	1
+
+query T
+SELECT allow_subjects_json FROM ducknng_list_http_profiles()
+WHERE profile_id = 'profile-alice'
+----
+["alice"]
 
 query I
 SELECT CASE WHEN ducknng_stop_server('http_profile_proxy') THEN 1 ELSE 0 END

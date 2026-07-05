@@ -32,6 +32,63 @@ destroy_http_profiles_init_data(void *ptr)
     if (ptr) duckdb_free(ptr);
 }
 
+/* Inside service-handled SQL the listing is subject-scoped: only unrestricted
+ * profiles and profiles admitted to the current execution subject are visible,
+ * and the allowlist column is withheld. Host/local SQL keeps the full redacted
+ * listing. Returns the number of visible profiles. */
+static idx_t
+ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt, duckdb_bind_info info,
+    ducknng_http_profile_info *profiles, idx_t count)
+{
+    char *subject = NULL;
+    const ducknng_execution_subject *subject_ctx;
+    int in_request;
+    idx_t kept = 0;
+    idx_t i;
+
+    if (!rt || !profiles || count == 0) return count;
+    in_request = ducknng_runtime_current_thread_request_service_get(rt) != NULL;
+    subject_ctx = ducknng_runtime_current_thread_execution_subject_get(rt);
+    if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
+        subject = ducknng_strdup(subject_ctx->subject);
+        in_request = 1;
+    } else {
+        duckdb_client_context client_ctx = NULL;
+        duckdb_table_function_get_client_context(info, &client_ctx);
+        if (client_ctx) {
+            subject = ducknng_runtime_execution_subject_for_connection_dup(rt,
+                (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
+            duckdb_destroy_client_context(&client_ctx);
+            if (subject) in_request = 1;
+        }
+    }
+    if (!in_request) {
+        if (subject) duckdb_free(subject);
+        return count;
+    }
+    for (i = 0; i < count; i++) {
+        ducknng_http_profile_info *row = &profiles[i];
+        int visible = !row->allow_subjects_json || !row->allow_subjects_json[0] ||
+            (subject && ducknng_json_string_array_contains(row->allow_subjects_json,
+                subject, NULL, NULL) == 1);
+        if (!visible) {
+            ducknng_http_profile_info_reset(row);
+            continue;
+        }
+        if (row->allow_subjects_json) {
+            duckdb_free(row->allow_subjects_json);
+            row->allow_subjects_json = NULL;
+        }
+        if (kept != i) {
+            profiles[kept] = *row;
+            memset(row, 0, sizeof(*row));
+        }
+        kept++;
+    }
+    if (subject) duckdb_free(subject);
+    return kept;
+}
+
 static void
 ducknng_register_http_profile_scalar(duckdb_function_info info,
     duckdb_data_chunk input, duckdb_vector output)
@@ -151,7 +208,8 @@ ducknng_list_http_profiles_bind(duckdb_bind_info info)
         if (errmsg) duckdb_free(errmsg);
         return;
     }
-    bind->profile_count = (idx_t)count;
+    bind->profile_count = ducknng_http_profiles_scope_to_subject(ctx->rt, info,
+        bind->profiles, (idx_t)count);
 
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "profile_id", type);

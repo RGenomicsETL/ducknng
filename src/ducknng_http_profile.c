@@ -157,7 +157,7 @@ ducknng_http_profile_copy(ducknng_http_profile *dst, const ducknng_http_profile 
     return 0;
 }
 
-static void
+void
 ducknng_http_profile_info_reset(ducknng_http_profile_info *info)
 {
     if (!info) return;
