@@ -21,11 +21,14 @@
 
 #include <stdint.h>
 
+/* All limb arithmetic is unsigned so the modulo-2^64 wrap the contract
+ * requires is well-defined C; only the union reinterprets the final bits as
+ * the signed 128-bit result. */
 typedef union {
     __int128 all;
     struct {
         uint64_t low;
-        int64_t high;
+        uint64_t high;
     } s;
 } ducknng_twords;
 
@@ -39,13 +42,13 @@ static __int128 ducknng_mulddi3(uint64_t a, uint64_t b) {
     r.s.low &= lower_mask;
     t += (a >> 32) * (b & lower_mask);
     r.s.low += (t & lower_mask) << 32;
-    r.s.high = (int64_t)(t >> 32);
+    r.s.high = t >> 32;
     t = r.s.low >> 32;
     r.s.low &= lower_mask;
     t += (a & lower_mask) * (b >> 32);
     r.s.low += (t & lower_mask) << 32;
-    r.s.high += (int64_t)(t >> 32);
-    r.s.high += (int64_t)((a >> 32) * (b >> 32));
+    r.s.high += t >> 32;
+    r.s.high += (a >> 32) * (b >> 32);
     return r.all;
 }
 
@@ -57,7 +60,7 @@ __int128 __multi3(__int128 a, __int128 b) {
     x.all = a;
     y.all = b;
     r.all = ducknng_mulddi3(x.s.low, y.s.low);
-    r.s.high += (int64_t)((uint64_t)x.s.high * y.s.low + x.s.low * (uint64_t)y.s.high);
+    r.s.high += x.s.high * y.s.low + x.s.low * y.s.high;
     return r.all;
 }
 
