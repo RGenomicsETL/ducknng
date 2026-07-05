@@ -223,7 +223,11 @@ clean_all: clean clean_configure
 function_catalog:
 	python3 function_catalog/generate_function_catalog.py
 
-wasm_matrix: release
+# The matrix always renders from a fresh native build: under
+# DUCKDB_PLATFORM=wasm_* `release` produces a wasm artifact the generator
+# cannot load, so the platform is unset for the prerequisite build.
+wasm_matrix:
+	env -u DUCKDB_PLATFORM $(MAKE) release
 	./configure/venv/bin/python3 scripts/generate_wasm_matrix.py
 
 rdm: function_catalog

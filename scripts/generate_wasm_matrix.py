@@ -21,6 +21,17 @@ END = "<!-- END GENERATED TRANSPORT MATRIX -->"
 
 
 def render_table() -> str:
+    if not EXTENSION.exists():
+        raise SystemExit(
+            "generate_wasm_matrix: build/release/ducknng.duckdb_extension is missing; "
+            "run through `make wasm_matrix` so a native release is built first"
+        )
+    caps_source = REPO / "src" / "ducknng_net_backend.c"
+    if caps_source.exists() and EXTENSION.stat().st_mtime < caps_source.stat().st_mtime:
+        raise SystemExit(
+            "generate_wasm_matrix: the native extension is older than "
+            "src/ducknng_net_backend.c; rebuild before rendering the matrix"
+        )
     con = duckdb.connect(":memory:", config={"allow_unsigned_extensions": "true"})
     con.execute(f"LOAD '{EXTENSION}'")
     rows = con.execute(
