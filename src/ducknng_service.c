@@ -338,10 +338,46 @@ void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
 
 int ducknng_service_acquire_session_connection(ducknng_service *svc,
     duckdb_connection *out_con, size_t *out_index, char **errmsg) {
-    return ducknng_service_acquire_execution_connection(svc, out_con, out_index, errmsg);
+    if (ducknng_service_acquire_execution_connection(svc, out_con, out_index, errmsg) != 0) return -1;
+    /* Bind the opener's execution subject to the session connection so
+     * restricted HTTP profiles keep resolving during later fetches of this
+     * session, on whatever thread DuckDB executes them. Every release path
+     * funnels through ducknng_service_release_session_connection, which
+     * removes the binding before the pooled connection can be reused. */
+    {
+        const ducknng_execution_subject *subject_ctx =
+            ducknng_runtime_current_thread_execution_subject_get(svc->rt);
+        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0] && *out_con) {
+            duckdb_client_context client_ctx = NULL;
+            duckdb_connection_get_client_context(*out_con, &client_ctx);
+            if (client_ctx) {
+                uint64_t connection_id =
+                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+                duckdb_destroy_client_context(&client_ctx);
+                (void)ducknng_runtime_execution_subject_bind_connection(svc->rt,
+                    connection_id, subject_ctx->subject);
+            }
+        }
+    }
+    return 0;
 }
 
 void ducknng_service_release_session_connection(ducknng_service *svc, size_t index) {
+    if (svc && svc->rt && index != (size_t)-1 && svc->rt->execution_pool_mu_initialized) {
+        duckdb_connection con = NULL;
+        ducknng_mutex_lock(&svc->rt->execution_pool_mu);
+        if (index < svc->rt->execution_pool_count) con = svc->rt->execution_pool[index];
+        ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
+        if (con) {
+            duckdb_client_context client_ctx = NULL;
+            duckdb_connection_get_client_context(con, &client_ctx);
+            if (client_ctx) {
+                ducknng_runtime_execution_subject_unbind_connection(svc->rt,
+                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
+                duckdb_destroy_client_context(&client_ctx);
+            }
+        }
+    }
     ducknng_service_release_execution_connection(svc, index);
 }
 
