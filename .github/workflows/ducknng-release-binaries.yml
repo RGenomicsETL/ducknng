@@ -218,7 +218,7 @@ jobs:
           }
           if arities['ducknng__ncurl_row'] != [6, 7]:
               raise SystemExit(f'ducknng__ncurl_row arities changed: {arities["ducknng__ncurl_row"]!r}')
-          if arities['ducknng_register_http_profile'] != [9, 10]:
+          if arities['ducknng_register_http_profile'] != [9, 10, 11]:
               raise SystemExit(f'ducknng_register_http_profile arities changed: {arities["ducknng_register_http_profile"]!r}')
           print('volatile scalar check:', sorted(expected))
 
@@ -421,7 +421,7 @@ jobs:
           if (length(ncurl_row_arities) != 2L || any(ncurl_row_arities != c(6, 7))) {
             stop("ducknng__ncurl_row arities changed: ", paste(ncurl_row_arities, collapse = ","))
           }
-          if (length(register_profile_arities) != 2L || any(register_profile_arities != c(9, 10))) {
+          if (length(register_profile_arities) != 3L || any(register_profile_arities != c(9, 10, 11))) {
             stop("ducknng_register_http_profile arities changed: ", paste(register_profile_arities, collapse = ","))
           }
           RSCRIPT
