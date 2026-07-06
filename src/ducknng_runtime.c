@@ -1,4 +1,5 @@
 #include "ducknng_runtime.h"
+#include "ducknng_wasm_fetch_bridge.h"
 #include "ducknng_manifest.h"
 #include "ducknng_nng_compat.h"
 #include "ducknng_util.h"
@@ -387,6 +388,10 @@ void ducknng_client_socket_destroy(ducknng_client_socket *sock) {
 
 void ducknng_client_aio_destroy(ducknng_client_aio *aio) {
     if (!aio) return;
+    if (aio->wasm_op_id != 0) {
+        ducknng_wasm_fetch_forget(aio->wasm_op_id);
+        aio->wasm_op_id = 0;
+    }
     if (aio->aio) {
         if (aio->state == DUCKNNG_CLIENT_AIO_PENDING) {
             ducknng_aio_cancel(aio->aio);

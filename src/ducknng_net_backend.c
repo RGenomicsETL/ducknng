@@ -41,9 +41,13 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
         .tls_tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .websocket = DUCKNNG_NET_CAP_UNSUPPORTED,
-        .async_is_real = 0,   /* AIO handles are terminal at launch (sync XHR) */
-        .honors_timeout = 0,  /* synchronous XHR ignores timeout_ms */
-        .honors_cancel = 0,
+        /* AIO rides the fetch completion-queue bridge: handles stay pending
+         * until the worker event loop settles them, timeouts arm a JS timer,
+         * and cancel aborts the controller. The synchronous ncurl path still
+         * uses blocking XHR and ignores timeout_ms. */
+        .async_is_real = 1,
+        .honors_timeout = 1,
+        .honors_cancel = 1,
         .tls_owner = DUCKNNG_NET_TLS_OWNER_BROWSER_MANAGED,
     },
     {
@@ -55,9 +59,9 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
         .tls_tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .websocket = DUCKNNG_NET_CAP_UNSUPPORTED,
-        .async_is_real = 0,
-        .honors_timeout = 0,
-        .honors_cancel = 0,
+        .async_is_real = 1,
+        .honors_timeout = 1,
+        .honors_cancel = 1,
         .tls_owner = DUCKNNG_NET_TLS_OWNER_BROWSER_MANAGED,
     },
 };

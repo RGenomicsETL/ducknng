@@ -711,7 +711,7 @@
       "description": "Return the active net backend's capability descriptor as a JSON object.",
       "notes": [
         "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
-        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS; the wasm targets report http/https with browser-managed TLS and terminal-at-launch AIO handles, with inproc experimental only under wasm_threads.",
+        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS; the wasm targets report http/https with browser-managed TLS and real async AIO through the fetch completion bridge (handles stay pending until the worker event loop settles them; timeout and cancel abort the fetch; the synchronous ncurl path still uses blocking XHR and ignores timeout_ms), with inproc experimental only under wasm_threads.",
         "Harnesses should gate assertions on this descriptor instead of maintaining per-target probe lists; claiming a capability that fails, or passing one that is claimed unsupported, is a bug in either the claim or the behavior."
       ],
       "examples": [

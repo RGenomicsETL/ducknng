@@ -310,8 +310,8 @@ rendered from that contract by `make wasm_matrix`; edit
 | target | http | https | inproc | tcp | ipc | tls+tcp | ws/wss | real async | timeout | cancel | TLS owner |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `native` | supported | supported | supported | supported | supported | supported | supported | yes | yes | yes | native |
-| `wasm_eh` | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported | no | no | no | browser_managed |
-| `wasm_threads` | supported | supported | experimental | unsupported | unsupported | unsupported | unsupported | no | no | no | browser_managed |
+| `wasm_eh` | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported | yes | yes | yes | browser_managed |
+| `wasm_threads` | supported | supported | experimental | unsupported | unsupported | unsupported | unsupported | yes | yes | yes | browser_managed |
 <!-- END GENERATED TRANSPORT MATRIX -->
 
 The evidence log below records what has been proven in real browsers, which is
@@ -321,7 +321,7 @@ a stricter statement than the contract above:
 | --- | --- |
 | `duckdb-wasm` `wasm_eh`: load, scalar SQL, codecs | Proven locally in real Chromium. |
 | `duckdb-wasm` `wasm_eh`: same-origin `ducknng_ncurl(...)` GET/POST, request/response headers, non-2xx status rows, invalid input rows, and no-CORS network/CORS errors | Proven locally in real Chromium through the browser HTTP bridge. |
-| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_aio(...)` terminal handle status/wait/cancel/collect/drop for success and launch-error cases | Proven locally in real Chromium; current browser handles are terminal at launch. |
+| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_aio(...)` real-async handles: pending in flight, poll-style wait, cancel aborts the fetch, timeout_ms aborts via a JS timer, collect/drop for success and launch-error cases | Proven locally in real Chromium through the fetch completion bridge; completions settle when the DB worker event loop runs between queries, so a blocking wait inside one query cannot make progress and degrades to a poll. |
 | `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_table(...)` JSON/text/CSV plus raw/parsed HTTPS CORS and explicit TLS-handle rejection | Proven locally in real Chromium. |
 | `duckdb-wasm` `wasm_eh`: framed raw/RPC/session helpers over `http://` | Proven locally against a Playwright local ducknng-frame responder. |
 | `duckdb-wasm` `wasm_eh`: `inproc://` | Not supported; the probe may report unavailable and still pass because this runtime has no pthread worker support for NNG progress. |

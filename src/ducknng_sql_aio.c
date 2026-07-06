@@ -1,4 +1,5 @@
 #include "ducknng_sql_shared.h"
+#include "ducknng_wasm_fetch_bridge.h"
 #include "ducknng_http_compat.h"
 #include "ducknng_ipc_out.h"
 #include "ducknng_nng_compat.h"
@@ -264,7 +265,13 @@ static ducknng_client_aio *ducknng_find_client_aio_locked(ducknng_runtime *rt, u
     size_t i;
     if (!rt || aio_id == 0) return NULL;
     for (i = 0; i < rt->client_aio_count; i++) {
-        if (rt->client_aios[i] && rt->client_aios[i]->aio_id == aio_id) return rt->client_aios[i];
+        if (rt->client_aios[i] && rt->client_aios[i]->aio_id == aio_id) {
+            /* Browser fetch completions are delivered by the JS event loop,
+             * not a background thread; fold any settled op into the slot at
+             * every read so all readers observe one state machine. */
+            ducknng_wasm_fetch_pump(rt->client_aios[i]);
+            return rt->client_aios[i];
+        }
     }
     return NULL;
 }
@@ -700,19 +707,22 @@ static ducknng_client_aio *ducknng_client_aio_alloc_terminal_slot(ducknng_runtim
     return slot;
 }
 
-static int ducknng_client_add_terminal_http_request_aio(ducknng_sql_context *ctx,
+static int ducknng_client_add_wasm_http_request_aio(ducknng_sql_context *ctx,
     const char *url, int32_t timeout_ms, const ducknng_tls_opts *tls_opts,
     nng_msg *req, uint64_t *out_aio_id, char **errmsg) {
     ducknng_client_aio *slot = NULL;
-    uint8_t *reply_frame = NULL;
-    size_t reply_frame_len = 0;
-    char *request_err = NULL;
-    int ok = 0;
-    int rv;
+    char *launch_err = NULL;
+    uint64_t op_id = 0;
     if (out_aio_id) *out_aio_id = 0;
     if (!ctx || !ctx->rt || !url || !req) {
         if (req) nng_msg_free(req);
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing browser HTTP aio request state");
+        return -1;
+    }
+    if (ducknng_http_tls_requested(tls_opts)) {
+        nng_msg_free(req);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
         return -1;
     }
     slot = ducknng_client_aio_alloc_terminal_slot(ctx->rt, timeout_ms, errmsg);
@@ -722,104 +732,60 @@ static int ducknng_client_add_terminal_http_request_aio(ducknng_sql_context *ctx
     }
     slot->kind = DUCKNNG_CLIENT_AIO_KIND_REQUEST;
     slot->phase = DUCKNNG_CLIENT_AIO_PHASE_HTTP;
-    rv = ducknng_http_frame_transact(url, (const uint8_t *)nng_msg_body(req), nng_msg_len(req),
-        timeout_ms, tls_opts, &reply_frame, &reply_frame_len, &request_err);
+    op_id = ducknng_wasm_fetch_launch(url, "POST", ducknng_http_frame_headers_json(),
+        (const uint8_t *)nng_msg_body(req), nng_msg_len(req), timeout_ms, &launch_err);
     nng_msg_free(req);
-    if (rv == 0) {
-        rv = nng_msg_alloc(&slot->reply_msg, reply_frame_len);
-        if (rv == 0) {
-            if (reply_frame_len) memcpy(nng_msg_body(slot->reply_msg), reply_frame, reply_frame_len);
-            slot->state = DUCKNNG_CLIENT_AIO_READY;
-            slot->send_done = 1;
-            slot->recv_done = 1;
-            slot->send_result = 0;
-            slot->recv_result = 0;
-            ok = 1;
-        } else {
-            slot->state = DUCKNNG_CLIENT_AIO_ERROR;
-            slot->error = ducknng_strdup(ducknng_nng_strerror(rv));
-        }
-    } else {
+    if (op_id == 0) {
+        /* Launch failures stay terminal error handles, matching native
+         * launch-error semantics. */
         slot->state = DUCKNNG_CLIENT_AIO_ERROR;
-        slot->error = request_err ? request_err : ducknng_strdup("ducknng: browser HTTP aio request failed");
-        request_err = NULL;
+        slot->finished_ms = ducknng_now_ms();
+        slot->error = launch_err ? launch_err : ducknng_strdup("ducknng: browser fetch launch failed");
+        launch_err = NULL;
+    } else {
+        slot->wasm_op_id = op_id;
     }
-    if (reply_frame) duckdb_free(reply_frame);
-    if (request_err) duckdb_free(request_err);
-    if (slot->state == DUCKNNG_CLIENT_AIO_ERROR && !slot->error) {
-        ducknng_client_aio_destroy(slot);
-        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying browser HTTP aio error");
-        return -1;
-    }
-    slot->finished_ms = ducknng_now_ms();
+    if (launch_err) duckdb_free(launch_err);
     if (ducknng_runtime_add_client_aio(ctx->rt, slot, errmsg) != 0) {
         ducknng_client_aio_destroy(slot);
         return -1;
     }
     if (out_aio_id) *out_aio_id = slot->aio_id;
-    (void)ok;
     return 0;
 }
 
-static int ducknng_client_add_terminal_http_ncurl_aio(ducknng_sql_context *ctx,
+static int ducknng_client_add_wasm_http_ncurl_aio(ducknng_sql_context *ctx,
     const char *url, const char *method, const char *headers_json, const uint8_t *body,
     size_t body_len, int32_t timeout_ms, const ducknng_tls_opts *tls_opts,
     uint64_t *out_aio_id, char **errmsg) {
     ducknng_client_aio *slot = NULL;
-    uint16_t status = 0;
-    char *headers_out = NULL;
-    uint8_t *body_out = NULL;
-    size_t body_out_len = 0;
-    char *request_err = NULL;
-    int rv;
+    char *launch_err = NULL;
+    uint64_t op_id = 0;
     if (out_aio_id) *out_aio_id = 0;
     if (!ctx || !ctx->rt || !url || !url[0]) {
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing browser ncurl aio state");
+        return -1;
+    }
+    if (ducknng_http_tls_requested(tls_opts)) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
         return -1;
     }
     slot = ducknng_client_aio_alloc_terminal_slot(ctx->rt, timeout_ms, errmsg);
     if (!slot) return -1;
     slot->kind = DUCKNNG_CLIENT_AIO_KIND_NCURL;
     slot->phase = DUCKNNG_CLIENT_AIO_PHASE_HTTP;
-    rv = ducknng_http_transact(url, method, headers_json, body, body_len, timeout_ms,
-        tls_opts, &status, &headers_out, &body_out, &body_out_len, &request_err);
-    if (rv == 0) {
-        slot->http_status = status;
-        slot->http_headers_json = headers_out;
-        slot->http_body = body_out;
-        slot->http_body_len = body_out_len;
-        headers_out = NULL;
-        body_out = NULL;
-        if (slot->http_body && slot->http_body_len > 0 &&
-            ducknng_sql_bytes_look_text(slot->http_body, slot->http_body_len)) {
-            slot->http_body_text = ducknng_dup_bytes(slot->http_body, slot->http_body_len);
-            if (!slot->http_body_text) {
-                slot->state = DUCKNNG_CLIENT_AIO_ERROR;
-                slot->error = ducknng_strdup("ducknng: out of memory copying HTTP response text");
-            } else {
-                slot->state = DUCKNNG_CLIENT_AIO_READY;
-            }
-        } else {
-            slot->state = DUCKNNG_CLIENT_AIO_READY;
-        }
-        slot->send_done = 1;
-        slot->recv_done = 1;
-        slot->send_result = 0;
-        slot->recv_result = 0;
-    } else {
+    op_id = ducknng_wasm_fetch_launch(url, method, headers_json, body, body_len,
+        timeout_ms, &launch_err);
+    if (op_id == 0) {
         slot->state = DUCKNNG_CLIENT_AIO_ERROR;
-        slot->error = request_err ? request_err : ducknng_strdup("ducknng: browser ncurl aio request failed");
-        request_err = NULL;
+        slot->finished_ms = ducknng_now_ms();
+        slot->error = launch_err ? launch_err : ducknng_strdup("ducknng: browser fetch launch failed");
+        launch_err = NULL;
+    } else {
+        slot->wasm_op_id = op_id;
     }
-    if (headers_out) duckdb_free(headers_out);
-    if (body_out) duckdb_free(body_out);
-    if (request_err) duckdb_free(request_err);
-    if (slot->state == DUCKNNG_CLIENT_AIO_ERROR && !slot->error) {
-        ducknng_client_aio_destroy(slot);
-        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying browser ncurl aio error");
-        return -1;
-    }
-    slot->finished_ms = ducknng_now_ms();
+    if (launch_err) duckdb_free(launch_err);
     if (ducknng_runtime_add_client_aio(ctx->rt, slot, errmsg) != 0) {
         ducknng_client_aio_destroy(slot);
         return -1;
@@ -854,7 +820,7 @@ static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const
     ducknng_wasm_trace("launch_url_request_aio: transport dispatch begin");
     if (ducknng_transport_url_is_http(&parsed)) {
 #ifdef __EMSCRIPTEN__
-        return ducknng_client_add_terminal_http_request_aio(ctx, url, timeout_ms,
+        return ducknng_client_add_wasm_http_request_aio(ctx, url, timeout_ms,
             tls_opts, req, out_aio_id, errmsg);
 #endif
         slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
@@ -912,7 +878,7 @@ static int ducknng_client_launch_ncurl_aio(ducknng_sql_context *ctx, const char 
     }
     if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, errmsg) != 0) return -1;
 #ifdef __EMSCRIPTEN__
-    return ducknng_client_add_terminal_http_ncurl_aio(ctx, url, method, headers_json,
+    return ducknng_client_add_wasm_http_ncurl_aio(ctx, url, method, headers_json,
         body, body_len, timeout_ms, tls_opts, out_aio_id, errmsg);
 #endif
     slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
@@ -1579,6 +1545,10 @@ static void ducknng_aio_cancel_scalar(duckdb_function_info info, duckdb_data_chu
         if (slot && slot->state == DUCKNNG_CLIENT_AIO_PENDING && slot->aio) {
             ducknng_aio_cancel(slot->aio);
             out[row] = true;
+        } else if (slot && slot->state == DUCKNNG_CLIENT_AIO_PENDING && slot->wasm_op_id != 0) {
+            ducknng_wasm_fetch_abort(slot->wasm_op_id);
+            ducknng_wasm_fetch_pump(slot);
+            out[row] = true;
         }
         ducknng_mutex_unlock(&ctx->rt->mu);
     }
@@ -1988,6 +1958,12 @@ static int ducknng_wait_any_for_ids(ducknng_runtime *rt, const uint64_t *aio_ids
             return 1;
         }
         if (wait_ms == 0 || ducknng_now_ms() >= deadline_ms) {
+            ducknng_mutex_unlock(&rt->mu);
+            return 0;
+        }
+        if (!ducknng_wasm_aio_wait_can_block()) {
+            /* Single-threaded browser event loop: blocking here can never
+             * observe progress, so waiting degrades to one poll pass. */
             ducknng_mutex_unlock(&rt->mu);
             return 0;
         }

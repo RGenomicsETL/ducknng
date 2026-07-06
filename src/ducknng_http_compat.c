@@ -20,7 +20,7 @@ extern char *nni_http_res_headers(nng_http_res *res);
 extern int nni_http_conn_getopt(nng_http_conn *conn, const char *name, void *buf, size_t *szp, nni_type type);
 extern void nni_strfree(char *s);
 
-static int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
+int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
     return opts && (opts->enabled ||
         (opts->cert_key_file && opts->cert_key_file[0]) ||
         (opts->ca_file && opts->ca_file[0]) ||
@@ -437,7 +437,7 @@ static int ducknng_http_validate_header_adapter(void *target, const char *name, 
     return 0;
 }
 
-static int ducknng_http_validate_headers_json(const char *headers_json, char **errmsg) {
+int ducknng_http_validate_headers_json(const char *headers_json, char **errmsg) {
     return ducknng_http_apply_headers_json_common(headers_json, NULL,
         ducknng_http_validate_header_adapter, errmsg);
 }
@@ -472,7 +472,7 @@ static int ducknng_http_bytes_look_text(const uint8_t *data, size_t len) {
     return 1;
 }
 
-static char *ducknng_http_headers_block_to_json(const char *headers_block, char **errmsg) {
+char *ducknng_http_headers_block_to_json(const char *headers_block, char **errmsg) {
     char *buf = NULL;
     size_t len = 0;
     size_t cap = 0;
@@ -903,6 +903,10 @@ typedef struct ducknng_http_handler_data {
 static const char *DUCKNNG_HTTP_FRAME_MEDIA_TYPE = "application/vnd.ducknng.frame";
 static const char *DUCKNNG_HTTP_FRAME_HEADERS_JSON =
     "[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]";
+
+const char *ducknng_http_frame_headers_json(void) {
+    return DUCKNNG_HTTP_FRAME_HEADERS_JSON;
+}
 
 static void ducknng_http_server_state_handler_dtor(void *arg) {
     ducknng_http_handler_data *data = (ducknng_http_handler_data *)arg;

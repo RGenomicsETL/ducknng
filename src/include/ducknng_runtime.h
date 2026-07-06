@@ -126,6 +126,8 @@ typedef struct ducknng_client_aio {
     int recv_result;
     uint64_t started_ms;
     uint64_t finished_ms;
+    /* non-zero: pending browser fetch op in the wasm bridge's JS op table */
+    uint64_t wasm_op_id;
     char *error;
 } ducknng_client_aio;
 

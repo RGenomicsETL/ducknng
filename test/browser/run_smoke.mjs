@@ -111,7 +111,8 @@ Probes:
              browser HTTP bridge.
   http-aio   Launch ducknng_ncurl_aio against the same-origin endpoint, then
              verify aio_status, aio_wait, ducknng_ncurl_aio_collect, cancel,
-             and drop behavior. Browser XHR aio handles are terminal at launch.
+             and drop behavior, plus pending/cancel/timeout semantics for the
+             browser fetch completion bridge (real async handles).
   http-table Exercise ducknng_ncurl_table over same-origin JSON, text, and CSV
              response bodies.
   https-cors Exercise ducknng_ncurl and ducknng_ncurl_table against a separate
@@ -219,6 +220,13 @@ function readBody(req) {
 async function handleProbe(req, res, pathname) {
   setIsolationHeaders(res);
 
+  if (pathname === "/probe/slow" && req.method === "GET") {
+    setTimeout(() => {
+      res.setHeader("content-type", "text/plain");
+      res.end("slow ok");
+    }, 1500);
+    return;
+  }
   if (pathname === "/probe/hello" && req.method === "GET") {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.end('{"hello":"ducknng-http-ok"}');
@@ -603,7 +611,63 @@ async function runHttpAioProbe(page, base) {
     fail(`http-aio bad-header drop failed: "${badDropped.table}"`);
   }
   await runShell(page, "DROP TABLE IF EXISTS browser_http_bad_aio", 10000);
-  console.log("ok: http-aio returned terminal success and terminal error handles cleanly");
+
+  // Real-async semantics: an in-flight fetch is observably pending, waiting
+  // polls without hanging the worker, and cancel aborts the request.
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_slow_aio", 10000);
+  const slowLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_http_slow_aio AS ` +
+    `SELECT ducknng_ncurl_aio('${base}/probe/slow', 'GET', NULL, NULL, 0, 0::UBIGINT) AS aio`,
+    30000);
+  if (/error/i.test(slowLaunch.meta)) fail(`http-aio slow launch errored: ${slowLaunch.table}`);
+  const pendingStatus = await runShell(page,
+    `SELECT state, terminal FROM ducknng_aio_status((SELECT aio FROM browser_http_slow_aio))`,
+    30000);
+  if (/error/i.test(pendingStatus.meta) || !/pending/i.test(pendingStatus.table) ||
+      !/false/i.test(pendingStatus.table)) {
+    fail(`http-aio slow handle was not pending in flight: "${pendingStatus.table}"`);
+  }
+  const pollWait = await runShell(page,
+    `SELECT ducknng_aio_wait(list_value(aio), 100) AS waited FROM browser_http_slow_aio`,
+    10000);
+  if (/error/i.test(pollWait.meta) || !/false/i.test(pollWait.table)) {
+    fail(`http-aio wait on a pending browser handle did not poll-and-return: "${pollWait.table}"`);
+  }
+  const slowCancel = await runShell(page,
+    `SELECT ducknng_aio_cancel(aio) AS cancelled FROM browser_http_slow_aio`, 10000);
+  if (/error/i.test(slowCancel.meta) || !/true/i.test(slowCancel.table)) {
+    fail(`http-aio cancel of an in-flight fetch failed: "${slowCancel.table}"`);
+  }
+  const cancelledStatus = await runShell(page,
+    `SELECT state, terminal FROM ducknng_aio_status((SELECT aio FROM browser_http_slow_aio))`,
+    30000);
+  if (/error/i.test(cancelledStatus.meta) || !/cancelled/i.test(cancelledStatus.table) ||
+      !/true/i.test(cancelledStatus.table)) {
+    fail(`http-aio cancelled handle did not report cancelled: "${cancelledStatus.table}"`);
+  }
+  await runShell(page,
+    `SELECT ducknng_aio_drop(aio) FROM browser_http_slow_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_slow_aio", 10000);
+
+  // timeout_ms arms a JS timer that aborts the fetch once the event loop runs.
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_timeout_aio", 10000);
+  const timeoutLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_http_timeout_aio AS ` +
+    `SELECT ducknng_ncurl_aio('${base}/probe/slow', 'GET', NULL, NULL, 200, 0::UBIGINT) AS aio`,
+    30000);
+  if (/error/i.test(timeoutLaunch.meta)) fail(`http-aio timeout launch errored: ${timeoutLaunch.table}`);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const timedOut = await runShell(page,
+    `SELECT state, error FROM ducknng_aio_status((SELECT aio FROM browser_http_timeout_aio))`,
+    30000);
+  if (/error(?!\s*\|)/i.test(timedOut.meta) || !/timed out/i.test(timedOut.table)) {
+    fail(`http-aio timeout did not abort the fetch: "${timedOut.table}"`);
+  }
+  await runShell(page,
+    `SELECT ducknng_aio_drop(aio) FROM browser_http_timeout_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_http_timeout_aio", 10000);
+
+  console.log("ok: http-aio pending/cancel/timeout semantics held and handles collected cleanly");
 }
 
 async function runHttpTableProbe(page, base) {
