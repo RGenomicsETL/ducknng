@@ -797,6 +797,33 @@ prop_quack_nested_random_payloads(struct theft *t, void *arg1)
     return result;
 }
 
+/* The server upload append path parses an attacker-supplied quack header via
+ * ducknng_quack_payload_parse_schema. Random bytes must reject cleanly or
+ * parse a bounded schema, never crash, and never return success with an error
+ * string set. On success the schema must be internally consistent (bounded
+ * column count, cols present iff ncols>0) and free cleanly. */
+static enum theft_trial_res
+prop_quack_parse_schema_random_payloads(struct theft *t, void *arg1)
+{
+    const struct prop_bytes *bytes = (const struct prop_bytes *)arg1;
+    ducknng_quack_schema schema;
+    char *errmsg = NULL;
+    int rc;
+    enum theft_trial_res result = THEFT_TRIAL_PASS;
+
+    (void)t;
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(bytes->data, bytes->len, &schema, &errmsg);
+    if (rc == 0 && errmsg != NULL) result = THEFT_TRIAL_FAIL;
+    if (rc == 0) {
+        if (schema.ncols > 0 && schema.cols == NULL) result = THEFT_TRIAL_FAIL;
+        if (schema.ncols == 0 && schema.cols != NULL) result = THEFT_TRIAL_FAIL;
+    }
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    return result;
+}
+
 TEST wire_rejects_or_decodes_random_bytes(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
@@ -925,6 +952,14 @@ TEST quack_rejects_random_nested_schema_payloads(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
         prop_run_one("quack random nested-schema payloads", prop_quack_nested_random_payloads,
+            &prop_random_bytes_info));
+    PASS();
+}
+
+TEST quack_parse_schema_rejects_random_payloads(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("quack parse_schema random payloads", prop_quack_parse_schema_random_payloads,
             &prop_random_bytes_info));
     PASS();
 }
@@ -1207,6 +1242,7 @@ SUITE(quack_properties)
     RUN_TEST(quack_rejects_blob_length_wraparound_fixture);
     RUN_TEST(quack_rejects_huge_schema_column_count_fixture);
     RUN_TEST(quack_rejects_random_nested_schema_payloads);
+    RUN_TEST(quack_parse_schema_rejects_random_payloads);
 }
 
 GREATEST_MAIN_DEFS();

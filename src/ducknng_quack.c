@@ -1877,28 +1877,18 @@ int ducknng_result_empty_quack_payload(duckdb_result result,
     return ducknng_quack_encode_result_payload(result, NULL, 0, 1, out_bytes, out_len, errmsg);
 }
 
-int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
-    const uint8_t *payload, size_t payload_len,
-    ducknng_quack_schema *out_schema, idx_t *out_row_count, char **errmsg) {
-    ducknng_quack_reader r;
-    uint16_t field_id = 0;
+/* Parse the OUTER_RESULT_TYPES + OUTER_RESULT_NAMES sections into out_schema,
+ * advancing the reader to the start of the results section. Shared by the
+ * table-function bind path and the server upload append path. */
+static int ducknng_quack_reader_parse_schema(ducknng_quack_reader *r,
+    ducknng_quack_schema *out_schema, char **errmsg) {
     uint64_t ncols = 0;
     idx_t ncols_idx = 0;
     uint64_t i;
-    idx_t row_count = 0;
     size_t cols_bytes = 0;
-    if (out_row_count) *out_row_count = 0;
-    if (!info || !payload || payload_len == 0 || !out_schema) {
-        ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for bind");
-        return -1;
-    }
-    memset(&r, 0, sizeof(r));
-    r.data = payload;
-    r.len = payload_len;
     memset(out_schema, 0, sizeof(*out_schema));
-
-    if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
-        ducknng_quack_read_uleb128(&r, &ncols, errmsg) != 0) goto fail;
+    if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
+        ducknng_quack_read_uleb128(r, &ncols, errmsg) != 0) goto fail;
     if (ncols > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS) {
         ducknng_quack_set_error(errmsg, "ducknng: quack column count exceeds supported limit");
         goto fail;
@@ -1921,59 +1911,329 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
     out_schema->ncols = ncols_idx;
     for (i = 0; i < ncols; i++) {
         ducknng_quack_column_schema *node = NULL;
-        if (ducknng_quack_read_type_node(&r, 0, &node, errmsg) != 0) goto fail;
+        if (ducknng_quack_read_type_node(r, 0, &node, errmsg) != 0) goto fail;
         /* Move the heap node's contents into the flat top-level column slot and
          * free the wrapper struct only (children/labels are now owned by cols[i]).
          * name is set from the separate NAMES section below. */
         out_schema->cols[i] = *node;
         duckdb_free(node);
     }
-    if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_OUTER_RESULT_NAMES, errmsg) != 0 ||
-        ducknng_quack_read_uleb128(&r, &ncols, errmsg) != 0) goto fail;
+    if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_OUTER_RESULT_NAMES, errmsg) != 0 ||
+        ducknng_quack_read_uleb128(r, &ncols, errmsg) != 0) goto fail;
     if (ncols != (uint64_t)out_schema->ncols) {
         ducknng_quack_set_error(errmsg, "ducknng: quack payload name/type count mismatch");
         goto fail;
     }
     for (i = 0; i < ncols; i++) {
-        if (ducknng_quack_read_string_dup(&r, &out_schema->cols[i].name, errmsg) != 0) goto fail;
+        if (ducknng_quack_read_string_dup(r, &out_schema->cols[i].name, errmsg) != 0) goto fail;
     }
+    return 0;
+fail:
+    ducknng_quack_schema_reset(out_schema);
+    return -1;
+}
+
+int ducknng_quack_payload_parse_schema(const uint8_t *payload, size_t payload_len,
+    ducknng_quack_schema *out_schema, char **errmsg) {
+    ducknng_quack_reader r;
+    if (!payload || payload_len == 0 || !out_schema) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for schema parse");
+        return -1;
+    }
+    memset(&r, 0, sizeof(r));
+    r.data = payload;
+    r.len = payload_len;
+    return ducknng_quack_reader_parse_schema(&r, out_schema, errmsg);
+}
+
+/* From a reader positioned just after the schema names section, consume the
+ * OUTER_RESULTS section (skipping chunk data), the results and top-level
+ * FIELD_END terminators, and require the reader to be exactly at end of
+ * payload. Returns the total row count. This is the strict structural tail
+ * shared by the bind path and the upload append path, so both reject a
+ * missing/replaced terminator or trailing bytes identically. */
+static int ducknng_quack_reader_validate_results(ducknng_quack_reader *r,
+    const ducknng_quack_schema *schema, idx_t max_chunk_rows,
+    idx_t *out_row_count, char **errmsg) {
+    uint16_t field_id = 0;
+    idx_t row_count = 0;
+    if (out_row_count) *out_row_count = 0;
+    if (ducknng_quack_peek_u16le(r, &field_id, errmsg) != 0) return -1;
+    if (field_id == DUCKNNG_QUACK_OUTER_RESULTS) {
+        uint64_t n_results = 0;
+        uint64_t chunk_idx;
+        if (ducknng_quack_read_u16le(r, &field_id, errmsg) != 0 ||
+            ducknng_quack_read_uleb128(r, &n_results, errmsg) != 0) return -1;
+        for (chunk_idx = 0; chunk_idx < n_results; chunk_idx++) {
+            uint8_t present = 0;
+            idx_t chunk_rows = 0;
+            if (ducknng_quack_read_byte(r, &present, errmsg) != 0) return -1;
+            if (!present) {
+                ducknng_quack_set_error(errmsg, "ducknng: quack payload contained a NULL chunk pointer");
+                return -1;
+            }
+            if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
+                ducknng_quack_skip_data_chunk(r, schema, &chunk_rows, errmsg) != 0) return -1;
+            /* The skip path does not enforce the decode-time per-chunk vector
+             * capacity that scan_next imposes. Callers that will decode the
+             * chunks (the upload append path) pass max_chunk_rows so an
+             * oversized later chunk fails preflight instead of causing a
+             * partial append; the bind/row-count path passes 0 (no cap). */
+            if (max_chunk_rows > 0 && chunk_rows > max_chunk_rows) {
+                ducknng_quack_set_error(errmsg, "ducknng: quack chunk exceeds the supported vector size");
+                return -1;
+            }
+            if (ducknng_quack_idx_add(row_count, chunk_rows, &row_count,
+                    "ducknng: quack row count overflows supported size", errmsg) != 0) return -1;
+        }
+        if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
+    }
+    if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) return -1;
+    if (r->off != r->len) {
+        ducknng_quack_set_error(errmsg, "ducknng: trailing bytes in quack payload");
+        return -1;
+    }
+    if (out_row_count) *out_row_count = row_count;
+    return 0;
+}
+
+int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
+    const uint8_t *payload, size_t payload_len,
+    ducknng_quack_schema *out_schema, idx_t *out_row_count, char **errmsg) {
+    ducknng_quack_reader r;
+    uint64_t i;
+    idx_t row_count = 0;
+    if (out_row_count) *out_row_count = 0;
+    if (!info || !payload || payload_len == 0 || !out_schema) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for bind");
+        return -1;
+    }
+    memset(&r, 0, sizeof(r));
+    r.data = payload;
+    r.len = payload_len;
+    if (ducknng_quack_reader_parse_schema(&r, out_schema, errmsg) != 0) return -1;
     for (i = 0; i < (uint64_t)out_schema->ncols; i++) {
         duckdb_logical_type bind_type = NULL;
         if (ducknng_quack_node_to_duckdb(&out_schema->cols[i], 0, &bind_type, errmsg) != 0) goto fail;
         duckdb_bind_add_result_column(info, out_schema->cols[i].name ? out_schema->cols[i].name : "", bind_type);
         duckdb_destroy_logical_type(&bind_type);
     }
-    if (ducknng_quack_peek_u16le(&r, &field_id, errmsg) != 0) goto fail;
-    if (field_id == DUCKNNG_QUACK_OUTER_RESULTS) {
-        uint64_t n_results = 0;
-        uint64_t chunk_idx;
-        if (ducknng_quack_read_u16le(&r, &field_id, errmsg) != 0 ||
-            ducknng_quack_read_uleb128(&r, &n_results, errmsg) != 0) goto fail;
-        for (chunk_idx = 0; chunk_idx < n_results; chunk_idx++) {
-            uint8_t present = 0;
-            idx_t chunk_rows = 0;
-            if (ducknng_quack_read_byte(&r, &present, errmsg) != 0) goto fail;
-            if (!present) {
-                ducknng_quack_set_error(errmsg, "ducknng: quack payload contained a NULL chunk pointer");
-                goto fail;
-            }
-            if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
-                ducknng_quack_skip_data_chunk(&r, out_schema, &chunk_rows, errmsg) != 0) goto fail;
-            if (ducknng_quack_idx_add(row_count, chunk_rows, &row_count,
-                    "ducknng: quack row count overflows supported size", errmsg) != 0) goto fail;
-        }
-        if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) goto fail;
-    }
-    if (ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_FIELD_END, errmsg) != 0) goto fail;
-    if (r.off != r.len) {
-        ducknng_quack_set_error(errmsg, "ducknng: trailing bytes in quack payload");
-        goto fail;
-    }
+    if (ducknng_quack_reader_validate_results(&r, out_schema, 0, &row_count, errmsg) != 0) goto fail;
     if (out_row_count) *out_row_count = row_count;
     return 0;
 fail:
     ducknng_quack_schema_reset(out_schema);
     return -1;
+}
+
+/* Deep structural equality of two DuckDB logical types: same type id plus, for
+ * parameterized and nested types, matching decimal precision/scale, list/array
+ * child, array size, struct/union child names and types, map key/value, and
+ * enum labels. The upload append path requires this so a batch column is only
+ * appended into a target column of exactly the same type, never silently cast
+ * (e.g. BIGINT into INTEGER, or DECIMAL(9,2) into DECIMAL(18,4)). */
+static int ducknng_quack_logical_type_equal(duckdb_logical_type a, duckdb_logical_type b) {
+    duckdb_type ta;
+    duckdb_type tb;
+    if (!a || !b) return 0;
+    ta = duckdb_get_type_id(a);
+    tb = duckdb_get_type_id(b);
+    if (ta != tb) return 0;
+    switch (ta) {
+    case DUCKDB_TYPE_DECIMAL:
+        return duckdb_decimal_width(a) == duckdb_decimal_width(b) &&
+               duckdb_decimal_scale(a) == duckdb_decimal_scale(b);
+    case DUCKDB_TYPE_LIST: {
+        duckdb_logical_type ca = duckdb_list_type_child_type(a);
+        duckdb_logical_type cb = duckdb_list_type_child_type(b);
+        int eq = ducknng_quack_logical_type_equal(ca, cb);
+        if (ca) duckdb_destroy_logical_type(&ca);
+        if (cb) duckdb_destroy_logical_type(&cb);
+        return eq;
+    }
+    case DUCKDB_TYPE_ARRAY: {
+        duckdb_logical_type ca = duckdb_array_type_child_type(a);
+        duckdb_logical_type cb = duckdb_array_type_child_type(b);
+        int eq = duckdb_array_type_array_size(a) == duckdb_array_type_array_size(b) &&
+                 ducknng_quack_logical_type_equal(ca, cb);
+        if (ca) duckdb_destroy_logical_type(&ca);
+        if (cb) duckdb_destroy_logical_type(&cb);
+        return eq;
+    }
+    case DUCKDB_TYPE_MAP: {
+        duckdb_logical_type ka = duckdb_map_type_key_type(a);
+        duckdb_logical_type kb = duckdb_map_type_key_type(b);
+        duckdb_logical_type va = duckdb_map_type_value_type(a);
+        duckdb_logical_type vb = duckdb_map_type_value_type(b);
+        int eq = ducknng_quack_logical_type_equal(ka, kb) &&
+                 ducknng_quack_logical_type_equal(va, vb);
+        if (ka) duckdb_destroy_logical_type(&ka);
+        if (kb) duckdb_destroy_logical_type(&kb);
+        if (va) duckdb_destroy_logical_type(&va);
+        if (vb) duckdb_destroy_logical_type(&vb);
+        return eq;
+    }
+    case DUCKDB_TYPE_STRUCT: {
+        idx_t n = duckdb_struct_type_child_count(a);
+        idx_t i;
+        if (n != duckdb_struct_type_child_count(b)) return 0;
+        for (i = 0; i < n; i++) {
+            char *na = duckdb_struct_type_child_name(a, i);
+            char *nb = duckdb_struct_type_child_name(b, i);
+            duckdb_logical_type ca = duckdb_struct_type_child_type(a, i);
+            duckdb_logical_type cb = duckdb_struct_type_child_type(b, i);
+            int eq = na && nb && strcmp(na, nb) == 0 &&
+                     ducknng_quack_logical_type_equal(ca, cb);
+            if (na) duckdb_free(na);
+            if (nb) duckdb_free(nb);
+            if (ca) duckdb_destroy_logical_type(&ca);
+            if (cb) duckdb_destroy_logical_type(&cb);
+            if (!eq) return 0;
+        }
+        return 1;
+    }
+    case DUCKDB_TYPE_UNION: {
+        idx_t n = duckdb_union_type_member_count(a);
+        idx_t i;
+        if (n != duckdb_union_type_member_count(b)) return 0;
+        for (i = 0; i < n; i++) {
+            char *na = duckdb_union_type_member_name(a, i);
+            char *nb = duckdb_union_type_member_name(b, i);
+            duckdb_logical_type ca = duckdb_union_type_member_type(a, i);
+            duckdb_logical_type cb = duckdb_union_type_member_type(b, i);
+            int eq = na && nb && strcmp(na, nb) == 0 &&
+                     ducknng_quack_logical_type_equal(ca, cb);
+            if (na) duckdb_free(na);
+            if (nb) duckdb_free(nb);
+            if (ca) duckdb_destroy_logical_type(&ca);
+            if (cb) duckdb_destroy_logical_type(&cb);
+            if (!eq) return 0;
+        }
+        return 1;
+    }
+    case DUCKDB_TYPE_ENUM: {
+        uint32_t n = duckdb_enum_dictionary_size(a);
+        uint32_t i;
+        if (n != duckdb_enum_dictionary_size(b)) return 0;
+        for (i = 0; i < n; i++) {
+            char *la = duckdb_enum_dictionary_value(a, i);
+            char *lb = duckdb_enum_dictionary_value(b, i);
+            int eq = la && lb && strcmp(la, lb) == 0;
+            if (la) duckdb_free(la);
+            if (lb) duckdb_free(lb);
+            if (!eq) return 0;
+        }
+        return 1;
+    }
+    default:
+        /* Same top-level id and no parameters to compare. */
+        return 1;
+    }
+}
+
+/* Record a duckdb_appender error into *errmsg via the non-deprecated
+ * error-data API (duckdb_appender_error is deprecated and absent under
+ * DUCKDB_API_NO_DEPRECATED). */
+static void ducknng_quack_set_appender_error(duckdb_appender appender,
+    const char *fallback, char **errmsg) {
+    duckdb_error_data ed = duckdb_appender_error_data(appender);
+    const char *msg = ed ? duckdb_error_data_message(ed) : NULL;
+    ducknng_quack_set_error(errmsg, msg && msg[0] ? msg : fallback);
+    if (ed) duckdb_destroy_error_data(&ed);
+}
+
+int ducknng_quack_payload_append_to_appender(duckdb_appender appender,
+    const uint8_t *payload, size_t payload_len, uint64_t *inout_rows, char **errmsg) {
+    ducknng_quack_schema schema;
+    duckdb_logical_type *types = NULL;
+    duckdb_data_chunk chunk = NULL;
+    ducknng_quack_reader r;
+    size_t offset = 0;
+    uint64_t remaining = 0;
+    uint64_t appended = 0;
+    idx_t expected_rows = 0;
+    idx_t appender_cols;
+    idx_t i;
+    int rc = -1;
+    if (!appender || !payload || payload_len == 0) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack append inputs");
+        return -1;
+    }
+    memset(&schema, 0, sizeof(schema));
+    memset(&r, 0, sizeof(r));
+    r.data = payload;
+    r.len = payload_len;
+    /* Parse the schema, then require the whole payload to be structurally
+     * valid (terminators + no trailing bytes) before touching the appender. */
+    if (ducknng_quack_reader_parse_schema(&r, &schema, errmsg) != 0) return -1;
+    if (schema.ncols == 0) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack append payload has no columns");
+        goto done;
+    }
+    if (ducknng_quack_reader_validate_results(&r, &schema, (idx_t)duckdb_vector_size(),
+            &expected_rows, errmsg) != 0) goto done;
+    /* The batch schema must match the target appender exactly: same column
+     * count and same top-level type per column. DuckDB's append-time cast
+     * would otherwise silently coerce e.g. BIGINT batch data into an INTEGER
+     * column, so reject mismatches here rather than relying on the append. */
+    appender_cols = duckdb_appender_column_count(appender);
+    if ((uint64_t)appender_cols != (uint64_t)schema.ncols) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack append column count does not match the target table");
+        goto done;
+    }
+    types = (duckdb_logical_type *)duckdb_malloc(sizeof(*types) * (size_t)schema.ncols);
+    if (!types) {
+        ducknng_quack_set_error(errmsg, "ducknng: out of memory allocating quack append column types");
+        goto done;
+    }
+    memset(types, 0, sizeof(*types) * (size_t)schema.ncols);
+    for (i = 0; i < schema.ncols; i++) {
+        duckdb_logical_type target;
+        int eq;
+        if (ducknng_quack_node_to_duckdb(&schema.cols[i], 0, &types[i], errmsg) != 0) goto done;
+        target = duckdb_appender_column_type(appender, i);
+        eq = ducknng_quack_logical_type_equal(types[i], target);
+        if (target) duckdb_destroy_logical_type(&target);
+        if (!eq) {
+            ducknng_quack_set_error(errmsg, "ducknng: quack append column type does not match the target table");
+            goto done;
+        }
+    }
+    chunk = duckdb_create_data_chunk(types, (idx_t)schema.ncols);
+    if (!chunk) {
+        ducknng_quack_set_error(errmsg, "ducknng: failed to allocate data chunk for quack append");
+        goto done;
+    }
+    if (ducknng_quack_payload_scan_begin(payload, payload_len, &schema, &offset, &remaining, errmsg) != 0) goto done;
+    while (remaining > 0) {
+        idx_t chunk_size;
+        duckdb_data_chunk_reset(chunk);
+        if (ducknng_quack_payload_scan_next(chunk, payload, payload_len, &schema,
+                &offset, &remaining, errmsg) != 0) goto done;
+        chunk_size = duckdb_data_chunk_get_size(chunk);
+        if (chunk_size == 0) continue;
+        if (duckdb_append_data_chunk(appender, chunk) == DuckDBError) {
+            ducknng_quack_set_appender_error(appender, "ducknng: quack append to table failed", errmsg);
+            goto done;
+        }
+        appended += (uint64_t)chunk_size;
+    }
+    if (appended != (uint64_t)expected_rows) {
+        ducknng_quack_set_error(errmsg, "ducknng: quack append row count did not match the payload");
+        goto done;
+    }
+    if (inout_rows) *inout_rows += appended;
+    rc = 0;
+done:
+    if (chunk) duckdb_destroy_data_chunk(&chunk);
+    if (types) {
+        for (i = 0; i < schema.ncols; i++) {
+            if (types[i]) duckdb_destroy_logical_type(&types[i]);
+        }
+        duckdb_free(types);
+    }
+    ducknng_quack_schema_reset(&schema);
+    return rc;
 }
 
 int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_len,
