@@ -41,6 +41,17 @@ typedef struct ducknng_session {
     int pending_ready;  /* 1 after duckdb_execute_pending has been called */
     int stmt_open;
     int pending_open;
+    /* upload session fields — set by ducknng_service_add_upload_session. An
+     * upload session pins its connection like a query session, but instead of
+     * a prepared statement it holds an open appender inside an open
+     * transaction on session_con; commit flushes+commits, abort/prune/destroy
+     * rolls the transaction back so partially uploaded rows never persist. */
+    int is_upload;
+    duckdb_appender upload_appender;
+    int upload_appender_open;
+    int upload_txn_open;
+    char *upload_target;
+    uint64_t upload_rows;
 } ducknng_session;
 
 typedef struct ducknng_service ducknng_service;
@@ -67,6 +78,15 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
     const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
+/* Register an upload session: session_con is pinned for the session's life
+ * with an open appender inside an open transaction (both created by the
+ * caller). target is the target table name (copied, for diagnostics). On
+ * success the session owns the appender and transaction; on failure the
+ * caller retains them. */
+int ducknng_service_add_upload_session(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index, duckdb_appender appender,
+    const char *target, const char *owner_identity,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg);
 ducknng_session *ducknng_service_acquire_session(ducknng_service *svc, uint64_t session_id,
     const char *owner_token, const char *caller_identity, int *out_unauthorized);

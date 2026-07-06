@@ -242,6 +242,28 @@ void ducknng_session_destroy(ducknng_session *session) {
         duckdb_destroy_prepare(&session->session_stmt);
         session->stmt_open = 0;
     }
+    /* Upload session: destroying an appender flushes its buffered rows into the
+     * open transaction, so we destroy it first, then roll the transaction back
+     * on the session connection. An upload that reached commit already cleared
+     * both flags, so this only fires for abort/prune/shutdown and guarantees
+     * partially uploaded rows never persist. */
+    if (session->upload_appender_open) {
+        duckdb_appender_destroy(&session->upload_appender);
+        session->upload_appender_open = 0;
+    }
+    if (session->upload_txn_open && session->session_con) {
+        duckdb_result rollback_res;
+        memset(&rollback_res, 0, sizeof(rollback_res));
+        /* duckdb_query populates the result (including the error state) on both
+         * success and failure, so it must be destroyed unconditionally. */
+        (void)duckdb_query(session->session_con, "ROLLBACK", &rollback_res);
+        duckdb_destroy_result(&rollback_res);
+        session->upload_txn_open = 0;
+    }
+    if (session->upload_target) {
+        duckdb_free(session->upload_target);
+        session->upload_target = NULL;
+    }
     if (session->session_svc && session->session_pool_index != (size_t)-1) {
         ducknng_service_release_session_connection(session->session_svc, session->session_pool_index);
         session->session_pool_index = (size_t)-1;
@@ -504,9 +526,16 @@ size_t ducknng_service_prune_idle_sessions(ducknng_service *svc, uint64_t now_ms
     return removed;
 }
 
-int ducknng_service_add_session_streaming(ducknng_service *svc,
+/* Shared session registrar for both query (streaming) and upload sessions.
+ * For upload sessions (is_upload) the appender/target/transaction ownership is
+ * installed on the session while svc->mu is still held and before the session
+ * is inserted into svc->sessions, so a concurrent stop/detach can never see a
+ * bare session and release its pinned connection without destroying the
+ * appender and rolling the transaction back. */
+static int ducknng_service_add_session_full(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
+    duckdb_appender appender, int is_upload, const char *target,
     const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
@@ -630,6 +659,17 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
             return -1;
         }
     }
+    /* Install upload ownership under the lock and before insertion: past all
+     * pre-insert error paths (so a failure never destroys the caller's
+     * appender/transaction) and before the session is visible to any concurrent
+     * stop/detach (so teardown always sees a full upload session). */
+    if (is_upload) {
+        session->is_upload = 1;
+        session->upload_appender = appender;
+        session->upload_appender_open = 1;
+        session->upload_txn_open = 1;
+        session->upload_target = (target && target[0]) ? ducknng_strdup(target) : NULL;
+    }
     svc->next_session_id++;
     svc->sessions[svc->session_count++] = session;
     ducknng_service_publish_session_count(svc);
@@ -638,4 +678,30 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
     if (out_owner_token) *out_owner_token = owner_token_copy;
     if (out_result_handle) *out_result_handle = result_handle_copy;
     return 0;
+}
+
+int ducknng_service_add_session_streaming(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index,
+    duckdb_prepared_statement stmt, duckdb_pending_result pending,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
+    return ducknng_service_add_session_full(svc, session_con, pool_index, stmt, pending,
+        NULL, 0, NULL, owner_identity, row_payload_format, fetch_batch_chunks,
+        out_session_id, out_owner_token, out_result_handle, errmsg);
+}
+
+int ducknng_service_add_upload_session(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index, duckdb_appender appender,
+    const char *target, const char *owner_identity,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
+    if (out_session_id) *out_session_id = 0;
+    if (out_owner_token) *out_owner_token = NULL;
+    if (out_result_handle) *out_result_handle = NULL;
+    if (!appender) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing upload session appender");
+        return -1;
+    }
+    return ducknng_service_add_session_full(svc, session_con, pool_index, NULL, NULL,
+        appender, 1, target, owner_identity, 0, 0,
+        out_session_id, out_owner_token, out_result_handle, errmsg);
 }
