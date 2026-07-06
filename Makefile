@@ -1,5 +1,5 @@
 .PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
-.PHONY: rpc_bench rpc_bulk_compare http_smoke subscriber_gateway_rdm
+.PHONY: rpc_bench rpc_bulk_compare rpc_upload_compare http_smoke subscriber_gateway_rdm
 .PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean
 
 rpc_smoke: check_configure
@@ -115,6 +115,13 @@ rpc_bulk_compare: release
 		R -e "rmarkdown::render('bench/rpc_bulk_compare.Rmd')"; \
 	else \
 		echo "R not found; skipping optional rpc_bulk_compare"; \
+	fi
+
+rpc_upload_compare: release
+	@if command -v R >/dev/null 2>&1; then \
+		R -e "rmarkdown::render('bench/rpc_upload_compare.Rmd')"; \
+	else \
+		echo "R not found; skipping optional rpc_upload_compare"; \
 	fi
 
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
