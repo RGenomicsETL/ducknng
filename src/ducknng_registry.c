@@ -195,6 +195,34 @@ int ducknng_method_registry_set_requires_auth(ducknng_method_registry *registry,
     return 0;
 }
 
+/* Allocation-free auth restore for rollback. If the slot is an owned heap copy,
+ * flip requires_auth in place (no malloc, no descriptor swap, no unregister); if
+ * it already holds the target value it is a no-op. This lets a failed
+ * multi-method (re-)registration restore each preexisting method's original auth
+ * policy without risking a second OOM and without removing a method that may
+ * have live sessions. A static (unowned) slot cannot be mutated, but a static
+ * slot was never flipped by the caller, so it already holds its original value
+ * and the early no-op path covers it. Returns 1 when the flag is at the target,
+ * 0 only if the name is absent or a static slot genuinely differs (which the
+ * caller's pre-registration snapshot guarantees will not happen). */
+int ducknng_method_registry_restore_auth_inplace(ducknng_method_registry *registry,
+    const char *name, int requires_auth) {
+    size_t i;
+    if (!registry || !name || !name[0]) return 0;
+    requires_auth = requires_auth ? 1 : 0;
+    for (i = 0; i < registry->method_count; i++) {
+        const ducknng_method_descriptor *method = registry->methods[i];
+        if (!method || !method->name || strcmp(method->name, name) != 0) continue;
+        if (method->requires_auth == requires_auth) return 1;
+        if (registry->owned && registry->owned[i]) {
+            ((ducknng_method_descriptor *)method)->requires_auth = requires_auth;
+            return 1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 const ducknng_method_descriptor *ducknng_method_registry_find(
     const ducknng_method_registry *registry, const uint8_t *name, uint32_t name_len) {
     size_t i;

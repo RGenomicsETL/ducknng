@@ -151,6 +151,11 @@ int ducknng_method_registry_unregister(ducknng_method_registry *registry, const 
 size_t ducknng_method_registry_unregister_family(ducknng_method_registry *registry, const char *family);
 int ducknng_method_registry_set_requires_auth(ducknng_method_registry *registry,
     const char *name, int requires_auth, char **errmsg);
+/* Allocation-free auth restore for registration rollback: flips an owned slot's
+ * requires_auth in place (no malloc, no unregister); no-op if already at target.
+ * See the implementation for why static slots need no restore. */
+int ducknng_method_registry_restore_auth_inplace(ducknng_method_registry *registry,
+    const char *name, int requires_auth);
 const ducknng_method_descriptor *ducknng_method_registry_find(
     const ducknng_method_registry *registry, const uint8_t *name, uint32_t name_len);
 char *ducknng_method_registry_manifest_json(const ducknng_method_registry *registry,

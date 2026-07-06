@@ -2158,10 +2158,15 @@ rollback:
             /* Absent originally: remove it (a no-op if its own register failed). */
             ducknng_method_registry_unregister(&rt->registry, methods[i]->name);
         } else {
-            /* Present originally: restore its original auth flag (best-effort; a
-             * no-op unless this call actually flipped it). */
-            (void)ducknng_method_registry_set_requires_auth(&rt->registry,
-                methods[i]->name, orig_auth[i], NULL);
+            /* Present originally: restore its original auth flag in place,
+             * allocation-free. This cannot OOM (so rollback is truly atomic) and
+             * never unregisters the method -- important because upload methods
+             * are sessionful, and removing one out from under a live upload
+             * session would bypass the open-session unregister guard. Any method
+             * this call flipped is an owned copy (restored in place); one it left
+             * untouched is already at its original value (no-op). */
+            (void)ducknng_method_registry_restore_auth_inplace(&rt->registry,
+                methods[i]->name, orig_auth[i]);
         }
     }
     return 0;
