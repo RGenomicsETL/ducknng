@@ -119,6 +119,7 @@ rpc_bulk_compare: release
 
 rpc_upload_compare: release
 	@if command -v R >/dev/null 2>&1; then \
+		DUCKNNG_BENCH_EXT_PATH="$${DUCKNNG_BENCH_EXT_PATH:-$(CURDIR)/build/release/ducknng.duckdb_extension}" \
 		R -e "rmarkdown::render('bench/rpc_upload_compare.Rmd')"; \
 	else \
 		echo "R not found; skipping optional rpc_upload_compare"; \

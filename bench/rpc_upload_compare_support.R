@@ -40,7 +40,9 @@ ducknng_bench_upload_row_sql <- function(rows, worker_id, seed = 42L) {
     paste(
       "SELECT",
       "i::INTEGER AS id,",
-      "i::BIGINT AS seq,",
+      # seq is deliberately distinct from id (id=i) so the row_md5 gate catches
+      # an id<->seq copy/swap column-mapping bug.
+      "(i * 2 + 1)::BIGINT AS seq,",
       "((((i + %d) %% 997) * 3) + %d)::DOUBLE AS value,",
       "('w' || %d || '_row_' || i)::VARCHAR AS label",
       "FROM range(%d) AS t(i)"
@@ -57,10 +59,22 @@ ducknng_bench_upload_expected_checksum <- function(rows, worker_id, seed = 42L) 
   stopifnot(rows > 0L)
   i <- 0:(as.integer(rows) - 1L)
   val <- (((i + as.integer(seed)) %% 997L) * 3L) + as.integer(worker_id)
+  labels <- sprintf("w%d_row_%d", as.integer(worker_id), i)
+  # One content-sensitive digest over EVERY column in id order (id, seq, value,
+  # label), so any per-cell corruption -- a swapped seq, a tiny value change, a
+  # same-length label edit -- fails the gate, not just aggregate sums. value is a
+  # DOUBLE, so it is stringified with %.17g (round-trip-exact: 17 significant
+  # digits distinguish any two distinct doubles) rather than a rounding %.6f. R's
+  # sprintf and DuckDB's printf both call C printf on the same IEEE-754 bits, so
+  # this reproduces DuckDB's
+  # md5(string_agg(id||','||seq||','||printf('%.17g',value)||','||label, chr(31) ORDER BY id))
+  # byte-for-byte. count(*) and count(DISTINCT id) still guard cardinality.
+  rowstrs <- sprintf("%d,%.0f,%.17g,%s", i, 2 * as.numeric(i) + 1, as.numeric(val), labels)
   list(
     row_count = as.numeric(rows),
-    sum_value = sum(as.numeric(val)),
-    distinct_id = as.numeric(rows)
+    distinct_id = as.numeric(rows),
+    row_md5 = digest::digest(paste(rowstrs, collapse = intToUtf8(31L)),
+      algo = "md5", serialize = FALSE)
   )
 }
 
@@ -111,12 +125,17 @@ ducknng_bench_upload_worker <- function(writer_mode, worker_id, url, rows, repet
     run_rpc_exec(ducknng_bench_upload_target_ddl(target_table))
 
     if (identical(writer_mode, "text_insert")) {
-      rows_df <- DBI::dbGetQuery(con, source_sql)
-      insert_sql <- ducknng_bench_build_values_insert_sql(rows_df, target_table)
-      payload_bytes <- nchar(insert_sql, type = "bytes")
+      # Time the local materialization (fetch + VALUES-string construction) as
+      # well as the network send, so this path is comparable to quack_upload,
+      # which times its source_query execution + quack encoding + send inside
+      # ducknng_upload_table. (system.time evaluates in the caller's frame, so
+      # insert_sql/exec_result persist below.)
       elapsed <- system.time({
+        rows_df <- DBI::dbGetQuery(con, source_sql)
+        insert_sql <- ducknng_bench_build_values_insert_sql(rows_df, target_table)
         exec_result <- run_rpc_exec(insert_sql)
       })[["elapsed"]]
+      payload_bytes <- nchar(insert_sql, type = "bytes")
       if (!identical(as.numeric(exec_result$rows_changed[[1]]), as.numeric(rows))) {
         stop(sprintf(
           "CORRECTNESS GATE FAILED (rows_changed) writer_mode=%s worker_id=%d iter=%d: expected %d rows_changed, got %s",
@@ -143,25 +162,27 @@ ducknng_bench_upload_worker <- function(writer_mode, worker_id, url, rows, repet
       stop("unknown writer_mode: ", writer_mode)
     }
 
+    # Every generated column is checked, so a regression that corrupts only seq
+    # or the VARCHAR label (while leaving id/value intact) still fails the gate.
     check_sql <- sprintf(
-      "SELECT count(*) AS row_count, sum(value) AS sum_value, count(DISTINCT id) AS distinct_id FROM ducknng_query_rpc(%s, %s, 0::UBIGINT)",
+      "SELECT count(*) AS row_count, count(DISTINCT id) AS distinct_id, md5(string_agg(id::VARCHAR || ',' || seq::VARCHAR || ',' || printf('%%.17g', value) || ',' || label, chr(31) ORDER BY id)) AS row_md5 FROM ducknng_query_rpc(%s, %s, 0::UBIGINT)",
       ducknng_bench_sql_quote(url),
       ducknng_bench_sql_quote(sprintf("SELECT * FROM %s", target_table))
     )
     actual <- DBI::dbGetQuery(con, check_sql)
     gate_ok <- isTRUE(all.equal(as.numeric(actual$row_count[[1]]), expected$row_count)) &&
-      isTRUE(all.equal(as.numeric(actual$sum_value[[1]]), expected$sum_value)) &&
-      isTRUE(all.equal(as.numeric(actual$distinct_id[[1]]), expected$distinct_id))
+      isTRUE(all.equal(as.numeric(actual$distinct_id[[1]]), expected$distinct_id)) &&
+      identical(as.character(actual$row_md5[[1]]), expected$row_md5)
     if (!gate_ok) {
       stop(sprintf(
         paste(
           "CORRECTNESS GATE FAILED writer_mode=%s worker_id=%d iter=%d rows=%d:",
-          "expected(row_count=%s, sum_value=%s, distinct_id=%s)",
-          "actual(row_count=%s, sum_value=%s, distinct_id=%s)"
+          "expected(row_count=%s, distinct_id=%s, row_md5=%s)",
+          "actual(row_count=%s, distinct_id=%s, row_md5=%s)"
         ),
         writer_mode, worker_id, iter, rows,
-        expected$row_count, expected$sum_value, expected$distinct_id,
-        actual$row_count[[1]], actual$sum_value[[1]], actual$distinct_id[[1]]
+        expected$row_count, expected$distinct_id, expected$row_md5,
+        actual$row_count[[1]], actual$distinct_id[[1]], actual$row_md5[[1]]
       ))
     }
 
