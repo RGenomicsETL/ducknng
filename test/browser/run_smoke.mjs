@@ -459,7 +459,8 @@ async function readCapabilities(page) {
   // the two disagree on is drift in the contract itself.
   const listRows = await page.evaluate(
     async (sql) => await globalThis.ducknngWasmSmoke.query(sql),
-    "SELECT target, http, https, inproc, websocket, async_is_real, honors_timeout, honors_cancel, tls_owner " +
+    "SELECT target, http, https, inproc, tcp, ipc, tls_tcp, websocket, " +
+      "async_is_real, honors_timeout, honors_cancel, tls_owner " +
       "FROM ducknng_list_transport_capabilities() WHERE active");
   if (!listRows || listRows.length !== 1) {
     fail(`conformance: expected exactly one active capability row, got ${listRows ? listRows.length : 0}`);
@@ -467,7 +468,8 @@ async function readCapabilities(page) {
   const active = listRows[0];
   const bool = (v) => v === true || v === "true" || v === 1 || v === 1n;
   if (active.target !== caps.backend || active.http !== caps.http || active.https !== caps.https ||
-      active.inproc !== caps.inproc || active.websocket !== caps.websocket ||
+      active.inproc !== caps.inproc || active.tcp !== caps.tcp || active.ipc !== caps.ipc ||
+      active.tls_tcp !== caps.tls_tcp || active.websocket !== caps.websocket ||
       active.tls_owner !== caps.tls_owner || bool(active.async_is_real) !== (caps.async_is_real === true) ||
       bool(active.honors_timeout) !== (caps.honors_timeout === true) ||
       bool(active.honors_cancel) !== (caps.honors_cancel === true)) {

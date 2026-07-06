@@ -74,7 +74,11 @@ EM_JS(int, ducknng_js_fetch_launch, (const char *url_ptr, const char *method_ptr
             return id;
         }
     }
-    if (cfg && cfg.headers && hostMatchesAllowlist(url, cfg.allowHosts)) {
+    // Configured headers and credentials are both scoped to the host
+    // allowlist, matching the synchronous XHR bridge, so browser credentials
+    // are never attached to origins outside the configured allowlist.
+    var configHostAllowed = !!(cfg && hostMatchesAllowlist(url, cfg.allowHosts));
+    if (cfg && cfg.headers && configHostAllowed) {
         var isHttps = url.toLowerCase().startsWith("https://");
         var allowInsecureAuth = !!(cfg.allowInsecureAuth);
         for (var keyName in cfg.headers) {
@@ -84,7 +88,7 @@ EM_JS(int, ducknng_js_fetch_launch, (const char *url_ptr, const char *method_ptr
             headers.push([String(keyName), String(cfg.headers[keyName])]);
         }
     }
-    var withCreds = !!(cfg && cfg.withCredentials === true);
+    var withCreds = !!(cfg && cfg.withCredentials === true && configHostAllowed);
     var init = { method: method || "GET", headers: headers,
         signal: op.ctrl.signal, credentials: withCreds ? "include" : "same-origin" };
     if (body_len > 0) init.body = HEAPU8.slice(body_ptr, body_ptr + body_len);
