@@ -65,5 +65,54 @@ SELECT count(*) FROM upload_dst
 ----
 1005
 
+# A zero-row source with a matching schema commits 0 rows (the schema is still
+# validated -- an empty result sends one schema-only batch).
+query I
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(0) t(i)',
+  'upload_dst')
+----
+0
+
+# A zero-row source with the WRONG schema is rejected (previously it committed 0
+# rows without ever checking the columns against the target).
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT 1::BIGINT AS wrong FROM range(0) t(i)',
+  'upload_dst')
+----
+ducknng: quack append column
+
+# A malformed target_table is rejected client-side before any upload_open.
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(1) t(i)',
+  'bad"table')
+----
+ducknng: upload target_table must be a simple
+
+# A structurally-invalid but charset-clean target (too many parts) is also
+# rejected client-side, before source_query runs.
+statement error
+SELECT rows_uploaded
+FROM ducknng_upload_table(
+  'inproc://ducknng_upload_rt',
+  'SELECT i::INTEGER AS i, ''v'' || i AS s FROM range(1) t(i)',
+  'a.b.c.d')
+----
+ducknng: upload target_table must be a simple
+
+# Still 1005 -- none of the rejected uploads corrupted the target.
+query I
+SELECT count(*) FROM upload_dst
+----
+1005
+
 statement ok
 SELECT ducknng_stop_server('up0');

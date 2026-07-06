@@ -2267,6 +2267,81 @@ static uint8_t *ducknng_upload_append_body(uint64_t session_id, const char *toke
     return body;
 }
 
+/* One timeout for the whole upload conversation. The NNG req socket is opened by
+ * the first (upload_open) roundtrip and reused, and ducknng_query_rpc_method_roundtrip
+ * only applies timeout_ms when it opens the socket -- so every upload roundtrip
+ * must pass the same value or later appends/commits would silently keep the open
+ * timeout. HTTP applies it per transact, so a single constant is correct there too. */
+#define DUCKNNG_UPLOAD_TIMEOUT_MS 30000
+
+/* v1 upload targets are simple [[catalog.]schema.]table identifiers. Mirror the
+ * server-side parser (ducknng_upload_split_target/ident_ok) client-side so a
+ * malformed target fails fast -- before source_query runs -- rather than after,
+ * and so a quote/backslash cannot break out of the upload_open control JSON.
+ * Rules: 1..3 dot-separated segments, each a non-empty identifier whose first
+ * char is [A-Za-z_] and rest [A-Za-z0-9_$]. The server re-validates authoritatively. */
+static int ducknng_upload_table_target_ok(const char *target) {
+    size_t seg_start = 0;
+    size_t i;
+    int nparts = 0;
+    if (!target || !target[0]) return 0;
+    for (i = 0;; i++) {
+        if (target[i] == '.' || target[i] == '\0') {
+            size_t len = i - seg_start;
+            size_t j;
+            char first;
+            if (len == 0) return 0; /* empty segment: leading/trailing/double dot */
+            first = target[seg_start];
+            if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_')) return 0;
+            for (j = 1; j < len; j++) {
+                char c = target[seg_start + j];
+                if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9') || c == '_' || c == '$')) return 0;
+            }
+            if (++nparts > 3) return 0; /* more than [[catalog.]schema.]table */
+            if (target[i] == '\0') break;
+            seg_start = i + 1;
+        }
+    }
+    return 1;
+}
+
+/* Build and send one upload_append (counted prefix + quack payload), decode the
+ * reply, and (when out_running is non-NULL) read the server's running row count.
+ * Returns 0 on success, -1 with *errmsg on any failure. */
+static int ducknng_upload_append_one(ducknng_query_rpc_bind_data *t, const uint8_t *quack,
+    size_t quack_len, const ducknng_tls_opts *tls_opts, uint64_t *out_running, char **errmsg) {
+    uint8_t *body;
+    size_t body_len = 0;
+    nng_msg *resp;
+    ducknng_frame frame;
+    char *reply_json;
+    body = ducknng_upload_append_body(t->session_id, t->session_token, quack, quack_len, &body_len);
+    if (!body) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload_append frame");
+        return -1;
+    }
+    resp = ducknng_query_rpc_method_roundtrip(t, "upload_append", body, body_len,
+        DUCKNNG_UPLOAD_TIMEOUT_MS, tls_opts, errmsg);
+    duckdb_free(body);
+    if (!resp) return -1;
+    if (ducknng_decode_request(resp, &frame) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_append response envelope");
+        nng_msg_free(resp);
+        return -1;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: upload_append failed");
+        nng_msg_free(resp);
+        return -1;
+    }
+    reply_json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
+    if (reply_json && out_running) (void)ducknng_json_extract_u64_value(reply_json, "rows", out_running);
+    if (reply_json) duckdb_free(reply_json);
+    nng_msg_free(resp);
+    return 0;
+}
+
 /* Send a JSON-keyed upload session control method (upload_commit / upload_abort). */
 static nng_msg *ducknng_upload_control(ducknng_query_rpc_bind_data *t, const char *method,
     const ducknng_tls_opts *tls_opts, char **errmsg) {
@@ -2276,7 +2351,8 @@ static nng_msg *ducknng_upload_control(ducknng_query_rpc_bind_data *t, const cha
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload control request");
         return NULL;
     }
-    resp = ducknng_query_rpc_method_roundtrip(t, method, json, strlen(json), 30000, tls_opts, errmsg);
+    resp = ducknng_query_rpc_method_roundtrip(t, method, json, strlen(json),
+        DUCKNNG_UPLOAD_TIMEOUT_MS, tls_opts, errmsg);
     duckdb_free(json);
     return resp;
 }
@@ -2293,8 +2369,16 @@ static int ducknng_upload_table_run(ducknng_upload_table_bind_data *ub, const ch
     ducknng_frame frame;
     char *reply_json = NULL;
     idx_t chunk_index = 0;
+    int sent_any = 0;
     int rc = -1;
 
+    /* Validate the target before running source_query, so a malformed target
+     * fails fast without executing any (possibly side-effecting) local query. */
+    if (!ducknng_upload_table_target_ok(ub->target_table)) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: upload target_table must be a simple [[catalog.]schema.]table identifier");
+        goto done;
+    }
     if (ducknng_lookup_tls_opts(t->ctx, t->tls_config_id, &tls_opts, errmsg) != 0) goto done;
 
     /* Run source_query on the runtime's pre-opened codec connection. The stable
@@ -2326,7 +2410,8 @@ static int ducknng_upload_table_run(ducknng_upload_table_bind_data *ub, const ch
     open_json = (char *)duckdb_malloc(open_json_len);
     if (!open_json) { if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory"); goto done; }
     snprintf(open_json, open_json_len, "{\"target_table\":\"%s\",\"mode\":\"append\"}", ub->target_table);
-    resp = ducknng_query_rpc_method_roundtrip(t, "upload_open", open_json, strlen(open_json), 5000, tls_opts, errmsg);
+    resp = ducknng_query_rpc_method_roundtrip(t, "upload_open", open_json, strlen(open_json),
+        DUCKNNG_UPLOAD_TIMEOUT_MS, tls_opts, errmsg);
     if (!resp) goto done;
     if (ducknng_decode_request(resp, &frame) != 0) {
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_open response envelope");
@@ -2355,33 +2440,33 @@ static int ducknng_upload_table_run(ducknng_upload_table_bind_data *ub, const ch
         uint8_t *qbytes = NULL;
         size_t qlen = 0;
         int has_chunk = 0;
-        uint8_t *body;
-        size_t body_len = 0;
         uint64_t running = 0;
         if (ducknng_result_materialized_chunks_to_quack_payload(result, &chunk_index, 1, 1,
                 &qbytes, &qlen, &has_chunk, errmsg) != 0)
             goto do_abort;
         if (!has_chunk) { if (qbytes) duckdb_free(qbytes); break; }
-        body = ducknng_upload_append_body(t->session_id, t->session_token, qbytes, qlen, &body_len);
+        if (ducknng_upload_append_one(t, qbytes, qlen, tls_opts, &running, errmsg) != 0) {
+            duckdb_free(qbytes);
+            goto do_abort;
+        }
         duckdb_free(qbytes);
-        if (!body) { if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload_append frame"); goto do_abort; }
-        resp = ducknng_query_rpc_method_roundtrip(t, "upload_append", body, body_len, 30000, tls_opts, errmsg);
-        duckdb_free(body);
-        if (!resp) goto do_abort;
-        if (ducknng_decode_request(resp, &frame) != 0) {
-            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_append response envelope");
-            goto do_abort;
-        }
-        if (frame.type == DUCKNNG_RPC_ERROR) {
-            if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: upload_append failed");
-            goto do_abort;
-        }
-        reply_json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
-        if (reply_json && ducknng_json_extract_u64_value(reply_json, "rows", &running) == 0)
-            ub->rows_uploaded = running;
+        ub->rows_uploaded = running;
         ub->bytes_uploaded += (uint64_t)qlen;
-        if (reply_json) { duckdb_free(reply_json); reply_json = NULL; }
-        nng_msg_free(resp); resp = NULL;
+        sent_any = 1;
+    }
+    if (!sent_any) {
+        /* A zero-row source still sends one schema-only batch so the server
+         * validates the source's column names/count/types against the target
+         * (catching schema drift) instead of committing 0 rows unchecked. */
+        uint8_t *qbytes = NULL;
+        size_t qlen = 0;
+        if (ducknng_result_empty_quack_payload(result, &qbytes, &qlen, errmsg) != 0) goto do_abort;
+        if (ducknng_upload_append_one(t, qbytes, qlen, tls_opts, NULL, errmsg) != 0) {
+            duckdb_free(qbytes);
+            goto do_abort;
+        }
+        ub->bytes_uploaded += (uint64_t)qlen;
+        duckdb_free(qbytes);
     }
 
     resp = ducknng_upload_control(t, "upload_commit", tls_opts, errmsg);
