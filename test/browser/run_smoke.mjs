@@ -31,6 +31,7 @@ const KNOWN_PROBES = new Set([
   "http-table",
   "https-cors",
   "http-rpc",
+  "conformance",
 ]);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -121,6 +122,12 @@ Probes:
              for this probe.
   http-rpc   Exercise framed raw/RPC/session helper routing over browser HTTP
              against a small local ducknng-frame responder.
+  conformance
+             Read ducknng_transport_capabilities(), assert the scalar and the
+             active ducknng_list_transport_capabilities() row agree, then gate
+             each transport probe on its capability: run supported, skip
+             unsupported, run experimental report-only. The capability-gated
+             replacement for hand-maintained per-target probe lists.
 
 Alias:
   baseline   Expands to load,inproc.
@@ -433,6 +440,94 @@ async function runLoadProbe(page) {
   } else {
     console.log(`ok: shell query returned a version (${shell.table.trim().slice(0, 40)})`);
   }
+}
+
+async function readCapabilities(page) {
+  const scalarRows = await page.evaluate(
+    async (sql) => await globalThis.ducknngWasmSmoke.query(sql),
+    "SELECT ducknng_transport_capabilities() AS c");
+  if (!scalarRows || !scalarRows[0] || typeof scalarRows[0].c !== "string") {
+    fail("conformance: ducknng_transport_capabilities() returned no descriptor");
+  }
+  let caps;
+  try {
+    caps = JSON.parse(scalarRows[0].c);
+  } catch (e) {
+    fail(`conformance: capability descriptor is not JSON: ${scalarRows[0].c}`);
+  }
+  // The active row of the table function must agree with the scalar: a claim
+  // the two disagree on is drift in the contract itself.
+  const listRows = await page.evaluate(
+    async (sql) => await globalThis.ducknngWasmSmoke.query(sql),
+    "SELECT target, http, https, inproc, websocket, async_is_real, honors_timeout, honors_cancel, tls_owner " +
+      "FROM ducknng_list_transport_capabilities() WHERE active");
+  if (!listRows || listRows.length !== 1) {
+    fail(`conformance: expected exactly one active capability row, got ${listRows ? listRows.length : 0}`);
+  }
+  const active = listRows[0];
+  const bool = (v) => v === true || v === "true" || v === 1 || v === 1n;
+  if (active.target !== caps.backend || active.http !== caps.http || active.https !== caps.https ||
+      active.inproc !== caps.inproc || active.websocket !== caps.websocket ||
+      active.tls_owner !== caps.tls_owner || bool(active.async_is_real) !== (caps.async_is_real === true) ||
+      bool(active.honors_timeout) !== (caps.honors_timeout === true) ||
+      bool(active.honors_cancel) !== (caps.honors_cancel === true)) {
+    fail(`conformance: scalar descriptor and active table row disagree: ` +
+      `${JSON.stringify(caps)} vs ${JSON.stringify(active)}`);
+  }
+  console.log(`ok: conformance descriptor consistent (backend=${caps.backend}, ` +
+    `async_is_real=${caps.async_is_real}, http=${caps.http}, websocket=${caps.websocket})`);
+  return caps;
+}
+
+// Run a capability-gated assertion: supported -> run and hard-fail on error;
+// experimental -> run report-only (a failure does not fail the suite);
+// unsupported -> clean skip. `available` lets the caller skip when a probe
+// dependency (e.g. an HTTPS origin) was not started.
+async function conformanceGate(name, capability, fn, available = true) {
+  if (capability === "unsupported") {
+    console.log(`skip: ${name} (capability unsupported)`);
+    return;
+  }
+  if (!available) {
+    console.log(`skip: ${name} (probe dependency not started)`);
+    return;
+  }
+  if (capability === "experimental") {
+    const priorExit = process.exitCode;
+    try {
+      await fn();
+      console.log(`ok (experimental): ${name}`);
+    } catch (error) {
+      if ((error?.message ?? String(error)) === RECORDED_FAILURE) {
+        process.exitCode = priorExit;
+        console.log(`report-only: ${name} did not pass (experimental, non-gating)`);
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+  await fn();
+}
+
+async function runConformanceProbe(page, base, httpsBase, noCorsBase) {
+  const caps = await readCapabilities(page);
+  // HTTP client family, including the frame carrier, gates on http support.
+  await conformanceGate("http sync client", caps.http,
+    () => runHttpSyncProbe(page, base, noCorsBase));
+  await conformanceGate("http table client", caps.http,
+    () => runHttpTableProbe(page, base));
+  await conformanceGate("http aio (fetch completion bridge)", caps.http,
+    () => runHttpAioProbe(page, base));
+  await conformanceGate("http frame carrier (raw/rpc/session)", caps.http,
+    () => runHttpRpcProbe(page, base));
+  await conformanceGate("https client", caps.https,
+    () => runHttpsCorsProbe(page, httpsBase), httpsBase != null);
+  // inproc is drift-checked: the runInprocProbe already fails for wasm_threads
+  // and reports unavailable otherwise, so map it to the same three-way rule.
+  await conformanceGate("inproc transport", caps.inproc,
+    () => runInprocProbe(page));
+  console.log(`ok: conformance run complete for ${caps.backend}`);
 }
 
 async function runInprocProbe(page) {
@@ -829,8 +924,10 @@ try {
 
 const { siteDir, probes } = options;
 const { server, port } = await startServer(siteDir);
-const httpsProbe = probes.has("https-cors") ? await startHttpsProbeServer() : null;
-const noCorsProbe = probes.has("http-sync") ? await startNoCorsProbeServer() : null;
+const wantsHttps = probes.has("https-cors") || probes.has("conformance");
+const wantsNoCors = probes.has("http-sync") || probes.has("conformance");
+const httpsProbe = wantsHttps ? await startHttpsProbeServer() : null;
+const noCorsProbe = wantsNoCors ? await startNoCorsProbeServer() : null;
 const base = `http://127.0.0.1:${port}`;
 const httpsBase = httpsProbe ? `https://127.0.0.1:${httpsProbe.port}` : null;
 const noCorsBase = noCorsProbe ? `http://127.0.0.1:${noCorsProbe.port}` : null;
@@ -843,7 +940,7 @@ let browser = null;
 let context = null;
 try {
   browser = await chromium.launch({ headless: process.env.BROWSER_HEADFUL !== "1" });
-  context = await browser.newContext({ ignoreHTTPSErrors: probes.has("https-cors") });
+  context = await browser.newContext({ ignoreHTTPSErrors: wantsHttps });
   const page = await context.newPage();
   page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`));
   if (process.env.BROWSER_DEBUG === "1") {
@@ -863,6 +960,7 @@ try {
   if (probes.has("http-table")) await runHttpTableProbe(page, base);
   if (probes.has("https-cors")) await runHttpsCorsProbe(page, httpsBase);
   if (probes.has("http-rpc")) await runHttpRpcProbe(page, base);
+  if (probes.has("conformance")) await runConformanceProbe(page, base, httpsBase, noCorsBase);
 } catch (error) {
   if ((error?.message ?? String(error)) !== RECORDED_FAILURE) {
     console.error(`FAIL: ${error?.message ?? String(error)}`);

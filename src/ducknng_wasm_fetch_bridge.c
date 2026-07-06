@@ -29,10 +29,41 @@ EM_JS(int, ducknng_js_fetch_launch, (const char *url_ptr, const char *method_ptr
     var url = UTF8ToString(url_ptr);
     var method = method_ptr ? UTF8ToString(method_ptr) : "";
     var headersJson = headers_ptr ? UTF8ToString(headers_ptr) : "";
+    var cfg = Module.ducknngWasmHttpConfig || null;
     var id = Module.ducknngFetchNext++;
     var op = { state: 0, status: 0, headers: "", body: null, error: "",
         ctrl: new AbortController(), timer: 0, timedOut: false };
     Module.ducknngFetchOps.set(id, op);
+
+    // Same host-allowlist / configured-header policy the synchronous XHR
+    // bridge (ducknng_wasm_http_fetch.c) enforces, so async fetches cannot
+    // bypass a host's browser HTTP config.
+    function hostMatchesAllowlist(targetUrl, allowHosts) {
+        var host = "";
+        var allow = allowHosts;
+        if (!allow) return false;
+        if (typeof allow === "string") allow = allow.split(",");
+        try { host = new URL(targetUrl).hostname.toLowerCase(); } catch (e) { return false; }
+        if (!Array.isArray(allow)) return false;
+        for (var i = 0; i < allow.length; i++) {
+            var raw = allow[i];
+            if (raw === null || raw === undefined) continue;
+            var rule = String(raw).trim().toLowerCase();
+            if (!rule) continue;
+            if (rule.charAt(0) === ".") {
+                if (host.length > rule.length && host.endsWith(rule)) return true;
+            } else if (host === rule) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (cfg && cfg.enforceHostAllowlist === true && !hostMatchesAllowlist(url, cfg.allowHosts)) {
+        op.state = 2;
+        op.error = "ducknng: browser HTTP host allowlist denied the request";
+        return id;
+    }
+
     var headers = [];
     if (headersJson) {
         try {
@@ -43,8 +74,19 @@ EM_JS(int, ducknng_js_fetch_launch, (const char *url_ptr, const char *method_ptr
             return id;
         }
     }
+    if (cfg && cfg.headers && hostMatchesAllowlist(url, cfg.allowHosts)) {
+        var isHttps = url.toLowerCase().startsWith("https://");
+        var allowInsecureAuth = !!(cfg.allowInsecureAuth);
+        for (var keyName in cfg.headers) {
+            if (!Object.prototype.hasOwnProperty.call(cfg.headers, keyName)) continue;
+            if (cfg.headers[keyName] === null || cfg.headers[keyName] === undefined) continue;
+            if (!allowInsecureAuth && keyName.toLowerCase() === "authorization" && !isHttps) continue;
+            headers.push([String(keyName), String(cfg.headers[keyName])]);
+        }
+    }
+    var withCreds = !!(cfg && cfg.withCredentials === true);
     var init = { method: method || "GET", headers: headers,
-        signal: op.ctrl.signal, credentials: "same-origin" };
+        signal: op.ctrl.signal, credentials: withCreds ? "include" : "same-origin" };
     if (body_len > 0) init.body = HEAPU8.slice(body_ptr, body_ptr + body_len);
     if (timeout_ms > 0) {
         op.timer = setTimeout(function() { op.timedOut = true; op.ctrl.abort(); }, timeout_ms);
@@ -181,9 +223,9 @@ int ducknng_wasm_fetch_pump(struct ducknng_client_aio *slot) {
     body = body_len > 0 ? (uint8_t *)duckdb_malloc((size_t)body_len) : NULL;
     error_text = (char *)duckdb_malloc((size_t)error_len + 1);
     if (!headers_block || (body_len > 0 && !body) || !error_text) {
-        if (headers_block) duckdb_free(headers_block);
-        if (body) duckdb_free(body);
-        if (error_text) duckdb_free(error_text);
+        if (headers_block) { duckdb_free(headers_block); headers_block = NULL; }
+        if (body) { duckdb_free(body); body = NULL; }
+        if (error_text) { duckdb_free(error_text); error_text = NULL; }
         ducknng_wasm_fetch_forget(slot->wasm_op_id);
         ducknng_wasm_fetch_pump_fail(slot,
             ducknng_strdup("ducknng: out of memory copying browser fetch result"), 0);

@@ -89,7 +89,12 @@ jobs:
           # wasm_threads build below can recreate it as the runner user.
           sudo rm -rf .duckdb_wasm_docker_work
 
-      - name: Browser load gate on wasm_eh artifact
+      - name: Browser conformance gate on wasm_eh artifact
+        # Capability-gated: reads ducknng_transport_capabilities() and runs
+        # every probe whose capability the wasm_eh backend claims supported,
+        # skipping unsupported ones. Replaces the hand-maintained per-target
+        # probe list; a broken artifact or a claim/behavior drift fails here
+        # before anything is packaged or published.
         run: |
           set -euo pipefail
           cd test/browser
@@ -97,11 +102,11 @@ jobs:
           npx playwright install --with-deps chromium
           ok=0
           for attempt in 1 2 3; do
-            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-eh-probe-artifacts/site" --probes=load; then
+            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-eh-probe-artifacts/site" --probes=conformance; then
               ok=1
               break
             fi
-            echo "load gate attempt ${attempt} failed; retrying"
+            echo "conformance gate attempt ${attempt} failed; retrying"
             sleep 5
           done
           [ "$ok" = "1" ]

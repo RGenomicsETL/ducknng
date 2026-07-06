@@ -751,6 +751,7 @@ FROM ducknng_list_servers();`,
       runSmokeTests: async () => await runSmokeTests(),
       isSetupDone: () => setupDone,
       runtimeConfig: () => runtimeConfig,
+      query: async (sql, timeoutMs = 0) => await runSQL(sql, timeoutMs),
     };
 
     async function runShellSQL() {
