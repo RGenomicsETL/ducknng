@@ -211,7 +211,14 @@ ducknng_bench_upload_worker <- function(writer_mode, worker_id, url, rows, repet
   target_table <- sprintf("dst_w%d", as.integer(worker_id))
   remote_target <- sprintf("remote.%s", target_table)
   source_sql <- ducknng_bench_upload_row_sql(rows, worker_id, seed)
-  expected <- ducknng_bench_upload_expected_checksum(rows, worker_id, seed)
+  # pure_bytes lands no rows and skips the correctness gate, so don't pay the
+  # O(rows) expected-checksum construction (it can dominate/exhaust memory at
+  # large DUCKNNG_UPLOAD_ROWS) for that arm.
+  expected <- if (identical(writer_mode, "pure_bytes")) {
+    NULL
+  } else {
+    ducknng_bench_upload_expected_checksum(rows, worker_id, seed)
+  }
 
   run_rpc_exec <- function(sql) {
     DBI::dbGetQuery(con, sprintf(
@@ -310,33 +317,46 @@ ducknng_bench_upload_worker <- function(writer_mode, worker_id, url, rows, repet
       # O(1) header check and the server replies with a tiny "invalid RPC
       # envelope" error -- the full pure_bytes_target_size bytes still have to
       # cross the wire client->server first, which is exactly what is timed.
-      # Build the payload OUTSIDE the timed block so only the raw ducknng request
-      # path (client->server transport) is measured, not R payload synthesis.
-      payload_raw <- rep_len(as.raw(0:255), as.integer(pure_bytes_target_size))
+      # Ship the target byte total as several capped raw requests (each ~4 MiB,
+      # matching quack_upload's per-append frame target) instead of one giant
+      # request: this stays under the server's per-message receive limit, scales
+      # to any dataset, and is a fair multi-frame comparison to quack_upload.
+      # Payloads are prebuilt and replies validated OUTSIDE the timed block, so
+      # only the client->server transport is measured.
+      pb_cap <- 4L * 1024L * 1024L
+      pb_total <- as.integer(pure_bytes_target_size)
+      pb_sizes <- rep(pb_cap, pb_total %/% pb_cap)
+      if (pb_total %% pb_cap > 0L) pb_sizes <- c(pb_sizes, pb_total %% pb_cap)
+      pb_full <- rep_len(as.raw(0:255), pb_cap)
+      pb_payloads <- lapply(pb_sizes, function(s) if (s == pb_cap) pb_full else rep_len(as.raw(0:255), s))
+      pb_resps <- vector("list", length(pb_payloads))
       elapsed <- system.time({
-        raw_resp <- DBI::dbGetQuery(
-          con,
-          "SELECT ducknng_request_raw(?::VARCHAR, ?::BLOB, ?::INTEGER, ?::UBIGINT) AS resp",
-          params = list(url, list(payload_raw), 60000L, 0)
-        )
+        for (pk in seq_along(pb_payloads)) {
+          pb_resps[[pk]] <- DBI::dbGetQuery(
+            con,
+            "SELECT ducknng_request_raw(?::VARCHAR, ?::BLOB, ?::INTEGER, ?::UBIGINT) AS resp",
+            params = list(url, list(pb_payloads[[pk]]), 60000L, 0)
+          )$resp[[1]]
+        }
       })[["elapsed"]]
       payload_bytes <- pure_bytes_target_size
-      # No correctness gate (no rows land), but confirm the full payload actually
-      # reached the server and was rejected at frame decode ("invalid RPC
+      # No correctness gate (no rows land), but confirm each request's full bytes
+      # reached the server and were rejected at frame decode ("invalid RPC
       # envelope"), so a transport failure, timeout, or recv-limit rejection is
       # NOT silently counted as pure-bytes throughput (ducknng_request_raw
       # returns a BLOB rather than throwing on such errors).
-      decoded <- DBI::dbGetQuery(
-        con,
-        "SELECT type_name, error FROM ducknng_decode_frame(?::BLOB)",
-        params = list(list(raw_resp$resp[[1]]))
-      )
-      if (!isTRUE(grepl("invalid RPC envelope", decoded$error[[1]], fixed = TRUE))) {
-        stop(sprintf(
-          "pure_bytes send did not get the expected server reject writer_mode=%s worker_id=%d iter=%d size=%.0f: type=%s error=%s",
-          writer_mode, worker_id, iter, pure_bytes_target_size,
-          decoded$type_name[[1]], decoded$error[[1]]
-        ))
+      for (pb_rb in pb_resps) {
+        decoded <- DBI::dbGetQuery(
+          con,
+          "SELECT error FROM ducknng_decode_frame(?::BLOB)",
+          params = list(list(pb_rb))
+        )
+        if (!isTRUE(grepl("invalid RPC envelope", decoded$error[[1]], fixed = TRUE))) {
+          stop(sprintf(
+            "pure_bytes send did not get the expected server reject writer_mode=%s worker_id=%d iter=%d: error=%s",
+            writer_mode, worker_id, iter, decoded$error[[1]]
+          ))
+        }
       }
     } else {
       stop("unknown writer_mode: ", writer_mode)
