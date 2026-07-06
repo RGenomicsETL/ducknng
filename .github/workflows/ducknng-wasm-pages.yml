@@ -77,6 +77,27 @@ jobs:
           DUCKNNG_WASM_EXTENSION_RELEASE_URL: ${{ steps.names.outputs.extension_release_url }}
         run: scripts/start_duckdb_wasm_local_test.sh
 
+      - name: Browser load probe on built artifact
+        # A __multi3 dynamic-link mismatch once shipped a demo artifact that
+        # failed at LOAD with no CI signal. Gate publishing on the extension
+        # actually loading in headless Chromium. wasm_threads LOAD is known to
+        # be resource-sensitive in repeated headless runs, so allow retries.
+        run: |
+          set -euo pipefail
+          cd test/browser
+          npm ci
+          npx playwright install --with-deps chromium
+          ok=0
+          for attempt in 1 2 3; do
+            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-local-artifacts/site" --probes=load; then
+              ok=1
+              break
+            fi
+            echo "load probe attempt ${attempt} failed; retrying"
+            sleep 5
+          done
+          [ "$ok" = "1" ]
+
       - name: Package release artifacts
         run: |
           set -euo pipefail
