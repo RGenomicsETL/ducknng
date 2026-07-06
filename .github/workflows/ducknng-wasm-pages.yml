@@ -85,6 +85,9 @@ jobs:
           set -euo pipefail
           scripts/start_duckdb_wasm_local_test.sh
           mv .duckdb-wasm-local-artifacts .duckdb-wasm-eh-probe-artifacts
+          # The container writes the work tree as root; reset it so the
+          # wasm_threads build below can recreate it as the runner user.
+          sudo rm -rf .duckdb_wasm_docker_work
 
       - name: Browser load gate on wasm_eh artifact
         run: |
