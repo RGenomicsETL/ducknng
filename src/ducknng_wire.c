@@ -99,3 +99,27 @@ nng_msg *ducknng_error_msg(const char *name, int32_t code, const char *message) 
     return ducknng_build_reply(DUCKNNG_RPC_ERROR, name, 0,
         message ? message : "ducknng: unspecified error", NULL, 0);
 }
+
+int ducknng_upload_append_parse_prefix(const uint8_t *payload, size_t payload_len,
+    uint64_t *out_session_id, const uint8_t **out_token, size_t *out_token_len,
+    size_t *out_quack_offset) {
+    uint16_t token_len;
+    size_t token_off;
+    if (out_session_id) *out_session_id = 0;
+    if (out_token) *out_token = NULL;
+    if (out_token_len) *out_token_len = 0;
+    if (out_quack_offset) *out_quack_offset = 0;
+    /* Fixed header: 8-byte session id + 2-byte token length. */
+    if (!payload || payload_len < 10u) return -1;
+    token_len = ducknng_le16_read(payload + 8);
+    if (token_len == 0 || token_len > DUCKNNG_UPLOAD_TOKEN_MAX) return -1;
+    token_off = 10u;
+    /* token_off + token_len cannot overflow: token_off is 10 and token_len
+     * is bounded by DUCKNNG_UPLOAD_TOKEN_MAX, both far below SIZE_MAX. */
+    if (token_off + (size_t)token_len > payload_len) return -1;
+    if (out_session_id) *out_session_id = ducknng_le64_read(payload);
+    if (out_token) *out_token = payload + token_off;
+    if (out_token_len) *out_token_len = (size_t)token_len;
+    if (out_quack_offset) *out_quack_offset = token_off + (size_t)token_len;
+    return 0;
+}

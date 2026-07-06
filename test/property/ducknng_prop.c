@@ -824,10 +824,70 @@ prop_quack_parse_schema_random_payloads(struct theft *t, void *arg1)
     return result;
 }
 
+/* The upload-append frame prefix is parsed from attacker-supplied bytes on the
+ * server. Random bytes must never crash, and on success the reported token
+ * slice and quack offset must lie within the buffer, be internally
+ * consistent, and round-trip against the fixed layout. */
+static enum theft_trial_res
+prop_upload_prefix_random_bytes(struct theft *t, void *arg1)
+{
+    const struct prop_bytes *bytes = (const struct prop_bytes *)arg1;
+    uint64_t session_id = 0;
+    const uint8_t *token = NULL;
+    size_t token_len = 0;
+    size_t quack_off = 0;
+    int rc;
+
+    (void)t;
+    rc = ducknng_upload_append_parse_prefix(bytes->data, bytes->len,
+        &session_id, &token, &token_len, &quack_off);
+    if (rc != 0) return THEFT_TRIAL_PASS; /* rejected cleanly */
+    /* On success every reported slice must be inside the buffer. */
+    if (token_len == 0 || token_len > DUCKNNG_UPLOAD_TOKEN_MAX) return THEFT_TRIAL_FAIL;
+    if (!token) return THEFT_TRIAL_FAIL;
+    if (token != bytes->data + 10) return THEFT_TRIAL_FAIL;
+    if ((size_t)(token - bytes->data) + token_len != quack_off) return THEFT_TRIAL_FAIL;
+    if (quack_off > bytes->len) return THEFT_TRIAL_FAIL;
+    return THEFT_TRIAL_PASS;
+}
+
 TEST wire_rejects_or_decodes_random_bytes(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
         prop_run_one("wire random bytes", prop_wire_random_bytes, &prop_random_bytes_info));
+    PASS();
+}
+
+TEST upload_prefix_parses_valid_and_rejects_short(void)
+{
+    /* Valid: session_id=0x0102030405060708, token_len=3 "abc", then 2 quack bytes. */
+    uint8_t buf[15] = {8,7,6,5,4,3,2,1, 3,0, 'a','b','c', 0xAA,0xBB};
+    uint64_t sid = 0;
+    const uint8_t *tok = NULL;
+    size_t tok_len = 0, quack_off = 0;
+    ASSERT_EQ(0, ducknng_upload_append_parse_prefix(buf, sizeof(buf), &sid, &tok, &tok_len, &quack_off));
+    ASSERT_EQ((uint64_t)0x0102030405060708ULL, sid);
+    ASSERT_EQ((size_t)3, tok_len);
+    ASSERT_EQ(buf + 10, tok);
+    ASSERT_EQ((size_t)13, quack_off);
+    /* An empty quack remainder is allowed. */
+    ASSERT_EQ(0, ducknng_upload_append_parse_prefix(buf, 13, &sid, &tok, &tok_len, &quack_off));
+    ASSERT_EQ((size_t)13, quack_off);
+    /* Too short for the fixed header, zero token length, and token overrunning
+     * the buffer all reject. */
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(buf, 9, &sid, &tok, &tok_len, &quack_off));
+    { uint8_t z[12] = {0,0,0,0,0,0,0,0, 0,0, 1,2};
+      ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(z, sizeof(z), &sid, &tok, &tok_len, &quack_off)); }
+    { uint8_t over[12] = {0,0,0,0,0,0,0,0, 5,0, 1,2};
+      ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(over, sizeof(over), &sid, &tok, &tok_len, &quack_off)); }
+    PASS();
+}
+
+TEST upload_prefix_rejects_random_bytes(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("upload append prefix random bytes", prop_upload_prefix_random_bytes,
+            &prop_random_bytes_info));
     PASS();
 }
 
@@ -1227,6 +1287,8 @@ SUITE(wire_properties)
 {
     RUN_TEST(wire_rejects_or_decodes_random_bytes);
     RUN_TEST(wire_decodes_generated_valid_frames);
+    RUN_TEST(upload_prefix_parses_valid_and_rejects_short);
+    RUN_TEST(upload_prefix_rejects_random_bytes);
 }
 
 SUITE(transport_properties)
