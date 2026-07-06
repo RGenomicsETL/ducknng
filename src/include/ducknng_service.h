@@ -363,6 +363,15 @@ int ducknng_service_authorize_request(ducknng_service *svc, const ducknng_author
     ducknng_authorizer_decision *decision, char **errmsg);
 nng_msg *ducknng_handle_decoded_request(ducknng_service *svc, const ducknng_frame *frame,
     const char *caller_identity, const ducknng_authorizer_decision *decision);
+/* Decode + admit + account + authorize + dispatch one framed request payload.
+ * Shared by the HTTP POST and WebSocket frame carriers (issue #11). Returns the
+ * reply message (caller frees) on success, or NULL with *out_status (HTTP-style)
+ * and *out_error (duckdb_malloc, caller frees) set on rejection/failure. */
+nng_msg *ducknng_service_authorize_and_dispatch_frame(ducknng_service *svc,
+    const uint8_t *body, size_t body_len, const char *caller_identity,
+    const nng_sockaddr *remote_addr, ducknng_transport_scheme scheme,
+    const char *http_method, const char *http_path, const char *content_type,
+    uint16_t *out_status, char **out_error);
 int ducknng_service_set_http_route_auth(ducknng_service *svc, const char *method,
     const char *path, int require_identity, const char *allow_identities_json, char **errmsg);
 int ducknng_service_register_http_worker(ducknng_service *svc, const char *name,

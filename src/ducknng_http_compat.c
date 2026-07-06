@@ -5,6 +5,7 @@
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include "ducknng_wasm_http_fetch.h"
+#include "ducknng_ws_frame.h"
 #include <ctype.h>
 #include <nng/supplemental/http/http.h>
 #include "../third_party/nng/src/core/defs.h"
@@ -883,6 +884,10 @@ typedef struct ducknng_http_server_state {
     nng_http_handler *rpc_handler;
     nng_http_handler *route_handler;
     char *path;
+    /* Browser-facing ducknng-frame-over-WebSocket endpoint sharing this server
+     * (issue #11); NULL when the endpoint did not start. */
+    ducknng_ws_frame_endpoint *ws_endpoint;
+    char *ws_url;
     ducknng_mutex mu;
     ducknng_cond cv;
     int stopping;
@@ -1515,7 +1520,6 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
     char *caller_identity = NULL;
     nng_sockaddr remote_addr;
     int have_remote_addr = 0;
-    ducknng_frame frame;
     int rv = 0;
     int stopping = 0;
     int service_stopping = 0;
@@ -1554,72 +1558,26 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
         return;
     }
     nng_http_req_get_data(req, &body, &body_len);
-    if (ducknng_decode_frame_bytes((const uint8_t *)body, body_len, &frame) != 0) {
-        rv = ducknng_http_alloc_text_response(&res, 400, "ducknng: invalid frame envelope");
-        ducknng_http_finish_response(aio, res, rv);
-        return;
-    }
     caller_identity = ducknng_http_conn_verified_peer_identity(conn);
     have_remote_addr = ducknng_http_conn_remote_addr(conn, &remote_addr) == 0;
     {
-        ducknng_authorizer_context auth_ctx;
-        ducknng_authorizer_decision decision;
-        char *admission_err = NULL;
-        char *limit_err = NULL;
-        memset(&auth_ctx, 0, sizeof(auth_ctx));
-        auth_ctx.svc = state->svc;
-        auth_ctx.frame = &frame;
-        auth_ctx.phase = "rpc_request";
-        auth_ctx.transport_family = DUCKNNG_TRANSPORT_FAMILY_HTTP;
-        auth_ctx.scheme = state->svc && state->svc->tls_enabled ? DUCKNNG_TRANSPORT_SCHEME_HTTPS : DUCKNNG_TRANSPORT_SCHEME_HTTP;
-        auth_ctx.caller_identity = caller_identity;
-        auth_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
-        auth_ctx.http_method = "POST";
-        auth_ctx.http_path = state->path;
-        auth_ctx.content_type = content_type;
-        auth_ctx.body_bytes = (uint64_t)body_len;
-        ducknng_authorizer_decision_init(&decision);
-        if (ducknng_service_network_admission_check(state->svc, caller_identity,
-                have_remote_addr ? &remote_addr : NULL, &admission_err) != 0) {
-            rv = ducknng_http_alloc_text_response(&res, 403,
-                admission_err ? admission_err : "ducknng: peer is not admitted");
-            if (admission_err) duckdb_free(admission_err);
-            ducknng_authorizer_decision_reset(&decision);
-            if (caller_identity) duckdb_free(caller_identity);
-            ducknng_http_finish_response(aio, res, rv);
-            return;
-        }
-        if (ducknng_service_begin_request(state->svc, caller_identity, &limit_err) != 0) {
-            rv = ducknng_http_alloc_text_response(&res, 503,
-                limit_err ? limit_err : "ducknng: max inflight requests exceeded");
-            if (limit_err) duckdb_free(limit_err);
-            ducknng_authorizer_decision_reset(&decision);
-            if (caller_identity) duckdb_free(caller_identity);
-            ducknng_http_finish_response(aio, res, rv);
-            return;
-        }
-        if (ducknng_service_authorize_request(state->svc, &auth_ctx, &decision, NULL) != 0) {
-            uint16_t status = (decision.http_status >= 100 && decision.http_status <= 599) ?
-                (uint16_t)decision.http_status : 403;
+        uint16_t status = 500;
+        char *err_text = NULL;
+        reply_msg = ducknng_service_authorize_and_dispatch_frame(state->svc,
+            (const uint8_t *)body, body_len, caller_identity,
+            have_remote_addr ? &remote_addr : NULL,
+            state->svc->tls_enabled ? DUCKNNG_TRANSPORT_SCHEME_HTTPS : DUCKNNG_TRANSPORT_SCHEME_HTTP,
+            "POST", state->path, content_type, &status, &err_text);
+        if (!reply_msg) {
             rv = ducknng_http_alloc_text_response(&res, status,
-                decision.reason ? decision.reason : "ducknng: request is not authorized");
-            ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc, caller_identity, 0);
+                err_text ? err_text : "ducknng: failed to dispatch request");
+            if (err_text) duckdb_free(err_text);
             if (caller_identity) duckdb_free(caller_identity);
             ducknng_http_finish_response(aio, res, rv);
             return;
         }
-        reply_msg = ducknng_handle_decoded_request(state->svc, &frame, caller_identity, &decision);
-        ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(state->svc, caller_identity,
-            reply_msg ? nng_msg_len(reply_msg) : 0);
     }
     if (caller_identity) duckdb_free(caller_identity);
-    if (!reply_msg) {
-        rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to dispatch request");
-        ducknng_http_finish_response(aio, res, rv);
-        return;
-    }
     rv = ducknng_http_alloc_frame_response(&res, nng_msg_body(reply_msg), nng_msg_len(reply_msg));
     nng_msg_free(reply_msg);
     ducknng_http_finish_response(aio, res, rv);
@@ -2002,6 +1960,30 @@ void ducknng_http_frame_client_close(ducknng_http_frame_client *client) {
     duckdb_free(client);
 }
 
+/* Derive the WebSocket frame endpoint URL from the (resolved) HTTP mount URL:
+ * swap http->ws / https->wss and append a "/ws" path segment so it never
+ * collides with the RPC POST handler's exact path on the shared server. Caller
+ * frees. Returns NULL on parse/allocation failure. */
+static char *ducknng_http_frame_ws_url(const char *base_url, int tls) {
+    nng_url *up = NULL;
+    char *out = NULL;
+    const char *scheme = tls ? "wss" : "ws";
+    if (!base_url || nng_url_parse(&up, base_url) != 0 || !up) {
+        if (up) nng_url_free(up);
+        return NULL;
+    }
+    if (up->u_hostname && up->u_port && up->u_port[0]) {
+        const char *path = (up->u_path && up->u_path[0]) ? up->u_path : "/";
+        size_t plen = strlen(path);
+        const char *sep = (plen > 0 && path[plen - 1] == '/') ? "ws" : "/ws";
+        size_t need = strlen(scheme) + strlen(up->u_hostname) + strlen(up->u_port) + plen + 8;
+        out = (char *)duckdb_malloc(need);
+        if (out) snprintf(out, need, "%s://%s:%s%s%s", scheme, up->u_hostname, up->u_port, path, sep);
+    }
+    nng_url_free(up);
+    return out;
+}
+
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
     char **out_resolved_url, char **errmsg) {
     ducknng_http_server_state *state = NULL;
@@ -2111,7 +2093,34 @@ int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_s
     }
     rv = nng_http_server_start(state->server);
     if (rv != 0) goto fail;
-    if (out_resolved_url) *out_resolved_url = ducknng_http_server_resolve_url(state->server, svc->listen_url);
+    {
+        /* Bring up the browser-facing ducknng-frame-over-WebSocket endpoint on
+         * the same (now-bound) server, at a "/ws" sibling of the RPC path. */
+        char *resolved = ducknng_http_server_resolve_url(state->server, svc->listen_url);
+        const char *base = resolved ? resolved : svc->listen_url;
+        int tls = ducknng_http_tls_requested(&svc->tls_opts);
+        char *ws_url = ducknng_http_frame_ws_url(base, tls);
+        char *ws_err = NULL;
+        if (!ws_url) {
+            if (resolved) duckdb_free(resolved);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building WebSocket endpoint URL");
+            rv = NNG_ENOMEM;
+            goto fail;
+        }
+        if (ducknng_ws_frame_endpoint_start(svc, ws_url,
+                tls ? DUCKNNG_TRANSPORT_SCHEME_WSS : DUCKNNG_TRANSPORT_SCHEME_WS,
+                svc->recv_max_bytes, &state->ws_endpoint, &state->ws_url, &ws_err) != 0) {
+            duckdb_free(ws_url);
+            if (resolved) duckdb_free(resolved);
+            if (errmsg) *errmsg = ws_err ? ws_err : ducknng_strdup("ducknng: failed to start WebSocket endpoint");
+            else if (ws_err) duckdb_free(ws_err);
+            rv = NNG_EINTERNAL;
+            goto fail;
+        }
+        duckdb_free(ws_url);
+        if (out_resolved_url) *out_resolved_url = resolved;
+        else if (resolved) duckdb_free(resolved);
+    }
     if (out_state) *out_state = state;
     nng_url_free(up);
     return 0;
@@ -2148,6 +2157,8 @@ fail:
             nng_http_server_stop(state->server);
             nng_http_server_release(state->server);
         }
+        if (state->ws_endpoint) ducknng_ws_frame_endpoint_stop(state->ws_endpoint);
+        if (state->ws_url) duckdb_free(state->ws_url);
         if (state->cv_initialized) ducknng_cond_destroy(&state->cv);
         if (state->mu_initialized) ducknng_mutex_destroy(&state->mu);
         if (state->path) duckdb_free(state->path);
@@ -2164,6 +2175,16 @@ void ducknng_http_server_stop(ducknng_http_server_state *state) {
         ducknng_mutex_lock(&state->mu);
         state->stopping = 1;
         ducknng_mutex_unlock(&state->mu);
+    }
+    /* Tear down the WebSocket endpoint (its own listener + connection threads)
+     * before the shared HTTP server is stopped and released. */
+    if (state->ws_endpoint) {
+        ducknng_ws_frame_endpoint_stop(state->ws_endpoint);
+        state->ws_endpoint = NULL;
+    }
+    if (state->ws_url) {
+        duckdb_free(state->ws_url);
+        state->ws_url = NULL;
     }
     if (state->server && state->rpc_handler) (void)nng_http_server_del_handler(state->server, state->rpc_handler);
     if (state->server && state->route_handler) (void)nng_http_server_del_handler(state->server, state->route_handler);

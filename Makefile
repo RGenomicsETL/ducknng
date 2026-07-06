@@ -1,5 +1,5 @@
 .PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
-.PHONY: rpc_bench rpc_bulk_compare rpc_upload_compare http_smoke subscriber_gateway_rdm
+.PHONY: rpc_bench rpc_bulk_compare rpc_upload_compare http_smoke ws_smoke subscriber_gateway_rdm
 .PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean
 
 rpc_smoke: check_configure
@@ -7,6 +7,9 @@ rpc_smoke: check_configure
 
 http_smoke: release
 	python3 test/http_smoke.py build/release/ducknng.duckdb_extension
+
+ws_smoke: release
+	python3 test/ws_smoke.py build/release/ducknng.duckdb_extension
 
 subscriber_gateway_rdm: release
 	R -e "rmarkdown::render('demo/subscriber_gateway.Rmd')"

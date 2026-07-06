@@ -1727,6 +1727,92 @@ nng_msg *ducknng_handle_decoded_request(ducknng_service *svc, const ducknng_fram
     return ducknng_dispatch_request(svc, frame, caller_identity, decision);
 }
 
+/*
+ * Decode one framed request payload and run it through the full server-side
+ * gate: network admission, inflight accounting, authorization, and dispatch.
+ * Shared by the HTTP POST frame handler and the WebSocket frame handler so peer
+ * identity, authorizer principals, subject-restricted profiles, request limits,
+ * and session binding are byte-identical across both carriers (issue #11).
+ *
+ * On success returns the reply message (caller frees). On any pre-dispatch
+ * rejection or a dispatch failure, returns NULL and sets *out_status to an
+ * HTTP-style status and *out_error to a duckdb_malloc'd message (caller frees;
+ * may be NULL). transport_family and the request phase match the HTTP handler;
+ * scheme/method/path/content_type identify the specific carrier for policy.
+ */
+nng_msg *ducknng_service_authorize_and_dispatch_frame(ducknng_service *svc,
+    const uint8_t *body, size_t body_len, const char *caller_identity,
+    const nng_sockaddr *remote_addr, ducknng_transport_scheme scheme,
+    const char *http_method, const char *http_path, const char *content_type,
+    uint16_t *out_status, char **out_error) {
+    ducknng_frame frame;
+    ducknng_authorizer_context auth_ctx;
+    ducknng_authorizer_decision decision;
+    char *admission_err = NULL;
+    char *limit_err = NULL;
+    nng_msg *reply_msg = NULL;
+
+    if (out_status) *out_status = 500;
+    if (out_error) *out_error = NULL;
+    if (!svc) {
+        if (out_error) *out_error = ducknng_strdup("ducknng: missing HTTP server state");
+        return NULL;
+    }
+    if (ducknng_decode_frame_bytes(body, body_len, &frame) != 0) {
+        if (out_status) *out_status = 400;
+        if (out_error) *out_error = ducknng_strdup("ducknng: invalid frame envelope");
+        return NULL;
+    }
+    memset(&auth_ctx, 0, sizeof(auth_ctx));
+    auth_ctx.svc = svc;
+    auth_ctx.frame = &frame;
+    auth_ctx.phase = "rpc_request";
+    auth_ctx.transport_family = DUCKNNG_TRANSPORT_FAMILY_HTTP;
+    auth_ctx.scheme = scheme;
+    auth_ctx.caller_identity = caller_identity;
+    auth_ctx.remote_addr = remote_addr;
+    auth_ctx.http_method = http_method;
+    auth_ctx.http_path = http_path;
+    auth_ctx.content_type = content_type;
+    auth_ctx.body_bytes = (uint64_t)body_len;
+    ducknng_authorizer_decision_init(&decision);
+    if (ducknng_service_network_admission_check(svc, caller_identity, remote_addr, &admission_err) != 0) {
+        if (out_status) *out_status = 403;
+        if (out_error) *out_error = admission_err ? admission_err :
+            ducknng_strdup("ducknng: peer is not admitted");
+        else if (admission_err) duckdb_free(admission_err);
+        ducknng_authorizer_decision_reset(&decision);
+        return NULL;
+    }
+    if (ducknng_service_begin_request(svc, caller_identity, &limit_err) != 0) {
+        if (out_status) *out_status = 503;
+        if (out_error) *out_error = limit_err ? limit_err :
+            ducknng_strdup("ducknng: max inflight requests exceeded");
+        else if (limit_err) duckdb_free(limit_err);
+        ducknng_authorizer_decision_reset(&decision);
+        return NULL;
+    }
+    if (ducknng_service_authorize_request(svc, &auth_ctx, &decision, NULL) != 0) {
+        if (out_status) *out_status = (decision.http_status >= 100 && decision.http_status <= 599) ?
+            (uint16_t)decision.http_status : 403;
+        if (out_error) *out_error = ducknng_strdup(decision.reason ? decision.reason :
+            "ducknng: request is not authorized");
+        ducknng_authorizer_decision_reset(&decision);
+        ducknng_service_end_request(svc, caller_identity, 0);
+        return NULL;
+    }
+    reply_msg = ducknng_handle_decoded_request(svc, &frame, caller_identity, &decision);
+    ducknng_authorizer_decision_reset(&decision);
+    ducknng_service_end_request(svc, caller_identity, reply_msg ? nng_msg_len(reply_msg) : 0);
+    if (!reply_msg) {
+        if (out_status) *out_status = 500;
+        if (out_error) *out_error = ducknng_strdup("ducknng: failed to dispatch request");
+        return NULL;
+    }
+    if (out_status) *out_status = 200;
+    return reply_msg;
+}
+
 nng_msg *ducknng_handle_request_with_identity(ducknng_service *svc, nng_msg *req,
     const char *caller_identity) {
     ducknng_frame frame;
