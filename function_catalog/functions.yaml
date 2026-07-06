@@ -2050,6 +2050,25 @@
       ]
     },
     {
+      "name": "ducknng_upload_table",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_upload_table(url, source_query, target_table[, tls_config_id])",
+      "returns": "TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded.",
+      "notes": [
+        "Requires the remote server to have registered the upload methods with ducknng_register_upload_methods().",
+        "source_query runs on the runtime's pooled connection, so it sees committed/persistent data, not the caller's temp/uncommitted state (v1).",
+        "The batch column names, order, and types must match the target table exactly, since the server appends by ordinal; a mismatch is rejected before any row is appended.",
+        "The client drives upload_open then upload_append per chunk then upload_commit; on any error it sends upload_abort so the server rolls the transaction back and a partial upload never persists."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_upload_table('ipc:///tmp/ducknng_sql0.ipc', 'SELECT i::INTEGER AS i FROM range(1000) t(i)', 'dst');"
+      ]
+    },
+    {
       "name": "ducknng_open_query",
       "kind": "table",
       "category": "RPC Session",

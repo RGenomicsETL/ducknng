@@ -1878,6 +1878,54 @@ int ducknng_result_next_chunks_to_quack_payload(duckdb_result result,
     return rc;
 }
 
+/* Materialized-result variant of the above: encodes up to max_chunks starting at
+ * *inout_chunk_index using the non-deprecated duckdb_result_get_chunk /
+ * duckdb_result_chunk_count, advancing the index. The streaming variant relies on
+ * duckdb_stream_fetch_chunk, which yields nothing for a materialized duckdb_query
+ * result; the upload client runs source_query with duckdb_query and iterates here.
+ * Sets *has_chunk when a batch was produced; returns 0 with *has_chunk=0 once the
+ * result is exhausted. */
+int ducknng_result_materialized_chunks_to_quack_payload(duckdb_result result,
+    idx_t *inout_chunk_index, uint64_t max_chunks, int include_schema,
+    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
+    duckdb_data_chunk *chunks = NULL;
+    idx_t chunk_count = 0;
+    idx_t total = duckdb_result_chunk_count(result);
+    uint64_t i;
+    int rc;
+    if (has_chunk) *has_chunk = 0;
+    if (!inout_chunk_index) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack chunk index");
+        return -1;
+    }
+    if (max_chunks == 0) max_chunks = 1;
+    if (*inout_chunk_index >= total) return 0; /* exhausted */
+    chunks = (duckdb_data_chunk *)duckdb_malloc(sizeof(*chunks) * (size_t)max_chunks);
+    if (!chunks) {
+        ducknng_quack_set_error(errmsg, "ducknng: out of memory collecting quack chunks");
+        return -1;
+    }
+    memset(chunks, 0, sizeof(*chunks) * (size_t)max_chunks);
+    for (i = 0; i < max_chunks && *inout_chunk_index < total; i++) {
+        chunks[chunk_count] = duckdb_result_get_chunk(result, *inout_chunk_index);
+        (*inout_chunk_index)++;
+        if (!chunks[chunk_count]) continue;
+        chunk_count++;
+    }
+    if (chunk_count == 0) {
+        duckdb_free(chunks);
+        return 0;
+    }
+    rc = ducknng_quack_encode_result_payload(result, chunks, chunk_count, include_schema,
+        out_bytes, out_len, errmsg);
+    for (i = 0; i < (uint64_t)chunk_count; i++) {
+        if (chunks[i]) duckdb_destroy_data_chunk(&chunks[i]);
+    }
+    duckdb_free(chunks);
+    if (rc == 0 && has_chunk) *has_chunk = 1;
+    return rc;
+}
+
 int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
     return ducknng_result_next_chunks_to_quack_payload(result, 1, 1,

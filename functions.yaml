@@ -177,6 +177,15 @@
       "examples": []
     },
     {
+      "name": "ducknng_upload_table",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "upload_table(url, source_query, target_table[, tls_config_id])",
+      "returns": "table",
+      "description": "Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.",
+      "examples": []
+    },
+    {
       "name": "ducknng_run_rpc",
       "kind": "table",
       "category": "Framed RPC",

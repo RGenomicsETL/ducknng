@@ -2205,6 +2205,327 @@ static int register_remote_table_named(duckdb_connection con, ducknng_sql_contex
         ducknng_query_rpc_init, ducknng_query_rpc_scan);
 }
 
+/* ---- ducknng_upload_table: client-to-server quack-batch upload lane (#9) ----
+ * Runs source_query on the runtime's pooled codec connection, then streams its
+ * result chunks to a remote table via upload_open -> upload_append* -> upload_commit,
+ * rolling the server transaction back with upload_abort on any error. It reuses
+ * the ducknng_query_rpc transport bind purely for the socket/session/roundtrip
+ * plumbing (never the query-family "close"). Returns one row: rows_uploaded and
+ * client-sent bytes_uploaded. v1: source_query runs on a fresh connection, so it
+ * sees committed/persistent data, not the caller's temp/uncommitted state. */
+typedef struct {
+    ducknng_query_rpc_bind_data transport;
+    char *source_query;
+    char *target_table;
+    uint64_t rows_uploaded;
+    uint64_t bytes_uploaded;
+} ducknng_upload_table_bind_data;
+
+typedef struct {
+    ducknng_upload_table_bind_data *bind;
+    int done; /* the upload runs once, on the first scan (never in bind: DuckDB calls bind repeatedly) */
+} ducknng_upload_table_init_data;
+
+static void destroy_upload_table_bind_data(void *ptr) {
+    ducknng_upload_table_bind_data *d = (ducknng_upload_table_bind_data *)ptr;
+    if (!d) return;
+    /* Transport teardown only -- the upload lane has no query-family close. */
+    if (d->transport.http_client) ducknng_http_frame_client_close(d->transport.http_client);
+    if (d->transport.req_sock_open) ducknng_socket_close(d->transport.req_sock);
+    if (d->transport.url) duckdb_free(d->transport.url);
+    if (d->transport.session_token) duckdb_free(d->transport.session_token);
+    if (d->source_query) duckdb_free(d->source_query);
+    if (d->target_table) duckdb_free(d->target_table);
+    duckdb_free(d);
+}
+
+static void destroy_upload_table_init_data(void *ptr) {
+    if (ptr) duckdb_free(ptr);
+}
+
+/* Build the upload_append frame body: the counted control prefix
+ * [session_id u64 LE][token_len u16 LE][token] followed by one quack batch. */
+static uint8_t *ducknng_upload_append_body(uint64_t session_id, const char *token,
+    const uint8_t *quack, size_t quack_len, size_t *out_len) {
+    size_t token_len = token ? strlen(token) : 0;
+    size_t body_len;
+    uint8_t *body;
+    size_t off = 0;
+    int i;
+    if (token_len == 0 || token_len > DUCKNNG_UPLOAD_TOKEN_MAX) return NULL;
+    body_len = 8u + 2u + token_len + quack_len;
+    body = (uint8_t *)duckdb_malloc(body_len);
+    if (!body) return NULL;
+    for (i = 0; i < 8; i++) body[off++] = (uint8_t)((session_id >> (8 * i)) & 0xffu);
+    body[off++] = (uint8_t)(token_len & 0xffu);
+    body[off++] = (uint8_t)((token_len >> 8) & 0xffu);
+    memcpy(body + off, token, token_len);
+    off += token_len;
+    if (quack_len) memcpy(body + off, quack, quack_len);
+    *out_len = body_len;
+    return body;
+}
+
+/* Send a JSON-keyed upload session control method (upload_commit / upload_abort). */
+static nng_msg *ducknng_upload_control(ducknng_query_rpc_bind_data *t, const char *method,
+    const ducknng_tls_opts *tls_opts, char **errmsg) {
+    char *json = ducknng_session_request_json(t->session_id, t->session_token, 0, 0);
+    nng_msg *resp;
+    if (!json) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload control request");
+        return NULL;
+    }
+    resp = ducknng_query_rpc_method_roundtrip(t, method, json, strlen(json), 30000, tls_opts, errmsg);
+    duckdb_free(json);
+    return resp;
+}
+
+static int ducknng_upload_table_run(ducknng_upload_table_bind_data *ub, const char *source_query,
+    char **errmsg) {
+    ducknng_query_rpc_bind_data *t = &ub->transport;
+    const ducknng_tls_opts *tls_opts = NULL;
+    duckdb_result result;
+    int have_result = 0;
+    char *open_json = NULL;
+    size_t open_json_len;
+    nng_msg *resp = NULL;
+    ducknng_frame frame;
+    char *reply_json = NULL;
+    idx_t chunk_index = 0;
+    int rc = -1;
+
+    if (ducknng_lookup_tls_opts(t->ctx, t->tls_config_id, &tls_opts, errmsg) != 0) goto done;
+
+    /* Run source_query on the runtime's pre-opened codec connection. The stable
+     * C API does not permit opening a fresh connection mid-request (the pooled /
+     * codec connections exist for exactly this). duckdb_query materializes the
+     * whole result, so the codec lock is held only for the query itself, not for
+     * the network-bound upload that follows. v1: this connection sees
+     * committed/persistent data, not the caller's temp/uncommitted state. */
+    {
+        duckdb_connection cc = ducknng_runtime_codec_connection(t->ctx->rt);
+        duckdb_state qs;
+        if (!cc) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: upload_table has no local connection");
+            goto done;
+        }
+        ducknng_runtime_codec_connection_lock(t->ctx->rt);
+        qs = duckdb_query(cc, source_query, &result);
+        ducknng_runtime_codec_connection_unlock(t->ctx->rt);
+        if (qs == DuckDBError) {
+            const char *m = duckdb_result_error(&result);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(m && m[0] ? m : "ducknng: upload_table source_query failed");
+            duckdb_destroy_result(&result);
+            goto done;
+        }
+        have_result = 1;
+    }
+
+    open_json_len = strlen(ub->target_table) + 48u;
+    open_json = (char *)duckdb_malloc(open_json_len);
+    if (!open_json) { if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory"); goto done; }
+    snprintf(open_json, open_json_len, "{\"target_table\":\"%s\",\"mode\":\"append\"}", ub->target_table);
+    resp = ducknng_query_rpc_method_roundtrip(t, "upload_open", open_json, strlen(open_json), 5000, tls_opts, errmsg);
+    if (!resp) goto done;
+    if (ducknng_decode_request(resp, &frame) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_open response envelope");
+        goto done;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: upload_open failed");
+        goto done;
+    }
+    reply_json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
+    if (!reply_json || ducknng_json_extract_u64_value(reply_json, "session_id", &t->session_id) != 0 ||
+            t->session_id == 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: upload_open reply did not include session_id");
+        goto done;
+    }
+    t->session_token = ducknng_json_extract_string_dup(reply_json, "session_token");
+    if (!t->session_token || !t->session_token[0]) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: upload_open reply did not include session_token");
+        goto done;
+    }
+    t->session_open = 1;
+    duckdb_free(reply_json); reply_json = NULL;
+    nng_msg_free(resp); resp = NULL;
+
+    for (chunk_index = 0;;) {
+        uint8_t *qbytes = NULL;
+        size_t qlen = 0;
+        int has_chunk = 0;
+        uint8_t *body;
+        size_t body_len = 0;
+        uint64_t running = 0;
+        if (ducknng_result_materialized_chunks_to_quack_payload(result, &chunk_index, 1, 1,
+                &qbytes, &qlen, &has_chunk, errmsg) != 0)
+            goto do_abort;
+        if (!has_chunk) { if (qbytes) duckdb_free(qbytes); break; }
+        body = ducknng_upload_append_body(t->session_id, t->session_token, qbytes, qlen, &body_len);
+        duckdb_free(qbytes);
+        if (!body) { if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload_append frame"); goto do_abort; }
+        resp = ducknng_query_rpc_method_roundtrip(t, "upload_append", body, body_len, 30000, tls_opts, errmsg);
+        duckdb_free(body);
+        if (!resp) goto do_abort;
+        if (ducknng_decode_request(resp, &frame) != 0) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_append response envelope");
+            goto do_abort;
+        }
+        if (frame.type == DUCKNNG_RPC_ERROR) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: upload_append failed");
+            goto do_abort;
+        }
+        reply_json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
+        if (reply_json && ducknng_json_extract_u64_value(reply_json, "rows", &running) == 0)
+            ub->rows_uploaded = running;
+        ub->bytes_uploaded += (uint64_t)qlen;
+        if (reply_json) { duckdb_free(reply_json); reply_json = NULL; }
+        nng_msg_free(resp); resp = NULL;
+    }
+
+    resp = ducknng_upload_control(t, "upload_commit", tls_opts, errmsg);
+    if (!resp) goto do_abort;
+    if (ducknng_decode_request(resp, &frame) != 0) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: invalid upload_commit response envelope");
+        goto do_abort;
+    }
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_frame_error_detail(&frame, "ducknng: upload_commit failed");
+        goto do_abort;
+    }
+    reply_json = ducknng_dup_bytes(frame.payload, (size_t)frame.payload_len);
+    {
+        uint64_t committed_rows = 0;
+        if (reply_json && ducknng_json_extract_u64_value(reply_json, "rows", &committed_rows) == 0)
+            ub->rows_uploaded = committed_rows;
+    }
+    if (reply_json) { duckdb_free(reply_json); reply_json = NULL; }
+    nng_msg_free(resp); resp = NULL;
+    t->session_open = 0; /* a successful commit closes the session server-side */
+    rc = 0;
+    goto done;
+
+do_abort:
+    /* Best-effort abort so the server rolls back partial rows; keep the original
+     * error in *errmsg (do not let the abort roundtrip overwrite it). */
+    if (t->session_open && t->session_id && t->session_token) {
+        nng_msg *ar = ducknng_upload_control(t, "upload_abort", tls_opts, NULL);
+        if (ar) nng_msg_free(ar);
+        t->session_open = 0;
+    }
+done:
+    if (resp) nng_msg_free(resp);
+    if (reply_json) duckdb_free(reply_json);
+    if (open_json) duckdb_free(open_json);
+    if (have_result) duckdb_destroy_result(&result);
+    return rc;
+}
+
+static void ducknng_upload_table_bind(duckdb_bind_info info) {
+    ducknng_upload_table_bind_data *ub;
+    duckdb_value url_val;
+    duckdb_value query_val;
+    duckdb_value target_val;
+    duckdb_value tls_val;
+    idx_t param_count;
+    duckdb_logical_type bigint;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
+    param_count = duckdb_bind_get_parameter_count(info);
+    if (param_count != 3 && param_count != 4) {
+        duckdb_bind_set_error(info, "ducknng: ducknng_upload_table(url, source_query, target_table[, tls_config_id]) requires three or four parameters");
+        return;
+    }
+    url_val = duckdb_bind_get_parameter(info, 0);
+    query_val = duckdb_bind_get_parameter(info, 1);
+    target_val = duckdb_bind_get_parameter(info, 2);
+    if (param_count == 4) tls_val = duckdb_bind_get_parameter(info, 3);
+    else memset(&tls_val, 0, sizeof(tls_val));
+    ub = (ducknng_upload_table_bind_data *)duckdb_malloc(sizeof(*ub));
+    if (!ub) {
+        duckdb_destroy_value(&url_val);
+        duckdb_destroy_value(&query_val);
+        duckdb_destroy_value(&target_val);
+        if (param_count == 4) duckdb_destroy_value(&tls_val);
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(ub, 0, sizeof(*ub));
+    ub->transport.ctx = ctx;
+    ub->transport.url = duckdb_get_varchar(url_val);
+    ub->source_query = duckdb_get_varchar(query_val);
+    ub->target_table = duckdb_get_varchar(target_val);
+    ub->transport.tls_config_id = (param_count == 4) ? (uint64_t)duckdb_get_uint64(tls_val) : 0;
+    duckdb_destroy_value(&url_val);
+    duckdb_destroy_value(&query_val);
+    duckdb_destroy_value(&target_val);
+    if (param_count == 4) duckdb_destroy_value(&tls_val);
+    if (!ub->transport.url || !ub->source_query || !ub->target_table ||
+        !ub->transport.url[0] || !ub->source_query[0] || !ub->target_table[0]) {
+        destroy_upload_table_bind_data(ub);
+        duckdb_bind_set_error(info, "ducknng: ducknng_upload_table requires non-empty url, source_query, and target_table");
+        return;
+    }
+    /* The upload is a write side effect, so it must run exactly once. DuckDB may
+     * invoke a table function's bind multiple times during planning, so the
+     * upload is deferred to the first scan (execution) rather than done here. */
+    bigint = duckdb_create_logical_type(DUCKDB_TYPE_BIGINT);
+    duckdb_bind_add_result_column(info, "rows_uploaded", bigint);
+    duckdb_bind_add_result_column(info, "bytes_uploaded", bigint);
+    duckdb_destroy_logical_type(&bigint);
+    duckdb_bind_set_bind_data(info, ub, destroy_upload_table_bind_data);
+    duckdb_bind_set_cardinality(info, 1, true);
+}
+
+static void ducknng_upload_table_init(duckdb_init_info info) {
+    ducknng_upload_table_bind_data *ub = (ducknng_upload_table_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_upload_table_init_data *init = (ducknng_upload_table_init_data *)duckdb_malloc(sizeof(*init));
+    if (!init) {
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    init->bind = ub;
+    init->done = 0;
+    duckdb_init_set_max_threads(info, 1);
+    duckdb_init_set_init_data(info, init, destroy_upload_table_init_data);
+}
+
+static void ducknng_upload_table_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_upload_table_init_data *init = (ducknng_upload_table_init_data *)duckdb_function_get_init_data(info);
+    ducknng_upload_table_bind_data *ub;
+    char *errmsg = NULL;
+    int64_t *rows_col;
+    int64_t *bytes_col;
+    if (!init || !init->bind || init->done) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    ub = init->bind;
+    init->done = 1; /* set before running so a failure cannot re-trigger the upload */
+    /* Run the upload once, here at execution time (not in the repeatedly-invoked bind). */
+    if (ducknng_upload_table_run(ub, ub->source_query, &errmsg) != 0) {
+        duckdb_function_set_error(info, errmsg ? errmsg : "ducknng: upload_table failed");
+        if (errmsg) duckdb_free(errmsg);
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    rows_col = (int64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
+    bytes_col = (int64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1));
+    rows_col[0] = (int64_t)ub->rows_uploaded;
+    bytes_col[0] = (int64_t)ub->bytes_uploaded;
+    duckdb_data_chunk_set_size(output, 1);
+}
+
+static int register_upload_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
+    duckdb_type p3[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+    duckdb_type p4[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
+    if (!ctx || !ctx->rt) return 0;
+    if (!DUCKNNG_REGISTER_TABLE(con, name, ctx, 3, p3, ducknng_upload_table_bind,
+            ducknng_upload_table_init, ducknng_upload_table_scan)) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 4, p4, ducknng_upload_table_bind,
+        ducknng_upload_table_init, ducknng_upload_table_scan);
+}
+
 static int register_remote_table_named_mode(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     duckdb_type param_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
@@ -2301,6 +2622,7 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_request_raw", 4, ducknng_request_raw_scalar, ctx, request_tls_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_request_socket_raw", 3, ducknng_request_socket_scalar, ctx, request_socket_types, DUCKDB_TYPE_BLOB)) return 0;
     if (!register_remote_table_named(connection, ctx, "ducknng_query_rpc")) return 0;
+    if (!register_upload_table_named(connection, ctx, "ducknng_upload_table")) return 0;
     if (!register_remote_table_named_mode(connection, ctx, "ducknng_query_rpc_mode")) return 0;
     if (!register_manifest_result_table_named(connection, ctx, "ducknng_get_rpc_manifest")) return 0;
     if (!register_exec_result_table_named(connection, ctx, "ducknng_run_rpc")) return 0;

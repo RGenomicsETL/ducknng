@@ -169,6 +169,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_run_rpc` | table | `url, sql, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row. |
 | `ducknng_run_rpc_raw` | scalar | `url, sql, tls_config_id` | `BLOB` | Execute the exec RPC and return the raw reply frame as BLOB. |
 | `ducknng_query_rpc` | table | `url, sql, tls_config_id` | `table` | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table. |
+| `ducknng_upload_table` | table | `url, source_query, target_table[, tls_config_id]` | `TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)` | Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded. |
 
 ## RPC Session
 

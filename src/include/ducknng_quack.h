@@ -37,6 +37,12 @@ int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
 int ducknng_result_next_chunks_to_quack_payload(duckdb_result result,
     uint64_t max_chunks, int include_schema, uint8_t **out_bytes, size_t *out_len,
     int *has_chunk, char **errmsg);
+/* Materialized-result variant of ducknng_result_next_chunks_to_quack_payload:
+ * encodes up to max_chunks batches starting at *inout_chunk_index (advancing it)
+ * using duckdb_result_get_chunk, for results produced by duckdb_query. */
+int ducknng_result_materialized_chunks_to_quack_payload(duckdb_result result,
+    idx_t *inout_chunk_index, uint64_t max_chunks, int include_schema,
+    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg);
 int ducknng_result_empty_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, char **errmsg);
 

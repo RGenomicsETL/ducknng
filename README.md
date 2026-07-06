@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:46821 |
+| tls+tcp://127.0.0.1:38569 |
 +---------------------------+
 
 +--------+
@@ -474,7 +474,7 @@ table below is generated fresh on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
-| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                                                                        |     2 |
+| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_result_chunk_count`, `duckdb_result_get_chunk`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                |     4 |
 | `unstable_new_append_functions`                | `duckdb_appender_error_data`                                                                                                                                                                                                                                                                                                            |     1 |
 | `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
 | `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
@@ -696,13 +696,14 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## RPC Helper
 
-| name                           | kind   | arguments                 | returns                                                                                               | description                                                                                                                 |
-|--------------------------------|--------|---------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_get_rpc_manifest`     | table  | `url, tls_config_id`      | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)`                                                  | Request the RPC manifest and return a structured result row.                                                                |
-| `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id`      | `BLOB`                                                                                                | Request the RPC manifest and return the raw reply frame as BLOB.                                                            |
-| `ducknng_run_rpc`              | table  | `url, sql, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row.                                                    |
-| `ducknng_run_rpc_raw`          | scalar | `url, sql, tls_config_id` | `BLOB`                                                                                                | Execute the exec RPC and return the raw reply frame as BLOB.                                                                |
-| `ducknng_query_rpc`            | table  | `url, sql, tls_config_id` | `table`                                                                                               | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table. |
+| name                           | kind   | arguments                                          | returns                                                                                               | description                                                                                                                                                     |
+|--------------------------------|--------|----------------------------------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_get_rpc_manifest`     | table  | `url, tls_config_id`                               | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)`                                                  | Request the RPC manifest and return a structured result row.                                                                                                    |
+| `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id`                               | `BLOB`                                                                                                | Request the RPC manifest and return the raw reply frame as BLOB.                                                                                                |
+| `ducknng_run_rpc`              | table  | `url, sql, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row.                                                                                        |
+| `ducknng_run_rpc_raw`          | scalar | `url, sql, tls_config_id`                          | `BLOB`                                                                                                | Execute the exec RPC and return the raw reply frame as BLOB.                                                                                                    |
+| `ducknng_query_rpc`            | table  | `url, sql, tls_config_id`                          | `table`                                                                                               | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.                                     |
+| `ducknng_upload_table`         | table  | `url, source_query, target_table[, tls_config_id]` | `TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)`                                                  | Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded. |
 
 ## RPC Session
 
@@ -1035,9 +1036,13 @@ match the target table exactly, since the appender appends by ordinal.
 or shutdown — rolls the transaction back so partially uploaded rows
 never persist. The counted token is matched over its full length, and
 upload and query control methods reject each other’s sessions. The wire
-contract is pinned in `docs/protocol.md`; the ergonomic
-`ducknng_upload_table(url, source_query, target_table)` client that
-drives this end-to-end is the next slice.
+contract is pinned in `docs/protocol.md`. The ergonomic
+`ducknng_upload_table(url, source_query, target_table[, tls_config_id])`
+table function drives this end-to-end: it runs `source_query` locally
+and streams the result rows into `target_table` over the upload lane
+(the batch column names, order, and types must match the target),
+returning the uploaded row and client-sent byte counts. A runnable
+round-trip is in `test/sql/ducknng_upload_roundtrip.test`.
 
 ### Synchronous helpers
 
@@ -2238,11 +2243,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1445033697 | 1783349281394 | 127.0.0.1:53074 | NULL          |
-+------------+---------------+-----------------+---------------+
++-----------+---------------+-----------------+---------------+
+|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
++-----------+---------------+-----------------+---------------+
+| 419925224 | 1783358495173 | 127.0.0.1:34568 | NULL          |
++-----------+---------------+-----------------+---------------+
 ```
 
 ``` sql

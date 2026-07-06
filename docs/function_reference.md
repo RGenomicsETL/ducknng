@@ -66,6 +66,10 @@ Request the RPC method manifest from a remote server.
 
 Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.
 
+#### `ducknng_upload_table(url, source_query, target_table[, tls_config_id])`
+
+Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.
+
 #### `ducknng_run_rpc(url, sql, tls_config_id)`
 
 Execute SQL via the exec method. Returns rows_changed + metadata.

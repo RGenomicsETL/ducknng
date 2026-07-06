@@ -715,7 +715,7 @@ self-signed certificate is generated in memory — no files needed.</p>
 <span id="cb1-29"><a href="#cb1-29" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-30"><a href="#cb1-30" tabindex="-1"></a>|        listen_url         |</span>
 <span id="cb1-31"><a href="#cb1-31" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
-<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:46821</span> |</span>
+<span id="cb1-32"><a href="#cb1-32" tabindex="-1"></a>| tls<span class="op">+</span>tcp:<span class="op">//</span><span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:38569</span> |</span>
 <span id="cb1-33"><a href="#cb1-33" tabindex="-1"></a><span class="op">+</span><span class="co">---------------------------+</span></span>
 <span id="cb1-34"><a href="#cb1-34" tabindex="-1"></a></span>
 <span id="cb1-35"><a href="#cb1-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
@@ -780,7 +780,7 @@ ready.</p>
 <span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
 <span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a>| aio_id |  ok  | has_frame |</span>
 <span id="cb4-20"><a href="#cb4-20" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span>
-<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">2</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
+<span id="cb4-21"><a href="#cb4-21" tabindex="-1"></a>| <span class="dv">1</span>      | <span class="kw">true</span> | <span class="kw">true</span>      |</span>
 <span id="cb4-22"><a href="#cb4-22" tabindex="-1"></a><span class="op">+</span><span class="co">--------+------+-----------+</span></span></code></pre></div>
 <p><strong><code>ducknng_ncurl</code> — HTTP client primitive.</strong>
 The framed RPC mount accepts POST only. Mount a server on an
@@ -1077,8 +1077,10 @@ generated fresh on every README render:</p>
 <tr class="odd">
 <td><code>unstable_deprecated</code></td>
 <td><code>duckdb_pending_prepared_streaming</code>,
+<code>duckdb_result_chunk_count</code>,
+<code>duckdb_result_get_chunk</code>,
 <code>duckdb_stream_fetch_chunk</code></td>
-<td align="right">2</td>
+<td align="right">4</td>
 </tr>
 <tr class="even">
 <td><code>unstable_new_append_functions</code></td>
@@ -2263,6 +2265,15 @@ row.</td>
 <td>Execute a row-returning RPC query as a session convenience wrapper
 and expose the fetched Arrow IPC rows as a DuckDB table.</td>
 </tr>
+<tr class="even">
+<td><code>ducknng_upload_table</code></td>
+<td>table</td>
+<td><code>url, source_query, target_table[, tls_config_id]</code></td>
+<td><code>TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)</code></td>
+<td>Run source_query locally and stream its result rows into a remote
+table over the quack-batch upload lane; returns rows_uploaded and
+client-sent bytes_uploaded.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="rpc-session">RPC Session</h2>
@@ -2682,9 +2693,14 @@ target table exactly, since the appender appends by ordinal.
 transaction back so partially uploaded rows never persist. The counted
 token is matched over its full length, and upload and query control
 methods reject each other’s sessions. The wire contract is pinned in
-<code>docs/protocol.md</code>; the ergonomic
-<code>ducknng_upload_table(url, source_query, target_table)</code>
-client that drives this end-to-end is the next slice.</p>
+<code>docs/protocol.md</code>. The ergonomic
+<code>ducknng_upload_table(url, source_query, target_table[, tls_config_id])</code>
+table function drives this end-to-end: it runs <code>source_query</code>
+locally and streams the result rows into <code>target_table</code> over
+the upload lane (the batch column names, order, and types must match the
+target), returning the uploaded row and client-sent byte counts. A
+runnable round-trip is in
+<code>test/sql/ducknng_upload_roundtrip.test</code>.</p>
 <h3 id="synchronous-helpers">Synchronous helpers</h3>
 <div class="sourceCode" id="cb19"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a><span class="co">-- DDL statement over RPC.</span></span>
 <span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span> <span class="kw">FROM</span> ducknng_run_rpc(</span>
@@ -3808,11 +3824,11 @@ and active-pipe counters.</p>
 for a service.</p>
 <div class="sourceCode" id="cb48"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb48-1"><a href="#cb48-1" tabindex="-1"></a><span class="kw">SELECT</span> pipe_id, opened_ms, remote_addr, peer_identity</span>
 <span id="cb48-2"><a href="#cb48-2" tabindex="-1"></a><span class="kw">FROM</span> ducknng_list_pipes(<span class="st">&#39;monitor_demo&#39;</span>);</span>
-<span id="cb48-3"><a href="#cb48-3" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb48-4"><a href="#cb48-4" tabindex="-1"></a>|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |</span>
-<span id="cb48-5"><a href="#cb48-5" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span>
-<span id="cb48-6"><a href="#cb48-6" tabindex="-1"></a>| <span class="dv">1445033697</span> | <span class="dv">1783349281394</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:53074</span> | <span class="kw">NULL</span>          |</span>
-<span id="cb48-7"><a href="#cb48-7" tabindex="-1"></a><span class="op">+</span><span class="co">------------+---------------+-----------------+---------------+</span></span></code></pre></div>
+<span id="cb48-3"><a href="#cb48-3" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb48-4"><a href="#cb48-4" tabindex="-1"></a>|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |</span>
+<span id="cb48-5"><a href="#cb48-5" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span>
+<span id="cb48-6"><a href="#cb48-6" tabindex="-1"></a>| <span class="dv">419925224</span> | <span class="dv">1783358495173</span> | <span class="dv">127</span>.<span class="dv">0</span>.<span class="fl">0.1</span><span class="ch">:34568</span> | <span class="kw">NULL</span>          |</span>
+<span id="cb48-7"><a href="#cb48-7" tabindex="-1"></a><span class="op">+</span><span class="co">-----------+---------------+-----------------+---------------+</span></span></code></pre></div>
 <div class="sourceCode" id="cb49"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb49-1"><a href="#cb49-1" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_close_socket(getvariable(<span class="st">&#39;monitor_req&#39;</span>):<span class="ch">:UBIGINT</span>);</span>
 <span id="cb49-2"><a href="#cb49-2" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_stop_server(<span class="st">&#39;monitor_demo&#39;</span>);</span>
 <span id="cb49-3"><a href="#cb49-3" tabindex="-1"></a><span class="op">+</span><span class="co">-------------------------------------------------------------------------------------------------------------------------+</span></span>

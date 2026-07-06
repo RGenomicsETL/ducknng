@@ -545,9 +545,13 @@ appends by ordinal. `upload_commit` flushes and commits; `upload_abort` — and
 any idle prune or shutdown — rolls the transaction back so partially uploaded
 rows never persist. The counted token is matched over its full length, and
 upload and query control methods reject each other's sessions. The wire contract
-is pinned in `docs/protocol.md`; the ergonomic `ducknng_upload_table(url,
-source_query, target_table)` client that drives this end-to-end is the next
-slice.
+is pinned in `docs/protocol.md`. The ergonomic
+`ducknng_upload_table(url, source_query, target_table[, tls_config_id])` table
+function drives this end-to-end: it runs `source_query` locally and streams the
+result rows into `target_table` over the upload lane (the batch column names,
+order, and types must match the target), returning the uploaded row and
+client-sent byte counts. A runnable round-trip is in
+`test/sql/ducknng_upload_roundtrip.test`.
 
 ### Synchronous helpers
 

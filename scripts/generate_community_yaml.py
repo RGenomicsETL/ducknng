@@ -184,6 +184,14 @@ FUNCTIONS = [
         "Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.",
     ),
     af(
+        "ducknng_upload_table",
+        "table",
+        RPC,
+        "upload_table(url, source_query, target_table[, tls_config_id])",
+        "table",
+        "Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.",
+    ),
+    af(
         "ducknng_run_rpc",
         "table",
         RPC,
