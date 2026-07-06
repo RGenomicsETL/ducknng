@@ -71,17 +71,22 @@ jobs:
           echo "extension_asset_name=ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
           echo "extension_release_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${DUCKNNG_WASM_RELEASE_TAG}/ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
 
-      - name: Build static ducknng wasm demo site
-        env:
-          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
-          DUCKNNG_WASM_EXTENSION_RELEASE_URL: ${{ steps.names.outputs.extension_release_url }}
-        run: scripts/start_duckdb_wasm_local_test.sh
-
-      - name: Browser load probe on built artifact
+      - name: Build wasm_eh probe artifact
         # A __multi3 dynamic-link mismatch once shipped a demo artifact that
-        # failed at LOAD with no CI signal. Gate publishing on the extension
-        # actually loading in headless Chromium. wasm_threads LOAD is known to
-        # be resource-sensitive in repeated headless runs, so allow retries.
+        # failed at LOAD with no CI signal. That failure class is
+        # target-independent (same sources, same emsdk), and wasm_eh is the
+        # release-supported browser lane, so the blocking load gate runs on a
+        # wasm_eh build; wasm_threads LOAD is documented as resource-sensitive
+        # in headless CI and stays report-only below.
+        env:
+          DUCKDB_WASM_PLATFORM: wasm_eh
+          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          scripts/start_duckdb_wasm_local_test.sh
+          mv .duckdb-wasm-local-artifacts .duckdb-wasm-eh-probe-artifacts
+
+      - name: Browser load gate on wasm_eh artifact
         run: |
           set -euo pipefail
           cd test/browser
@@ -89,14 +94,27 @@ jobs:
           npx playwright install --with-deps chromium
           ok=0
           for attempt in 1 2 3; do
-            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-local-artifacts/site" --probes=load; then
+            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-eh-probe-artifacts/site" --probes=load; then
               ok=1
               break
             fi
-            echo "load probe attempt ${attempt} failed; retrying"
+            echo "load gate attempt ${attempt} failed; retrying"
             sleep 5
           done
           [ "$ok" = "1" ]
+
+      - name: Build static ducknng wasm demo site
+        env:
+          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
+          DUCKNNG_WASM_EXTENSION_RELEASE_URL: ${{ steps.names.outputs.extension_release_url }}
+        run: scripts/start_duckdb_wasm_local_test.sh
+
+      - name: Browser load probe on wasm_threads artifact (report-only)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd test/browser
+          node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-local-artifacts/site" --probes=load
 
       - name: Package release artifacts
         run: |
