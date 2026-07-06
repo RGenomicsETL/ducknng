@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:40065 |
+| tls+tcp://127.0.0.1:46821 |
 +---------------------------+
 
 +--------+
@@ -475,6 +475,7 @@ table below is generated fresh on every README render:
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
 | `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                                                                        |     2 |
+| `unstable_new_append_functions`                | `duckdb_appender_error_data`                                                                                                                                                                                                                                                                                                            |     1 |
 | `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
 | `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
 | `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
@@ -565,13 +566,14 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Method Registry
 
-| name                           | kind   | arguments             | returns                                                                                                                                                                                                                                                                       | description                                                                            |
-|--------------------------------|--------|-----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| `ducknng_register_exec_method` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                     | Register the built-in exec RPC method explicitly.                                      |
-| `ducknng_set_method_auth`      | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                     | Set descriptor-level verified-peer-identity authorization for a registered RPC method. |
-| `ducknng_unregister_method`    | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                     | Unregister a method from the runtime registry.                                         |
-| `ducknng_unregister_family`    | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                     | Unregister all methods in a family and return the number removed.                      |
-| `ducknng_list_methods`         | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, disabled BOOLEAN)` | List the currently registered RPC methods in the runtime registry.                     |
+| name                              | kind   | arguments             | returns                                                                                                                                                                                                                                                                       | description                                                                                 |
+|-----------------------------------|--------|-----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `ducknng_register_exec_method`    | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                     | Register the built-in exec RPC method explicitly.                                           |
+| `ducknng_register_upload_methods` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                     | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
+| `ducknng_set_method_auth`         | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                     | Set descriptor-level verified-peer-identity authorization for a registered RPC method.      |
+| `ducknng_unregister_method`       | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                     | Unregister a method from the runtime registry.                                              |
+| `ducknng_unregister_family`       | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                     | Unregister all methods in a family and return the number removed.                           |
+| `ducknng_list_methods`            | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, disabled BOOLEAN)` | List the currently registered RPC methods in the runtime registry.                          |
 
 ## Primitive Transport
 
@@ -986,6 +988,56 @@ FROM m;
 | ducknng     | 8            | true     |
 +-------------+--------------+----------+
 ```
+
+### Registry: the upload lane
+
+The upload lane is the client-to-server mirror of the query family:
+instead of fetching result batches, a client streams
+`ducknng_quack_batch` tuples *into* a server table. Like `exec`, it is
+opt-in and exposes no surface until the host registers it.
+`ducknng_register_upload_methods(false)` registers it without an auth
+requirement (the no-argument form defaults the same way); it reuses the
+query family’s execution-subject admission, session owner tokens, and
+per-peer-identity limits.
+
+``` sql
+-- Register the upload lane (false = no auth required), mirroring exec.
+SELECT ducknng_register_upload_methods(false) AS registered_upload;
+-- The four upload-family methods are now advertised.
+SELECT name, family, response_mode, requires_auth, disabled
+FROM ducknng_list_methods()
+WHERE family = 'upload'
+ORDER BY name;
++-------------------+
+| registered_upload |
++-------------------+
+| true              |
++-------------------+
++---------------+--------+---------------+---------------+----------+
+|     name      | family | response_mode | requires_auth | disabled |
++---------------+--------+---------------+---------------+----------+
+| upload_abort  | upload | metadata_only | false         | false    |
+| upload_append | upload | metadata_only | false         | false    |
+| upload_commit | upload | metadata_only | false         | false    |
+| upload_open   | upload | session_open  | false         | false    |
++---------------+--------+---------------+---------------+----------+
+```
+
+The flow is `upload_open` → `upload_append`\* → `upload_commit` (or
+`upload_abort`). `upload_open` takes JSON `{target_table, mode}` (v1
+appends to an existing table), acquires a session connection, begins a
+transaction, and opens a DuckDB appender. Each `upload_append` body is a
+counted control prefix (`[session_id u64 LE][token_len u16 LE][token]`)
+followed by a raw quack batch, which the server decodes straight into
+the session appender; the batch’s column names, order, and types must
+match the target table exactly, since the appender appends by ordinal.
+`upload_commit` flushes and commits; `upload_abort` — and any idle prune
+or shutdown — rolls the transaction back so partially uploaded rows
+never persist. The counted token is matched over its full length, and
+upload and query control methods reject each other’s sessions. The wire
+contract is pinned in `docs/protocol.md`; the ergonomic
+`ducknng_upload_table(url, source_query, target_table)` client that
+drives this end-to-end is the next slice.
 
 ### Synchronous helpers
 
@@ -1648,7 +1700,7 @@ SELECT ducknng_stop_server('http_rpc');
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
-| ducknng     | 8            |
+| ducknng     | 12           |
 +-------------+--------------+
 
 +------+-----------+----------+
@@ -2186,11 +2238,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+-----------+---------------+-----------------+---------------+
-|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
-+-----------+---------------+-----------------+---------------+
-| 420355554 | 1783313389674 | 127.0.0.1:56230 | NULL          |
-+-----------+---------------+-----------------+---------------+
++------------+---------------+-----------------+---------------+
+|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
++------------+---------------+-----------------+---------------+
+| 1445033697 | 1783349281394 | 127.0.0.1:53074 | NULL          |
++------------+---------------+-----------------+---------------+
 ```
 
 ``` sql

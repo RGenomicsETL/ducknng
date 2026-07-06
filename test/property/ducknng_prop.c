@@ -600,7 +600,9 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
 
 #define PROP_QK_FIELD_END          0xffffu
 #define PROP_QK_OUTER_RESULT_TYPES 1u
+#define PROP_QK_OUTER_RESULT_NAMES 2u
 #define PROP_QK_OUTER_RESULTS      4u
+#define PROP_QK_TYPE_ID            100u
 #define PROP_QK_CHUNK_WRAPPER      300u
 #define PROP_QK_CHUNK_ROWS         100u
 #define PROP_QK_CHUNK_COLUMNS      102u
@@ -795,6 +797,28 @@ prop_quack_nested_random_payloads(struct theft *t, void *arg1)
     if (errmsg) free(errmsg);
     ducknng_quack_schema_reset(&schema);
     return result;
+}
+
+/* Build a minimal parse_schema-acceptable payload: one INTEGER column whose
+ * name is the given counted bytes. Layout mirrors ducknng_quack_reader_parse_schema:
+ *   [u16 RESULT_TYPES][uleb 1][type node: u16 TYPE_ID, uleb INTEGER, u16 END]
+ *   [u16 RESULT_NAMES][uleb 1][uleb name_len][name bytes]
+ * Used to prove the embedded-NUL guard rejects a hostile column name while an
+ * otherwise-identical NUL-free name still parses. */
+static int
+prop_quack_build_one_col_named_schema(struct prop_quack_buf *b,
+    const uint8_t *name, size_t name_len)
+{
+    memset(b, 0, sizeof(*b));
+    if (prop_qb_u16(b, PROP_QK_OUTER_RESULT_TYPES) != 0) return -1;
+    if (prop_qb_uleb(b, 1) != 0) return -1;
+    if (prop_qb_u16(b, PROP_QK_TYPE_ID) != 0) return -1;
+    if (prop_qb_uleb(b, PROP_QK_INTEGER) != 0) return -1;
+    if (prop_qb_field_end(b) != 0) return -1;
+    if (prop_qb_u16(b, PROP_QK_OUTER_RESULT_NAMES) != 0) return -1;
+    if (prop_qb_uleb(b, 1) != 0) return -1;
+    if (prop_qb_uleb(b, (uint64_t)name_len) != 0) return -1;
+    return prop_qb_put(b, name, name_len);
 }
 
 /* The server upload append path parses an attacker-supplied quack header via
@@ -1021,6 +1045,45 @@ TEST quack_parse_schema_rejects_random_payloads(void)
     ASSERT_EQ(THEFT_RUN_PASS,
         prop_run_one("quack parse_schema random payloads", prop_quack_parse_schema_random_payloads,
             &prop_random_bytes_info));
+    PASS();
+}
+
+/* A column name carrying an embedded NUL must be rejected by parse_schema, so a
+ * counted name like "a\0x" cannot strcmp-match target column "a" on the upload
+ * path. The NUL-free control proves the fixture is otherwise valid and the
+ * guard is not over-broad. */
+TEST quack_parse_schema_rejects_embedded_nul_column_name(void)
+{
+    static const uint8_t nul_name[3] = { 'a', '\0', 'x' };
+    static const uint8_t ok_name[2] = { 'a', 'x' };
+    struct prop_quack_buf b;
+    ducknng_quack_schema schema;
+    char *errmsg = NULL;
+    int rc;
+
+    /* Negative: embedded-NUL name is rejected, nothing is left allocated. */
+    ASSERT_EQ(0, prop_quack_build_one_col_named_schema(&b, nul_name, sizeof(nul_name)));
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(b.data, b.len, &schema, &errmsg);
+    ASSERT_NEQ(0, rc);
+    ASSERT(errmsg != NULL);
+    ASSERT(strstr(errmsg, "embedded NUL") != NULL);
+    ASSERT_EQ((idx_t)0, schema.ncols);
+    ASSERT_EQ(NULL, schema.cols);
+    if (errmsg) { free(errmsg); errmsg = NULL; }
+    ducknng_quack_schema_reset(&schema);
+
+    /* Positive control: the same shape with a NUL-free name parses cleanly. */
+    ASSERT_EQ(0, prop_quack_build_one_col_named_schema(&b, ok_name, sizeof(ok_name)));
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(b.data, b.len, &schema, &errmsg);
+    ASSERT_EQ(0, rc);
+    ASSERT_EQ(NULL, errmsg);
+    ASSERT_EQ((idx_t)1, schema.ncols);
+    ASSERT(schema.cols != NULL);
+    ASSERT(schema.cols[0].name != NULL);
+    ASSERT_EQ(0, strcmp(schema.cols[0].name, "ax"));
+    ducknng_quack_schema_reset(&schema);
     PASS();
 }
 
@@ -1305,6 +1368,7 @@ SUITE(quack_properties)
     RUN_TEST(quack_rejects_huge_schema_column_count_fixture);
     RUN_TEST(quack_rejects_random_nested_schema_payloads);
     RUN_TEST(quack_parse_schema_rejects_random_payloads);
+    RUN_TEST(quack_parse_schema_rejects_embedded_nul_column_name);
 }
 
 GREATEST_MAIN_DEFS();

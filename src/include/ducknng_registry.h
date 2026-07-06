@@ -14,7 +14,11 @@ typedef enum ducknng_payload_format {
     DUCKNNG_PAYLOAD_NONE = 0,
     DUCKNNG_PAYLOAD_JSON = 1,
     DUCKNNG_PAYLOAD_ARROW_IPC_STREAM = 2,
-    DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH = 3
+    DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH = 3,
+    /* Custom upload-append frame: a session control prefix
+     * ([session_id u64 LE][token_len u16 LE][token]) followed by a quack
+     * batch. The exact layout is in the method's request_schema_json. */
+    DUCKNNG_PAYLOAD_UPLOAD_APPEND = 4
 } ducknng_payload_format;
 
 typedef enum ducknng_response_mode {

@@ -16,10 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXT_BIN = REPO_ROOT / "build" / "release" / "ducknng.duckdb_extension"
 COMMUNITY_DIR = REPO_ROOT / "community-extensions" / "extensions" / "ducknng"
 DOCS_DIR = REPO_ROOT / "docs"
-GIT_REF = subprocess.run(
-    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
-).stdout.strip()
-
 EXTENSION = {
     "name": "ducknng",
     "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
@@ -734,6 +730,14 @@ FUNCTIONS = [
         "Register (or re-register) the default exec method. Pass TRUE to enable by default.",
     ),
     af(
+        "ducknng_register_upload_methods",
+        "scalar",
+        REG,
+        "register_upload_methods(require_auth)",
+        "BOOLEAN",
+        "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
+    ),
+    af(
         "ducknng_set_method_auth",
         "scalar",
         REG,
@@ -1077,7 +1081,10 @@ def dump_yaml(val, indent=0):
 def build_description_yml():
     desc = {
         "extension": EXTENSION,
-        "repo": {"github": f"{EXTENSION['maintainers'][0]}/ducknng", "ref": GIT_REF},
+        # Pin the community source to the advertised release tag, not a volatile
+        # dev HEAD: a committed file cannot contain its own commit SHA (committing
+        # changes HEAD), so a tag is the only stable, non-stale ref.
+        "repo": {"github": f"{EXTENSION['maintainers'][0]}/ducknng", "ref": f"v{EXTENSION['version']}"},
         "docs": {
             "hello_world": hello_world(),
             "extended_description": textwrap.dedent("""\
@@ -1232,11 +1239,14 @@ def main():
     for fn in FUNCTIONS:
         by_kind[fn["kind"]] = by_kind.get(fn["kind"], 0) + 1
 
-    # Write description.yml
+    # Build the community-extensions descriptor (nested submission format). It is
+    # written only to the community-extensions + PR dirs below, NOT to repo-root
+    # description.yml: that root file is the minimal build/version descriptor
+    # parsed by function_catalog/generate_function_catalog.py (flat key: value),
+    # and overwriting it with this nested format breaks that parser.
     desc = build_description_yml()
-    (REPO_ROOT / "description.yml").write_text(desc)
     print(
-        f"description.yml: {len(FUNCTIONS)} functions across {len(categories)} categories: "
+        f"description.yml (community): {len(FUNCTIONS)} functions across {len(categories)} categories: "
         + ", ".join(f"{k}={len(v)}" for k, v in sorted(categories.items()))
     )
 

@@ -139,6 +139,26 @@
       ]
     },
     {
+      "name": "ducknng_register_upload_methods",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "ducknng_register_upload_methods([requires_auth])",
+      "returns": "BOOLEAN",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly.",
+      "notes": [
+        "The upload methods are not registered by default. Call this deliberately before exposing client-to-server table uploads over RPC.",
+        "An upload session opens a transaction on a pinned connection, appends quack batches into a target table via an appender, and commits or rolls back; abort, idle prune, and shutdown roll back so partially uploaded rows never persist.",
+        "requires_auth defaults to false. Pass true to require a verified transport-derived peer identity for upload dispatch.",
+        "Execution-subject admission, session owner tokens, and per-peer-identity limits are shared with the query-session path."
+      ],
+      "examples": [
+        "SELECT ducknng_register_upload_methods();",
+        "SELECT ducknng_register_upload_methods(true);"
+      ]
+    },
+    {
       "name": "ducknng_set_method_auth",
       "kind": "scalar",
       "category": "Method Registry",

@@ -35,6 +35,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | name | kind | arguments | returns | description |
 |---|---|---|---|---|
 | `ducknng_register_exec_method` | scalar | `[requires_auth]` | `BOOLEAN` | Register the built-in exec RPC method explicitly. |
+| `ducknng_register_upload_methods` | scalar | `[requires_auth]` | `BOOLEAN` | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
 | `ducknng_set_method_auth` | scalar | `name, requires_auth` | `BOOLEAN` | Set descriptor-level verified-peer-identity authorization for a registered RPC method. |
 | `ducknng_unregister_method` | scalar | `name` | `BOOLEAN` | Unregister a method from the runtime registry. |
 | `ducknng_unregister_family` | scalar | `family` | `UBIGINT` | Unregister all methods in a family and return the number removed. |

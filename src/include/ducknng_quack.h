@@ -55,8 +55,13 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
  * *inout_rows. Fail-closed: any malformed byte, schema/appender column
  * mismatch, or append error returns -1 with *errmsg and appends nothing
  * further. The appender is neither flushed nor destroyed here. */
+/* expected_names (when non-NULL) are the target table's column names in order;
+ * the batch column names must match them exactly, since the appender appends
+ * by ordinal and would otherwise misassign same-typed columns. */
 int ducknng_quack_payload_append_to_appender(duckdb_appender appender,
-    const uint8_t *payload, size_t payload_len, uint64_t *inout_rows, char **errmsg);
+    const uint8_t *payload, size_t payload_len,
+    const char *const *expected_names, idx_t expected_name_count,
+    uint64_t *inout_rows, char **errmsg);
 int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_len,
     const ducknng_quack_schema *schema, idx_t *out_row_count, char **errmsg);
 int ducknng_quack_payload_scan_begin(const uint8_t *payload, size_t payload_len,

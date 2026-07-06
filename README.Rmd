@@ -513,6 +513,42 @@ SELECT json_extract_string(manifest::JSON, '$.server.name') AS server_name,
 FROM m;
 ```
 
+### Registry: the upload lane
+
+The upload lane is the client-to-server mirror of the query family: instead of
+fetching result batches, a client streams `ducknng_quack_batch` tuples *into* a
+server table. Like `exec`, it is opt-in and exposes no surface until the host
+registers it. `ducknng_register_upload_methods(false)` registers it without an
+auth requirement (the no-argument form defaults the same way); it reuses the
+query family's execution-subject admission, session owner tokens, and
+per-peer-identity limits.
+
+```{duckdb collapse=TRUE, comment=""}
+-- Register the upload lane (false = no auth required), mirroring exec.
+SELECT ducknng_register_upload_methods(false) AS registered_upload;
+
+-- The four upload-family methods are now advertised.
+SELECT name, family, response_mode, requires_auth, disabled
+FROM ducknng_list_methods()
+WHERE family = 'upload'
+ORDER BY name;
+```
+
+The flow is `upload_open` → `upload_append`* → `upload_commit` (or
+`upload_abort`). `upload_open` takes JSON `{target_table, mode}` (v1 appends to
+an existing table), acquires a session connection, begins a transaction, and
+opens a DuckDB appender. Each `upload_append` body is a counted control prefix
+(`[session_id u64 LE][token_len u16 LE][token]`) followed by a raw quack batch,
+which the server decodes straight into the session appender; the batch's column
+names, order, and types must match the target table exactly, since the appender
+appends by ordinal. `upload_commit` flushes and commits; `upload_abort` — and
+any idle prune or shutdown — rolls the transaction back so partially uploaded
+rows never persist. The counted token is matched over its full length, and
+upload and query control methods reject each other's sessions. The wire contract
+is pinned in `docs/protocol.md`; the ergonomic `ducknng_upload_table(url,
+source_query, target_table)` client that drives this end-to-end is the next
+slice.
+
 ### Synchronous helpers
 
 ```{duckdb collapse=TRUE, comment=""}

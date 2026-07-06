@@ -14,6 +14,10 @@ Stop a named server, close all its pipes, and release resources.
 
 List all running servers with listen URL, TLS mode/peering mode, pipe count.
 
+#### `ducknng_nng_version()`
+
+Return the vendored NNG library version string.
+
 ### NNG Sockets
 
 #### `ducknng_open_socket(kind)`
@@ -268,7 +272,7 @@ Unregister a user-registered body codec, restoring the built-in behavior.
 
 #### `ducknng_self_signed_tls_config(host, days, auth_mode)`
 
-Generate a self-signed TLS cert in memory. auth_mode: 0=none, 1=server, 2=mutual. Returns TLS config handle.
+Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.
 
 #### `ducknng_tls_config_from_files(cert_path, key_path, ca_path, auth_mode)`
 
@@ -353,6 +357,10 @@ List all registered RPC methods with auth requirements.
 #### `ducknng_register_exec_method(enable_default)`
 
 Register (or re-register) the default exec method. Pass TRUE to enable by default.
+
+#### `ducknng_register_upload_methods(require_auth)`
+
+Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.
 
 #### `ducknng_set_method_auth(method_name, require_auth)`
 

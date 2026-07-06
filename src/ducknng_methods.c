@@ -348,6 +348,41 @@ static const char *ducknng_session_auth_error_message(int auth) {
         "ducknng: session owner token mismatch";
 }
 
+/* Non-destructively verify a (session_id, token) names a session of the
+ * expected family (upload vs query) owned by this caller, before a
+ * destructive remove. Query controls (fetch/close/cancel) and upload controls
+ * (upload_append/commit/abort) share one session table, so each family must
+ * reject the other's sessions rather than detach and destroy a live handle of
+ * the wrong kind. Sets an error reply and returns -1 on missing, unauthorized,
+ * or wrong-family; the session is left intact in every case. */
+static int ducknng_session_check_kind(ducknng_service *svc, uint64_t session_id,
+    const char *session_token, const char *caller_identity, int require_upload,
+    ducknng_method_reply *reply) {
+    int unauthorized = 0;
+    int is_upload;
+    ducknng_session *session = ducknng_service_acquire_session(svc, session_id,
+        session_token, caller_identity, &unauthorized);
+    if (!session) {
+        ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
+            unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
+        return -1;
+    }
+    ducknng_mutex_lock(&session->mu);
+    is_upload = session->is_upload;
+    ducknng_mutex_unlock(&session->mu);
+    ducknng_session_release(session);
+    if (require_upload && !is_upload) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: session is not an upload session");
+        return -1;
+    }
+    if (!require_upload && is_upload) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: session is an upload session; use the upload_* methods");
+        return -1;
+    }
+    return 0;
+}
+
 static int ducknng_method_handshake_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
@@ -658,6 +693,15 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
             unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: session not found");
         return -1;
     }
+    /* fetch is a query-family control; reject an upload session (is_upload is
+     * set once before the session is published, so this read is race-free). */
+    if (session->is_upload) {
+        ducknng_session_release(session);
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: session is an upload session; use the upload_* methods");
+        return -1;
+    }
     ducknng_mutex_lock(&session->mu);
     session->last_touch_ms = ducknng_now_ms();
     if (session->cancelled) {
@@ -809,6 +853,14 @@ static int ducknng_method_close_handler(ducknng_service *svc,
     if (ducknng_parse_session_control_request(req, "close", &control_req, reply) != 0) {
         return -1;
     }
+    /* Reject upload sessions non-destructively before removing: close must not
+     * detach and destroy a live upload session (which would roll its upload
+     * back) while returning a query-session success. */
+    if (ducknng_session_check_kind(svc, control_req.session_id, control_req.session_token,
+            req->caller_identity, 0, reply) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        return -1;
+    }
     session_id = control_req.session_id;
     session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
         req->caller_identity, &unauthorized);
@@ -854,6 +906,13 @@ static int ducknng_method_cancel_handler(ducknng_service *svc,
     memset(&control_req, 0, sizeof(control_req));
     memset(&view, 0, sizeof(view));
     if (ducknng_parse_session_control_request(req, "cancel", &control_req, reply) != 0) {
+        return -1;
+    }
+    /* Reject upload sessions non-destructively: cancel is a query-family
+     * control and must not consume a live upload session. */
+    if (ducknng_session_check_kind(svc, control_req.session_id, control_req.session_token,
+            req->caller_identity, 0, reply) != 0) {
+        ducknng_session_control_request_reset(&control_req);
         return -1;
     }
     session_id = control_req.session_id;
@@ -1120,6 +1179,567 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     return reply->type == DUCKNNG_RPC_ERROR ? -1 : 0;
 }
 
+/* --- Upload lane (issue #9): client-to-server tuple streams --- */
+
+static int ducknng_upload_run_stmt(duckdb_connection con, const char *sql, char **errmsg) {
+    duckdb_result res;
+    memset(&res, 0, sizeof(res));
+    if (duckdb_query(con, sql, &res) == DuckDBError) {
+        if (errmsg && !*errmsg) {
+            const char *m = duckdb_result_error(&res);
+            *errmsg = ducknng_strdup(m && m[0] ? m : "ducknng: upload transaction statement failed");
+        }
+        duckdb_destroy_result(&res);
+        return -1;
+    }
+    duckdb_destroy_result(&res);
+    return 0;
+}
+
+/* A v1 upload target identifier part: an unquoted SQL identifier. Restricting
+ * the charset keeps both duckdb_appender_create_ext (literal parts) and the
+ * quoted name-capture query injection-safe. Quoted/exotic identifiers are a
+ * documented v1 limitation. */
+static int ducknng_upload_ident_ok(const char *s) {
+    size_t i;
+    if (!s || !s[0]) return 0;
+    if (!((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z') || s[0] == '_')) return 0;
+    for (i = 1; s[i]; i++) {
+        char c = s[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '$')) return 0;
+    }
+    return 1;
+}
+
+/* Split "[[catalog.]schema.]table" into duckdb_strdup'd parts (schema/catalog
+ * NULL when absent). Fails closed on empty, >3 parts, or any part that is not
+ * a simple identifier. */
+static int ducknng_upload_split_target(const char *target, char **out_catalog,
+    char **out_schema, char **out_table, char **errmsg) {
+    char *copy;
+    char *parts[3];
+    int nparts = 0;
+    char *p;
+    int i;
+    *out_catalog = NULL;
+    *out_schema = NULL;
+    *out_table = NULL;
+    copy = ducknng_strdup(target ? target : "");
+    if (!copy) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing upload target");
+        return -1;
+    }
+    p = copy;
+    for (;;) {
+        char *dot = strchr(p, '.');
+        if (nparts >= 3) { nparts = 4; break; }
+        if (dot) { *dot = '\0'; parts[nparts++] = p; p = dot + 1; }
+        else { parts[nparts++] = p; break; }
+    }
+    if (nparts < 1 || nparts > 3) {
+        duckdb_free(copy);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: upload target must be a simple [[catalog.]schema.]table identifier");
+        return -1;
+    }
+    for (i = 0; i < nparts; i++) {
+        if (!ducknng_upload_ident_ok(parts[i])) {
+            duckdb_free(copy);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+                "ducknng: upload target must be a simple [[catalog.]schema.]table identifier");
+            return -1;
+        }
+    }
+    if (nparts == 1) {
+        *out_table = ducknng_strdup(parts[0]);
+    } else if (nparts == 2) {
+        *out_schema = ducknng_strdup(parts[0]);
+        *out_table = ducknng_strdup(parts[1]);
+    } else {
+        *out_catalog = ducknng_strdup(parts[0]);
+        *out_schema = ducknng_strdup(parts[1]);
+        *out_table = ducknng_strdup(parts[2]);
+    }
+    duckdb_free(copy);
+    if (!*out_table || (nparts >= 2 && !*out_schema) || (nparts == 3 && !*out_catalog)) {
+        if (*out_catalog) duckdb_free(*out_catalog);
+        if (*out_schema) duckdb_free(*out_schema);
+        if (*out_table) duckdb_free(*out_table);
+        *out_catalog = *out_schema = *out_table = NULL;
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing upload target");
+        return -1;
+    }
+    return 0;
+}
+
+/* Capture the target's column names in ordinal order via a LIMIT 0 select on
+ * the fully-quoted identifier (parts are validated identifiers, so quoting is
+ * injection-safe). Returns a duckdb_malloc'd array of duckdb_strdup'd names. */
+static int ducknng_upload_capture_col_names(duckdb_connection con,
+    const char *catalog, const char *schema, const char *table,
+    char ***out_names, idx_t *out_count, char **errmsg) {
+    char *sql = NULL;
+    size_t cap = 64;
+    duckdb_result res;
+    idx_t ncols;
+    idx_t i;
+    char **names = NULL;
+    int rc = -1;
+    *out_names = NULL;
+    *out_count = 0;
+    if (catalog) cap += strlen(catalog);
+    if (schema) cap += strlen(schema);
+    cap += strlen(table) + 32;
+    sql = (char *)duckdb_malloc(cap);
+    if (!sql) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building upload schema query");
+        return -1;
+    }
+    /* Parts are validated identifiers (no quotes), so "%s" quoting is safe. */
+    if (catalog) {
+        snprintf(sql, cap, "SELECT * FROM \"%s\".\"%s\".\"%s\" LIMIT 0", catalog, schema, table);
+    } else if (schema) {
+        snprintf(sql, cap, "SELECT * FROM \"%s\".\"%s\" LIMIT 0", schema, table);
+    } else {
+        snprintf(sql, cap, "SELECT * FROM \"%s\" LIMIT 0", table);
+    }
+    memset(&res, 0, sizeof(res));
+    if (duckdb_query(con, sql, &res) == DuckDBError) {
+        if (errmsg && !*errmsg) {
+            const char *m = duckdb_result_error(&res);
+            *errmsg = ducknng_strdup(m && m[0] ? m : "ducknng: upload_open could not resolve the target table");
+        }
+        duckdb_destroy_result(&res);
+        duckdb_free(sql);
+        return -1;
+    }
+    duckdb_free(sql);
+    ncols = duckdb_column_count(&res);
+    if (ncols > 0) {
+        names = (char **)duckdb_malloc(sizeof(*names) * (size_t)ncols);
+        if (!names) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying upload column names");
+            goto done;
+        }
+        memset(names, 0, sizeof(*names) * (size_t)ncols);
+        for (i = 0; i < ncols; i++) {
+            const char *cn = duckdb_column_name(&res, i);
+            names[i] = ducknng_strdup(cn ? cn : "");
+            if (!names[i]) {
+                if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying upload column names");
+                goto done;
+            }
+        }
+    }
+    *out_names = names;
+    *out_count = ncols;
+    names = NULL;
+    rc = 0;
+done:
+    if (names) {
+        for (i = 0; i < ncols; i++) if (names[i]) duckdb_free(names[i]);
+        duckdb_free(names);
+    }
+    duckdb_destroy_result(&res);
+    return rc;
+}
+
+static int ducknng_method_upload_open_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    char *json = NULL;
+    char *target = NULL;
+    char *mode = NULL;
+    char *correlation_id = NULL;
+    duckdb_connection con = NULL;
+    size_t pool_index = (size_t)-1;
+    duckdb_appender appender = NULL;
+    int txn_open = 0;
+    uint64_t session_id = 0;
+    char *owner_token = NULL;
+    char *result_handle = NULL;
+    char *errmsg = NULL;
+    char *cat = NULL;
+    char *sch = NULL;
+    char *tbl = NULL;
+    char **col_names = NULL;
+    idx_t col_count = 0;
+    ducknng_session_reply_view view;
+    (void)method;
+    if (!svc || !svc->rt || !req || !reply) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing upload_open context");
+        return -1;
+    }
+    json = ducknng_copy_payload_json(req);
+    if (!json) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: upload_open requires a JSON payload with target_table");
+        return -1;
+    }
+    target = ducknng_json_extract_string_dup(json, "target_table");
+    mode = ducknng_json_extract_string_dup(json, "mode");
+    correlation_id = ducknng_json_extract_string_dup(json, "correlation_id");
+    duckdb_free(json);
+    if (!target || !target[0]) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: upload_open requires target_table");
+        goto fail;
+    }
+    if (mode && mode[0] && strcmp(mode, "append") != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: upload_open v1 supports only mode 'append' to an existing table");
+        goto fail;
+    }
+    if (ducknng_upload_split_target(target, &cat, &sch, &tbl, &errmsg) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            errmsg ? errmsg : "ducknng: invalid upload target");
+        goto fail;
+    }
+    if (ducknng_service_acquire_session_connection(svc, &con, &pool_index, &errmsg) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            errmsg ? errmsg : "ducknng: upload_open could not acquire a session connection");
+        goto fail;
+    }
+    ducknng_runtime_current_request_service_set(svc->rt, svc);
+    if (ducknng_upload_run_stmt(con, "BEGIN TRANSACTION", &errmsg) != 0) {
+        ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+            errmsg ? errmsg : "ducknng: upload_open failed to begin a transaction");
+        goto fail;
+    }
+    txn_open = 1;
+    if (duckdb_appender_create_ext(con, cat, sch, tbl, &appender) == DuckDBError) {
+        duckdb_error_data ed = duckdb_appender_error_data(appender);
+        const char *m = ed ? duckdb_error_data_message(ed) : NULL;
+        if (!errmsg) errmsg = ducknng_strdup(m && m[0] ? m :
+            "ducknng: upload_open could not open an appender on the target table");
+        if (ed) duckdb_destroy_error_data(&ed);
+        if (appender) { duckdb_appender_destroy(&appender); appender = NULL; }
+        ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, errmsg);
+        goto fail;
+    }
+    if (ducknng_upload_capture_col_names(con, cat, sch, tbl, &col_names, &col_count, &errmsg) != 0) {
+        ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+            errmsg ? errmsg : "ducknng: upload_open could not resolve the target columns");
+        goto fail;
+    }
+    ducknng_runtime_current_request_service_set(svc->rt, NULL);
+    {
+        int add_rc = ducknng_service_add_upload_session(svc, con, pool_index, appender, target,
+            col_names, col_count, req->caller_identity, &session_id, &owner_token, &result_handle, &errmsg);
+        if (add_rc != 0) {
+            ducknng_method_reply_set_error(reply,
+                add_rc > 0 ? DUCKNNG_STATUS_BUSY : DUCKNNG_STATUS_INTERNAL,
+                errmsg ? errmsg : "ducknng: upload_open failed to register the upload session");
+            goto fail;
+        }
+    }
+    /* The session now owns the connection, appender, transaction, and the
+     * column-name array. */
+    con = NULL;
+    appender = NULL;
+    txn_open = 0;
+    pool_index = (size_t)-1;
+    col_names = NULL;
+    col_count = 0;
+    memset(&view, 0, sizeof(view));
+    view.session_id = session_id;
+    view.session_token = owner_token;
+    view.state = "open";
+    view.next_method = "upload_append";
+    view.has_idle_timeout_ms = 1;
+    view.idle_timeout_ms = svc->session_idle_ms;
+    /* Upload sessions have no fetchable result, so no result_handle is emitted;
+     * correlation_id is echoed when the caller supplied one. */
+    view.correlation_id = correlation_id;
+    if (ducknng_session_state_reply(reply, "upload_open", DUCKNNG_RPC_FLAG_SESSION_OPEN, &view) != 0) {
+        ducknng_session *dead = ducknng_service_remove_session(svc, session_id, owner_token,
+            req->caller_identity, NULL);
+        if (dead) ducknng_session_destroy(dead);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: failed to build upload_open reply");
+        goto fail;
+    }
+    if (target) duckdb_free(target);
+    if (mode) duckdb_free(mode);
+    if (correlation_id) duckdb_free(correlation_id);
+    if (owner_token) duckdb_free(owner_token);
+    if (result_handle) duckdb_free(result_handle);
+    if (cat) duckdb_free(cat);
+    if (sch) duckdb_free(sch);
+    if (tbl) duckdb_free(tbl);
+    if (errmsg) duckdb_free(errmsg);
+    return 0;
+fail:
+    if (appender) duckdb_appender_destroy(&appender);
+    if (txn_open && con) {
+        char *rollback_err = NULL;
+        ducknng_upload_run_stmt(con, "ROLLBACK", &rollback_err);
+        if (rollback_err) duckdb_free(rollback_err);
+    }
+    if (con && pool_index != (size_t)-1) ducknng_service_release_session_connection(svc, pool_index);
+    if (col_names) {
+        idx_t ci;
+        for (ci = 0; ci < col_count; ci++) if (col_names[ci]) duckdb_free(col_names[ci]);
+        duckdb_free(col_names);
+    }
+    if (target) duckdb_free(target);
+    if (mode) duckdb_free(mode);
+    if (correlation_id) duckdb_free(correlation_id);
+    if (owner_token) duckdb_free(owner_token);
+    if (result_handle) duckdb_free(result_handle);
+    if (cat) duckdb_free(cat);
+    if (sch) duckdb_free(sch);
+    if (tbl) duckdb_free(tbl);
+    if (errmsg) duckdb_free(errmsg);
+    return -1;
+}
+
+static int ducknng_method_upload_append_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    uint64_t session_id = 0;
+    const uint8_t *token = NULL;
+    size_t token_len = 0;
+    size_t quack_off = 0;
+    char *token_str = NULL;
+    ducknng_session *session = NULL;
+    int unauthorized = 0;
+    uint64_t rows_now = 0;
+    char *errmsg = NULL;
+    char control[96];
+    (void)method;
+    if (!svc || !req || !req->frame || !reply) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing upload_append context");
+        return -1;
+    }
+    if (ducknng_upload_append_parse_prefix(req->frame->payload, (size_t)req->frame->payload_len,
+            &session_id, &token, &token_len, &quack_off) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: upload_append payload must be [session_id][token_len][token][quack batch]");
+        return -1;
+    }
+    token_str = (char *)duckdb_malloc(token_len + 1);
+    if (!token_str) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: out of memory copying upload token");
+        return -1;
+    }
+    memcpy(token_str, token, token_len);
+    token_str[token_len] = '\0';
+    /* The prefix token is counted bytes but acquire_session compares a C
+     * string; an embedded NUL would truncate the comparison and let a byte
+     * sequence other than the counted token authenticate. Owner tokens never
+     * contain NUL, so reject any counted token that does. */
+    if (strlen(token_str) != token_len) {
+        duckdb_free(token_str);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: upload session token contains an embedded NUL");
+        return -1;
+    }
+    session = ducknng_service_acquire_session(svc, session_id, token_str, req->caller_identity, &unauthorized);
+    duckdb_free(token_str);
+    if (!session) {
+        ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
+            unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: upload session not found");
+        return -1;
+    }
+    ducknng_mutex_lock(&session->mu);
+    session->last_touch_ms = ducknng_now_ms();
+    if (!session->is_upload || !session->upload_appender_open) {
+        ducknng_mutex_unlock(&session->mu);
+        ducknng_session_release(session);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: session is not an open upload session");
+        return -1;
+    }
+    if (ducknng_quack_payload_append_to_appender(session->upload_appender,
+            req->frame->payload + quack_off, (size_t)req->frame->payload_len - quack_off,
+            (const char *const *)session->upload_col_names, session->upload_col_count,
+            &session->upload_rows, &errmsg) != 0) {
+        ducknng_mutex_unlock(&session->mu);
+        ducknng_session_release(session);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+            errmsg ? errmsg : "ducknng: upload_append failed to append the batch");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
+    rows_now = session->upload_rows;
+    ducknng_mutex_unlock(&session->mu);
+    ducknng_session_release(session);
+    snprintf(control, sizeof(control), "{\"state\":\"open\",\"rows\":%llu}", (unsigned long long)rows_now);
+    if (ducknng_json_reply(reply, "upload_append", 0, control) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: failed to build upload_append reply");
+        return -1;
+    }
+    return 0;
+}
+
+static int ducknng_method_upload_commit_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    ducknng_session_control_request control_req;
+    ducknng_session *session = NULL;
+    int unauthorized = 0;
+    uint64_t rows = 0;
+    char *errmsg = NULL;
+    char control[96];
+    (void)method;
+    memset(&control_req, 0, sizeof(control_req));
+    if (ducknng_parse_session_control_request(req, "upload_commit", &control_req, reply) != 0) {
+        return -1;
+    }
+    /* Confirm this is an upload session non-destructively before removing it, so
+     * a mistyped control request against a live query session's id+token cannot
+     * detach and destroy that other family's session. */
+    if (ducknng_session_check_kind(svc, control_req.session_id, control_req.session_token,
+            req->caller_identity, 1, reply) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        return -1;
+    }
+    session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
+        req->caller_identity, &unauthorized);
+    if (!session) {
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
+            unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: upload session not found");
+        return -1;
+    }
+    if (!session->is_upload) {
+        /* Raced from upload session to query session between the check and the
+         * remove is not possible (owner token is single-holder), but guard
+         * anyway: a non-upload session here is detached, so destroy it. */
+        ducknng_session_destroy(session);
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID, "ducknng: session is not an upload session");
+        return -1;
+    }
+    /* Take the session lock for the whole appender/commit critical section.
+     * upload_append holds this same lock while it appends, so a concurrent
+     * append either completes before this runs or, if it was waiting, observes
+     * the cleared upload_appender_open below and bails without touching the
+     * destroyed appender. The session is already detached, so no new append can
+     * acquire it. */
+    ducknng_mutex_lock(&session->mu);
+    rows = session->upload_rows;
+    /* Flush and close the appender (writing buffered rows into the transaction),
+     * then commit. Clearing the flags means teardown will not roll back. */
+    if (session->upload_appender_open) {
+        if (duckdb_appender_flush(session->upload_appender) == DuckDBError) {
+            duckdb_error_data ed = duckdb_appender_error_data(session->upload_appender);
+            const char *m = ed ? duckdb_error_data_message(ed) : NULL;
+            errmsg = ducknng_strdup(m && m[0] ? m : "ducknng: upload_commit failed to flush the appender");
+            if (ed) duckdb_destroy_error_data(&ed);
+            /* A failed flush invalidates the appender. Destroy and clear it under
+             * the lock (as the close-failure path does) so a concurrent
+             * upload_append waiting on session->mu observes upload_appender_open
+             * == 0 and bails instead of calling into the invalidated appender
+             * before teardown completes. Leave upload_txn_open set so
+             * ducknng_session_destroy rolls the transaction back. */
+            duckdb_appender_destroy(&session->upload_appender);
+            session->upload_appender_open = 0;
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_destroy(session);
+            ducknng_session_control_request_reset(&control_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR, errmsg);
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        /* Close the appender (flush intermediate states + finalize) and check
+         * the result BEFORE destroying it: destroy also finalizes and can fail
+         * on a deferred constraint violation, but it invalidates the error
+         * message, so close is the only place we can both detect the failure
+         * and recover its text. On failure, clear only the appender flag and
+         * leave upload_txn_open set so ducknng_session_destroy rolls the
+         * transaction back instead of committing a half-finalized upload. */
+        if (duckdb_appender_close(session->upload_appender) == DuckDBError) {
+            duckdb_error_data ed = duckdb_appender_error_data(session->upload_appender);
+            const char *m = ed ? duckdb_error_data_message(ed) : NULL;
+            errmsg = ducknng_strdup(m && m[0] ? m : "ducknng: upload_commit failed to close the appender");
+            if (ed) duckdb_destroy_error_data(&ed);
+            duckdb_appender_destroy(&session->upload_appender);
+            session->upload_appender_open = 0;
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_destroy(session);
+            ducknng_session_control_request_reset(&control_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                errmsg ? errmsg : "ducknng: upload_commit failed to close the appender");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        duckdb_appender_destroy(&session->upload_appender);
+        session->upload_appender_open = 0;
+    }
+    if (session->upload_txn_open && session->session_con) {
+        if (ducknng_upload_run_stmt(session->session_con, "COMMIT", &errmsg) != 0) {
+            /* Commit failed; roll back so nothing partially persists. */
+            char *rollback_err = NULL;
+            ducknng_upload_run_stmt(session->session_con, "ROLLBACK", &rollback_err);
+            if (rollback_err) duckdb_free(rollback_err);
+            session->upload_txn_open = 0;
+            ducknng_mutex_unlock(&session->mu);
+            ducknng_session_destroy(session);
+            ducknng_session_control_request_reset(&control_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                errmsg ? errmsg : "ducknng: upload_commit failed to commit the transaction");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        session->upload_txn_open = 0;
+    }
+    ducknng_mutex_unlock(&session->mu);
+    ducknng_session_destroy(session);
+    snprintf(control, sizeof(control), "{\"state\":\"committed\",\"rows\":%llu}", (unsigned long long)rows);
+    if (ducknng_json_reply(reply, "upload_commit", DUCKNNG_RPC_FLAG_SESSION_CLOSED, control) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: failed to build upload_commit reply");
+        return -1;
+    }
+    ducknng_session_control_request_reset(&control_req);
+    return 0;
+}
+
+static int ducknng_method_upload_abort_handler(ducknng_service *svc,
+    const ducknng_method_descriptor *method,
+    const ducknng_request_context *req,
+    ducknng_method_reply *reply) {
+    ducknng_session_control_request control_req;
+    ducknng_session *session = NULL;
+    int unauthorized = 0;
+    (void)method;
+    memset(&control_req, 0, sizeof(control_req));
+    if (ducknng_parse_session_control_request(req, "upload_abort", &control_req, reply) != 0) {
+        return -1;
+    }
+    if (ducknng_session_check_kind(svc, control_req.session_id, control_req.session_token,
+            req->caller_identity, 1, reply) != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        return -1;
+    }
+    session = ducknng_service_remove_session(svc, control_req.session_id, control_req.session_token,
+        req->caller_identity, &unauthorized);
+    if (!session) {
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, unauthorized ? DUCKNNG_STATUS_UNAUTHORIZED : DUCKNNG_STATUS_NOT_FOUND,
+            unauthorized ? ducknng_session_auth_error_message(unauthorized) : "ducknng: upload session not found");
+        return -1;
+    }
+    /* Teardown destroys the appender and rolls the transaction back. */
+    ducknng_session_destroy(session);
+    if (ducknng_json_reply(reply, "upload_abort", DUCKNNG_RPC_FLAG_SESSION_CLOSED,
+            "{\"state\":\"aborted\"}") != 0) {
+        ducknng_session_control_request_reset(&control_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: failed to build upload_abort reply");
+        return -1;
+    }
+    ducknng_session_control_request_reset(&control_req);
+    return 0;
+}
+
 const ducknng_method_descriptor ducknng_method_query_prepare = {
     "query_prepare",
     "query",
@@ -1145,6 +1765,118 @@ const ducknng_method_descriptor ducknng_method_query_prepare = {
     "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true}]}",
     "{\"mode\":\"schema_only\",\"note\":\"Arrow IPC stream with schema and 0 data batches\"}",
     ducknng_method_query_prepare_handler
+};
+
+const ducknng_method_descriptor ducknng_method_upload_open = {
+    "upload_open",
+    "upload",
+    "Open a client-to-server table upload session",
+    DUCKNNG_TRANSPORT_REQREP,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_RESPONSE_SESSION_OPEN,
+    DUCKNNG_SESSION_OPENS,
+    0,
+    DUCKNNG_RPC_FLAG_PAYLOAD_JSON | DUCKNNG_RPC_FLAG_SESSION_OPEN,
+    1024 * 1024,
+    1024 * 1024,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    "{\"fields\":[{\"name\":\"target_table\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"mode\",\"type\":\"utf8\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    ducknng_method_upload_open_handler
+};
+
+const ducknng_method_descriptor ducknng_method_upload_append = {
+    "upload_append",
+    "upload",
+    "Append one quack batch to an open upload session",
+    DUCKNNG_TRANSPORT_REQREP,
+    /* The request body is a custom upload-append frame (session prefix + an
+     * embedded quack batch), advertised with its own payload format so
+     * manifest-driven clients build the prefix (per request_schema_json below)
+     * rather than send a bare quack batch or assume no payload. */
+    DUCKNNG_PAYLOAD_UPLOAD_APPEND,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_RESPONSE_METADATA_ONLY,
+    DUCKNNG_SESSION_REQUIRES,
+    0,
+    DUCKNNG_RPC_FLAG_PAYLOAD_JSON,
+    16 * 1024 * 1024,
+    1024 * 1024,
+    0,
+    1,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    "{\"layout\":\"ducknng_upload_append\",\"prefix\":[{\"name\":\"session_id\",\"type\":\"uint64_le\"},{\"name\":\"token_len\",\"type\":\"uint16_le\"},{\"name\":\"token\",\"type\":\"bytes\"}],\"body\":\"ducknng_quack_batch\"}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"rows\",\"type\":\"uint64\",\"nullable\":false}]}",
+    ducknng_method_upload_append_handler
+};
+
+const ducknng_method_descriptor ducknng_method_upload_commit = {
+    "upload_commit",
+    "upload",
+    "Commit an upload session and return the appended row count",
+    DUCKNNG_TRANSPORT_REQREP,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_RESPONSE_METADATA_ONLY,
+    DUCKNNG_SESSION_CLOSES,
+    0,
+    DUCKNNG_RPC_FLAG_PAYLOAD_JSON | DUCKNNG_RPC_FLAG_SESSION_CLOSED,
+    1024 * 1024,
+    1024 * 1024,
+    0,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"rows\",\"type\":\"uint64\",\"nullable\":false}]}",
+    ducknng_method_upload_commit_handler
+};
+
+const ducknng_method_descriptor ducknng_method_upload_abort = {
+    "upload_abort",
+    "upload",
+    "Abort an upload session and roll back its transaction",
+    DUCKNNG_TRANSPORT_REQREP,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_PAYLOAD_JSON,
+    DUCKNNG_RESPONSE_METADATA_ONLY,
+    DUCKNNG_SESSION_CLOSES,
+    0,
+    DUCKNNG_RPC_FLAG_PAYLOAD_JSON | DUCKNNG_RPC_FLAG_SESSION_CLOSED,
+    1024 * 1024,
+    1024 * 1024,
+    0,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"state\",\"type\":\"string\",\"nullable\":false}]}",
+    ducknng_method_upload_abort_handler
 };
 
 const ducknng_method_descriptor ducknng_method_exec = {
@@ -1370,4 +2102,71 @@ int ducknng_register_exec_method_with_auth(ducknng_runtime *rt, int requires_aut
 
 int ducknng_register_exec_method(ducknng_runtime *rt, char **errmsg) {
     return ducknng_register_exec_method_with_auth(rt, 0, errmsg);
+}
+
+int ducknng_register_upload_methods_with_auth(ducknng_runtime *rt, int requires_auth, char **errmsg) {
+    const ducknng_method_descriptor *methods[] = {
+        &ducknng_method_upload_open,
+        &ducknng_method_upload_append,
+        &ducknng_method_upload_commit,
+        &ducknng_method_upload_abort
+    };
+    size_t i;
+    unsigned char present[sizeof(methods) / sizeof(methods[0])] = {0};
+    unsigned char orig_auth[sizeof(methods) / sizeof(methods[0])] = {0};
+    if (!rt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for upload method registration");
+        return 0;
+    }
+    /* Idempotent, atomic (re-)registration. First snapshot each method's
+     * original state -- whether it is already present, and its current auth flag
+     * -- BEFORE any fallible operation, so a failure at any later point can
+     * restore the original state exactly. Then register whichever methods are
+     * missing (handles a fresh registry, a full re-register / auth flip, and a
+     * partial family from an individual ducknng_unregister_method) and apply the
+     * requested auth policy to all four. On any failure -- e.g. an OOM in a
+     * register or an auth copy -- unregister the methods that were absent
+     * originally (we added them) and restore the original auth flag of the ones
+     * that were already present, so a failed call never leaves a partial family,
+     * unauthenticated methods, or a downgraded/half-applied auth state exposed.
+     * It never unregisters a method that was already present (which would bypass
+     * the open-session guard), and set_requires_auth is copy-on-write, so it
+     * never mutates the shared static descriptors. */
+    for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+        const ducknng_method_descriptor *m = ducknng_method_registry_find(&rt->registry,
+            (const uint8_t *)methods[i]->name, (uint32_t)strlen(methods[i]->name));
+        present[i] = m ? 1u : 0u;
+        orig_auth[i] = (m && m->requires_auth) ? 1u : 0u;
+    }
+    for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+        if (!present[i]) {
+            if (!ducknng_method_registry_register(&rt->registry, methods[i], errmsg)) {
+                goto rollback;
+            }
+        }
+    }
+    for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+        if (!ducknng_method_registry_set_requires_auth(&rt->registry, methods[i]->name,
+                requires_auth ? 1 : 0, errmsg)) {
+            goto rollback;
+        }
+    }
+    return 1;
+rollback:
+    for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+        if (!present[i]) {
+            /* Absent originally: remove it (a no-op if its own register failed). */
+            ducknng_method_registry_unregister(&rt->registry, methods[i]->name);
+        } else {
+            /* Present originally: restore its original auth flag (best-effort; a
+             * no-op unless this call actually flipped it). */
+            (void)ducknng_method_registry_set_requires_auth(&rt->registry,
+                methods[i]->name, orig_auth[i], NULL);
+        }
+    }
+    return 0;
+}
+
+int ducknng_register_upload_methods(ducknng_runtime *rt, char **errmsg) {
+    return ducknng_register_upload_methods_with_auth(rt, 0, errmsg);
 }

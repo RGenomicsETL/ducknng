@@ -262,6 +262,7 @@ const char *ducknng_payload_format_name(ducknng_payload_format value) {
         case DUCKNNG_PAYLOAD_JSON: return "json";
         case DUCKNNG_PAYLOAD_ARROW_IPC_STREAM: return "arrow_ipc_stream";
         case DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH: return "ducknng_quack_batch";
+        case DUCKNNG_PAYLOAD_UPLOAD_APPEND: return "ducknng_upload_append";
         default: return "unknown";
     }
 }

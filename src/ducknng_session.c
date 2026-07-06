@@ -264,6 +264,15 @@ void ducknng_session_destroy(ducknng_session *session) {
         duckdb_free(session->upload_target);
         session->upload_target = NULL;
     }
+    if (session->upload_col_names) {
+        idx_t ci;
+        for (ci = 0; ci < session->upload_col_count; ci++) {
+            if (session->upload_col_names[ci]) duckdb_free(session->upload_col_names[ci]);
+        }
+        duckdb_free(session->upload_col_names);
+        session->upload_col_names = NULL;
+        session->upload_col_count = 0;
+    }
     if (session->session_svc && session->session_pool_index != (size_t)-1) {
         ducknng_service_release_session_connection(session->session_svc, session->session_pool_index);
         session->session_pool_index = (size_t)-1;
@@ -536,6 +545,7 @@ static int ducknng_service_add_session_full(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
     duckdb_appender appender, int is_upload, const char *target,
+    char **col_names, idx_t col_count,
     const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
@@ -669,6 +679,8 @@ static int ducknng_service_add_session_full(ducknng_service *svc,
         session->upload_appender_open = 1;
         session->upload_txn_open = 1;
         session->upload_target = (target && target[0]) ? ducknng_strdup(target) : NULL;
+        session->upload_col_names = col_names;
+        session->upload_col_count = col_count;
     }
     svc->next_session_id++;
     svc->sessions[svc->session_count++] = session;
@@ -686,13 +698,13 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
     const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     return ducknng_service_add_session_full(svc, session_con, pool_index, stmt, pending,
-        NULL, 0, NULL, owner_identity, row_payload_format, fetch_batch_chunks,
+        NULL, 0, NULL, NULL, 0, owner_identity, row_payload_format, fetch_batch_chunks,
         out_session_id, out_owner_token, out_result_handle, errmsg);
 }
 
 int ducknng_service_add_upload_session(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index, duckdb_appender appender,
-    const char *target, const char *owner_identity,
+    const char *target, char **col_names, idx_t col_count, const char *owner_identity,
     uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     if (out_session_id) *out_session_id = 0;
     if (out_owner_token) *out_owner_token = NULL;
@@ -702,6 +714,6 @@ int ducknng_service_add_upload_session(ducknng_service *svc,
         return -1;
     }
     return ducknng_service_add_session_full(svc, session_con, pool_index, NULL, NULL,
-        appender, 1, target, owner_identity, 0, 0,
+        appender, 1, target, col_names, col_count, owner_identity, 0, 0,
         out_session_id, out_owner_token, out_result_handle, errmsg);
 }

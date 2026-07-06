@@ -780,6 +780,15 @@
       "examples": []
     },
     {
+      "name": "ducknng_register_upload_methods",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "register_upload_methods(require_auth)",
+      "returns": "BOOLEAN",
+      "description": "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
+      "examples": []
+    },
+    {
       "name": "ducknng_set_method_auth",
       "kind": "scalar",
       "category": "Method Registry",

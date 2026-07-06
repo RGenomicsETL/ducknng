@@ -137,6 +137,48 @@ static void ducknng_register_exec_method_scalar(duckdb_function_info info,
     }
 }
 
+static void ducknng_register_upload_methods_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    ducknng_sql_context *ctx;
+    bool *out;
+    char *errmsg = NULL;
+    idx_t count;
+    idx_t ncols;
+    idx_t row;
+
+    ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+
+    out = (bool *)duckdb_vector_get_data(output);
+    count = duckdb_data_chunk_get_size(input);
+    ncols = duckdb_data_chunk_get_column_count(input);
+
+    for (row = 0; row < count; row++) {
+        int requires_auth = 0;
+
+        if (ncols > 0) {
+            requires_auth = arg_bool(duckdb_data_chunk_get_vector(input, 0),
+                row, false) ? 1 : 0;
+        }
+
+        ducknng_mutex_lock(&ctx->rt->mu);
+        if (!ducknng_register_upload_methods_with_auth(ctx->rt, requires_auth, &errmsg)) {
+            ducknng_mutex_unlock(&ctx->rt->mu);
+            duckdb_scalar_function_set_error(info,
+                errmsg ? errmsg : "ducknng: failed to register upload methods");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        ducknng_mutex_unlock(&ctx->rt->mu);
+        out[row] = true;
+    }
+}
+
 static int ducknng_method_descriptor_sessionful(const ducknng_method_descriptor *method) {
     if (!method) return 0;
     return method->session_behavior != DUCKNNG_SESSION_STATELESS ||
@@ -436,6 +478,15 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
     }
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 1,
             ducknng_register_exec_method_scalar, ctx, register_exec_auth_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_upload_methods", 0,
+            ducknng_register_upload_methods_scalar, ctx, NULL, DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_upload_methods", 1,
+            ducknng_register_upload_methods_scalar, ctx, register_exec_auth_types,
             DUCKDB_TYPE_BOOLEAN)) {
         return 0;
     }

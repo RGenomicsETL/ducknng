@@ -363,6 +363,18 @@ static int ducknng_quack_read_string_dup(ducknng_quack_reader *r, char **out, ch
     }
     if (len) memcpy(dup, data, len);
     dup[len] = '\0';
+    /* This reader backs only identifier-like fields (column names, struct/union
+     * child names, enum labels) that are later compared with strcmp. An
+     * embedded NUL would make a counted name like "a\0x" compare equal to "a",
+     * bypassing the exact column-name match on the upload path (and corrupting
+     * nested-type equality). Reject it here: our encoder never emits NUL in
+     * these fields, so this only rejects malformed/hostile payloads. String
+     * and blob *data values* go through read_blob_view and keep their NULs. */
+    if (strlen(dup) != len) {
+        duckdb_free(dup);
+        ducknng_quack_set_error(errmsg, "ducknng: quack identifier contains an embedded NUL");
+        return -1;
+    }
     if (out) *out = dup;
     else duckdb_free(dup);
     return 0;
@@ -2143,7 +2155,9 @@ static void ducknng_quack_set_appender_error(duckdb_appender appender,
 }
 
 int ducknng_quack_payload_append_to_appender(duckdb_appender appender,
-    const uint8_t *payload, size_t payload_len, uint64_t *inout_rows, char **errmsg) {
+    const uint8_t *payload, size_t payload_len,
+    const char *const *expected_names, idx_t expected_name_count,
+    uint64_t *inout_rows, char **errmsg) {
     ducknng_quack_schema schema;
     duckdb_logical_type *types = NULL;
     duckdb_data_chunk chunk = NULL;
@@ -2180,6 +2194,25 @@ int ducknng_quack_payload_append_to_appender(duckdb_appender appender,
     if ((uint64_t)appender_cols != (uint64_t)schema.ncols) {
         ducknng_quack_set_error(errmsg, "ducknng: quack append column count does not match the target table");
         goto done;
+    }
+    /* When target column names are supplied, the batch column names must match
+     * them exactly and in order. DuckDB's appender appends by ordinal, so
+     * without this a same-typed but differently-named/ordered batch (e.g.
+     * target (a,b) with batch (b,a)) would silently write values into the wrong
+     * columns. */
+    if (expected_names) {
+        if ((uint64_t)expected_name_count != (uint64_t)schema.ncols) {
+            ducknng_quack_set_error(errmsg, "ducknng: quack append column count does not match the target table");
+            goto done;
+        }
+        for (i = 0; i < schema.ncols; i++) {
+            const char *batch_name = schema.cols[i].name ? schema.cols[i].name : "";
+            const char *want = expected_names[i] ? expected_names[i] : "";
+            if (strcmp(batch_name, want) != 0) {
+                ducknng_quack_set_error(errmsg, "ducknng: quack append column names do not match the target table");
+                goto done;
+            }
+        }
     }
     types = (duckdb_logical_type *)duckdb_malloc(sizeof(*types) * (size_t)schema.ncols);
     if (!types) {
