@@ -1,5 +1,6 @@
 #pragma once
 #include "ducknng_nng_compat.h"
+#include "ducknng_transport.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -64,6 +65,13 @@ typedef struct ducknng_net_backend {
 
 /* The build-target backend; never NULL after extension load. */
 const ducknng_net_backend *ducknng_net_backend_get(void);
+
+/* Whether the active backend reaches a URL of this scheme through the frame
+ * carrier (return 1) rather than an nng socket (return 0). HTTP/HTTPS are always
+ * carrier; ws/wss are carrier only on the browser backend (no nng). Shared
+ * client dispatch routes on this instead of on ducknng_transport_url_is_http so
+ * the browser can carry ducknng frames over ws/wss. */
+int ducknng_net_backend_carrier_scheme(ducknng_transport_scheme scheme);
 
 /* All build targets' capability descriptors, as data, in every build; the
  * docs matrix and conformance harness render from this instead of prose. */

@@ -1,4 +1,5 @@
 #include "ducknng_sql_api.h"
+#include "ducknng_net_backend.h"
 #include "ducknng_ipc_in.h"
 #include "ducknng_ipc_out.h"
 #include "ducknng_http_compat.h"
@@ -647,7 +648,7 @@ static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int 
         nng_msg_free(req);
         return NULL;
     }
-    if (ducknng_transport_url_is_http(&parsed)) {
+    if (ducknng_net_backend_carrier_scheme(parsed.scheme)) {
         if (ducknng_http_frame_transact(url, (const uint8_t *)nng_msg_body(req), nng_msg_len(req),
                 timeout_ms, tls_opts, &reply_frame, &reply_frame_len, errmsg) != 0) {
             nng_msg_free(req);
@@ -804,7 +805,7 @@ static nng_msg *ducknng_query_rpc_method_roundtrip(ducknng_query_rpc_bind_data *
     }
     req = ducknng_client_method_request(method_name, payload, payload_len, errmsg);
     if (!req) return NULL;
-    if (ducknng_transport_url_is_http(&bind->transport)) {
+    if (ducknng_net_backend_carrier_scheme(bind->transport.scheme)) {
         if (!bind->http_client && ducknng_http_frame_client_open(bind->url, tls_opts,
                 &bind->http_client, errmsg) != 0) {
             nng_msg_free(req);

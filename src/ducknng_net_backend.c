@@ -105,6 +105,26 @@ const ducknng_net_backend *ducknng_net_backend_get(void) {
     return &ducknng_active_backend;
 }
 
+int ducknng_net_backend_carrier_scheme(ducknng_transport_scheme scheme) {
+    const ducknng_net_caps *caps = ducknng_active_capabilities();
+    switch (scheme) {
+    case DUCKNNG_TRANSPORT_SCHEME_HTTP:
+    case DUCKNNG_TRANSPORT_SCHEME_HTTPS:
+        /* HTTP always rides the frame carrier on every backend. */
+        return 1;
+    case DUCKNNG_TRANSPORT_SCHEME_WS:
+    case DUCKNNG_TRANSPORT_SCHEME_WSS:
+        /* ws/wss rides the frame carrier only on a backend that has no nng
+         * transport at all (the browser: tcp/ipc/tls_tcp are unsupported there).
+         * Natively, ws/wss goes through an nng socket. This keeps the shared
+         * client dispatch data-driven instead of forking on __EMSCRIPTEN__. */
+        return caps->tcp == DUCKNNG_NET_CAP_UNSUPPORTED &&
+               caps->websocket != DUCKNNG_NET_CAP_UNSUPPORTED;
+    default:
+        return 0;
+    }
+}
+
 const char *ducknng_net_cap_name(ducknng_net_cap cap) {
     switch (cap) {
     case DUCKNNG_NET_CAP_SUPPORTED: return "supported";
