@@ -2274,6 +2274,18 @@ static uint8_t *ducknng_upload_append_body(uint64_t session_id, const char *toke
  * timeout. HTTP applies it per transact, so a single constant is correct there too. */
 #define DUCKNNG_UPLOAD_TIMEOUT_MS 30000
 
+/* Batch several chunks per upload_append to cut roundtrips. The per-frame chunk
+ * count adapts from the observed bytes/chunk so each frame targets ~4 MiB and
+ * stays well under the server's 16 MiB upload_append max_request_bytes for any
+ * row width (wide rows shrink the count; a hard cap bounds narrow-row frames). */
+#define DUCKNNG_UPLOAD_APPEND_TARGET_BYTES (4u * 1024u * 1024u)
+#define DUCKNNG_UPLOAD_APPEND_MAX_CHUNKS 32u
+/* Hard per-frame cap (prefix + quack body), with margin under the server's
+ * 16 MiB upload_append max_request_bytes. The adaptive estimate can undershoot
+ * when later chunks are much wider than earlier ones, so a batch exceeding this
+ * is re-encoded with a halved chunk count before sending. */
+#define DUCKNNG_UPLOAD_APPEND_MAX_BYTES (14u * 1024u * 1024u)
+
 /* v1 upload targets are simple [[catalog.]schema.]table identifiers. Mirror the
  * server-side parser (ducknng_upload_split_target/ident_ok) client-side so a
  * malformed target fails fast -- before source_query runs -- rather than after,
@@ -2436,23 +2448,58 @@ static int ducknng_upload_table_run(ducknng_upload_table_bind_data *ub, const ch
     duckdb_free(reply_json); reply_json = NULL;
     nng_msg_free(resp); resp = NULL;
 
-    for (chunk_index = 0;;) {
-        uint8_t *qbytes = NULL;
-        size_t qlen = 0;
-        int has_chunk = 0;
-        uint64_t running = 0;
-        if (ducknng_result_materialized_chunks_to_quack_payload(result, &chunk_index, 1, 1,
-                &qbytes, &qlen, &has_chunk, errmsg) != 0)
-            goto do_abort;
-        if (!has_chunk) { if (qbytes) duckdb_free(qbytes); break; }
-        if (ducknng_upload_append_one(t, qbytes, qlen, tls_opts, &running, errmsg) != 0) {
+    {
+        /* Adaptive chunk batching: start at one chunk, then size the next frame
+         * from the observed bytes/chunk so each upload_append targets ~4 MiB and
+         * stays under the server's 16 MiB max_request_bytes for any row width. */
+        idx_t batch_chunks = 1;
+        size_t token_len = t->session_token ? strlen(t->session_token) : 0;
+        for (chunk_index = 0;;) {
+            uint8_t *qbytes = NULL;
+            size_t qlen = 0;
+            int has_chunk = 0;
+            uint64_t running = 0;
+            idx_t before = chunk_index;
+            idx_t n_in_batch;
+            /* Encode a batch, shrinking the chunk count and re-encoding if the
+             * framed body (prefix + quack) would exceed the server's limit -- the
+             * adaptive estimate can undershoot when later chunks are far wider
+             * than earlier ones. A single chunk that still exceeds it is sent as
+             * is (an inherent per-chunk limit the server reports, no worse than
+             * the pre-batching one-chunk-per-frame behavior). */
+            for (;;) {
+                chunk_index = before;
+                if (ducknng_result_materialized_chunks_to_quack_payload(result, &chunk_index,
+                        (uint64_t)batch_chunks, 1, &qbytes, &qlen, &has_chunk, errmsg) != 0)
+                    goto do_abort;
+                if (!has_chunk) break;
+                if (batch_chunks > 1 &&
+                    (uint64_t)qlen + 10u + (uint64_t)token_len > DUCKNNG_UPLOAD_APPEND_MAX_BYTES) {
+                    duckdb_free(qbytes);
+                    qbytes = NULL;
+                    batch_chunks /= 2;
+                    continue;
+                }
+                break;
+            }
+            if (!has_chunk) { if (qbytes) duckdb_free(qbytes); break; }
+            if (ducknng_upload_append_one(t, qbytes, qlen, tls_opts, &running, errmsg) != 0) {
+                duckdb_free(qbytes);
+                goto do_abort;
+            }
+            n_in_batch = chunk_index - before;
+            if (n_in_batch > 0 && qlen > 0) {
+                size_t per = qlen / (size_t)n_in_batch;
+                size_t want = per ? (DUCKNNG_UPLOAD_APPEND_TARGET_BYTES / per) : DUCKNNG_UPLOAD_APPEND_MAX_CHUNKS;
+                if (want < 1) want = 1;
+                if (want > DUCKNNG_UPLOAD_APPEND_MAX_CHUNKS) want = DUCKNNG_UPLOAD_APPEND_MAX_CHUNKS;
+                batch_chunks = (idx_t)want;
+            }
             duckdb_free(qbytes);
-            goto do_abort;
+            ub->rows_uploaded = running;
+            ub->bytes_uploaded += (uint64_t)qlen;
+            sent_any = 1;
         }
-        duckdb_free(qbytes);
-        ub->rows_uploaded = running;
-        ub->bytes_uploaded += (uint64_t)qlen;
-        sent_any = 1;
     }
     if (!sent_any) {
         /* A zero-row source still sends one schema-only batch so the server
