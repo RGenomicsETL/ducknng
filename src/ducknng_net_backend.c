@@ -40,7 +40,9 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
         .tls_tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
-        .websocket = DUCKNNG_NET_CAP_UNSUPPORTED,
+        /* ws/wss ride the persistent WebSocket frame carrier (async only), the
+         * browser-native path to the server's ducknng-frame-over-WS endpoint. */
+        .websocket = DUCKNNG_NET_CAP_SUPPORTED,
         /* AIO rides the fetch completion-queue bridge: handles stay pending
          * until the worker event loop settles them, timeouts arm a JS timer,
          * and cancel aborts the controller. The synchronous ncurl path still
@@ -58,7 +60,8 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
         .tls_tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
-        .websocket = DUCKNNG_NET_CAP_UNSUPPORTED,
+        /* ws/wss ride the persistent WebSocket frame carrier (async only). */
+        .websocket = DUCKNNG_NET_CAP_SUPPORTED,
         .async_is_real = 1,
         .honors_timeout = 1,
         .honors_cancel = 1,

@@ -1,4 +1,5 @@
 #include "ducknng_sql_shared.h"
+#include "ducknng_net_backend.h"
 #include "ducknng_wasm_fetch_bridge.h"
 #include "ducknng_http_compat.h"
 #include "ducknng_ipc_out.h"
@@ -793,6 +794,53 @@ static int ducknng_client_add_wasm_http_ncurl_aio(ducknng_sql_context *ctx,
     if (out_aio_id) *out_aio_id = slot->aio_id;
     return 0;
 }
+
+static int ducknng_client_add_wasm_ws_request_aio(ducknng_sql_context *ctx,
+    const char *url, int32_t timeout_ms, const ducknng_tls_opts *tls_opts,
+    nng_msg *req, uint64_t *out_aio_id, char **errmsg) {
+    ducknng_client_aio *slot = NULL;
+    char *launch_err = NULL;
+    uint64_t op_id = 0;
+    if (out_aio_id) *out_aio_id = 0;
+    if (!ctx || !ctx->rt || !url || !req) {
+        if (req) nng_msg_free(req);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing browser WebSocket aio request state");
+        return -1;
+    }
+    if (ducknng_http_tls_requested(tls_opts)) {
+        nng_msg_free(req);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; wss uses browser-managed TLS");
+        return -1;
+    }
+    slot = ducknng_client_aio_alloc_terminal_slot(ctx->rt, timeout_ms, errmsg);
+    if (!slot) {
+        nng_msg_free(req);
+        return -1;
+    }
+    slot->kind = DUCKNNG_CLIENT_AIO_KIND_REQUEST;
+    slot->phase = DUCKNNG_CLIENT_AIO_PHASE_HTTP;
+    op_id = ducknng_wasm_ws_launch(url, (const uint8_t *)nng_msg_body(req), nng_msg_len(req),
+        timeout_ms, &launch_err);
+    nng_msg_free(req);
+    if (op_id == 0) {
+        /* Launch failures stay terminal error handles, matching the fetch
+         * bridge's launch-error semantics. */
+        slot->state = DUCKNNG_CLIENT_AIO_ERROR;
+        slot->finished_ms = ducknng_now_ms();
+        slot->error = launch_err ? launch_err : ducknng_strdup("ducknng: browser WebSocket launch failed");
+        launch_err = NULL;
+    } else {
+        slot->wasm_op_id = op_id;
+    }
+    if (launch_err) duckdb_free(launch_err);
+    if (ducknng_runtime_add_client_aio(ctx->rt, slot, errmsg) != 0) {
+        ducknng_client_aio_destroy(slot);
+        return -1;
+    }
+    if (out_aio_id) *out_aio_id = slot->aio_id;
+    return 0;
+}
 #endif
 
 static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const char *url,
@@ -818,11 +866,21 @@ static int ducknng_client_launch_url_request_aio(ducknng_sql_context *ctx, const
         return -1;
     }
     ducknng_wasm_trace("launch_url_request_aio: transport dispatch begin");
-    if (ducknng_transport_url_is_http(&parsed)) {
+    if (ducknng_net_backend_carrier_scheme(parsed.scheme)) {
 #ifdef __EMSCRIPTEN__
+        /* Browser: ws/wss ride the persistent WebSocket frame carrier; http/https
+         * ride the fetch frame carrier. carrier_scheme() only returns true for
+         * ws/wss on the browser backend (no nng), so this is browser-only. */
+        if (parsed.scheme == DUCKNNG_TRANSPORT_SCHEME_WS ||
+            parsed.scheme == DUCKNNG_TRANSPORT_SCHEME_WSS) {
+            return ducknng_client_add_wasm_ws_request_aio(ctx, url, timeout_ms,
+                tls_opts, req, out_aio_id, errmsg);
+        }
         return ducknng_client_add_wasm_http_request_aio(ctx, url, timeout_ms,
             tls_opts, req, out_aio_id, errmsg);
 #endif
+        /* Native: carrier_scheme() is true only for http/https here (ws/wss go
+         * through the nng SP socket below), so this is the HTTP frame carrier. */
         slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
         if (!slot) {
             nng_msg_free(req);

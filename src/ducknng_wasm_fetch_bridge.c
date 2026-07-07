@@ -125,6 +125,11 @@ EM_JS(void, ducknng_js_fetch_abort, (int id), {
     if (!op || op.state !== 0) return;
     op.state = 3;
     if (op.timer) { clearTimeout(op.timer); op.timer = 0; }
+    // A WebSocket op shares a persistent socket whose replies are matched by
+    // FIFO order (issue #11); cancelling one op would misalign the rest, so tear
+    // the whole socket down. Module.ducknngWsFailActor is installed by the ws
+    // bridge and only reachable for op.ws records.
+    if (op.ws) { if (Module.ducknngWsFailActor) Module.ducknngWsFailActor(op.actorUrl, "ducknng: aio cancelled"); return; }
     try { op.ctrl.abort(); } catch (e) {}
 });
 
@@ -133,6 +138,11 @@ EM_JS(void, ducknng_js_fetch_forget, (int id), {
     var op = Module.ducknngFetchOps.get(id);
     if (!op) return;
     if (op.timer) { clearTimeout(op.timer); op.timer = 0; }
+    if (op.ws) {
+        if (op.state === 0 && Module.ducknngWsFailActor) Module.ducknngWsFailActor(op.actorUrl, "ducknng: aio forgotten");
+        Module.ducknngFetchOps.delete(id);
+        return;
+    }
     if (op.state === 0) { try { op.ctrl.abort(); } catch (e) {} }
     Module.ducknngFetchOps.delete(id);
 });

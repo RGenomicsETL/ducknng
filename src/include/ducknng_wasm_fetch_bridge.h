@@ -37,6 +37,14 @@ uint64_t ducknng_wasm_fetch_launch(const char *url, const char *method,
     const char *headers_json, const uint8_t *body, size_t body_len,
     int timeout_ms, char **errmsg);
 
+/* Send one ducknng frame over a persistent browser WebSocket to url (ws:// or
+ * wss://). Returns a non-zero op id, or 0 with *errmsg set. The frame bytes are
+ * copied on the JS side before returning. The reply settles the same op table
+ * the fetch bridge uses, so ducknng_wasm_fetch_pump() completes the slot as a
+ * KIND_REQUEST reply. timeout_ms <= 0 means no timeout. */
+uint64_t ducknng_wasm_ws_launch(const char *url, const uint8_t *frame,
+    size_t frame_len, int timeout_ms, char **errmsg);
+
 /* If the slot's op has settled, complete the slot in place (status, headers,
  * body / reply_msg, error, state, finished_ms) and forget the op. Returns 1
  * when the slot changed state, 0 otherwise. Call with rt->mu held, like the
@@ -61,6 +69,12 @@ static inline uint64_t ducknng_wasm_fetch_launch(const char *url, const char *me
     int timeout_ms, char **errmsg) {
     (void)url; (void)method; (void)headers_json; (void)body; (void)body_len;
     (void)timeout_ms; (void)errmsg;
+    return 0;
+}
+
+static inline uint64_t ducknng_wasm_ws_launch(const char *url, const uint8_t *frame,
+    size_t frame_len, int timeout_ms, char **errmsg) {
+    (void)url; (void)frame; (void)frame_len; (void)timeout_ms; (void)errmsg;
     return 0;
 }
 
