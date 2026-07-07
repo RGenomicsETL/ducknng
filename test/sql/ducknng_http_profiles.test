@@ -54,6 +54,24 @@ SELECT CASE WHEN ducknng_register_http_route(
 ----
 1
 
+statement ok
+SET VARIABLE http_profile_rotate_sql =
+'SELECT * FROM ducknng_http_text(
+   200,
+   CASE
+     WHEN ducknng_http_header(''Authorization'') = ''Bearer rotate-v1'' THEN ''v1''
+     WHEN ducknng_http_header(''Authorization'') = ''Bearer rotate-v2'' THEN ''v2''
+     ELSE ''denied''
+   END
+ )'
+
+query I
+SELECT CASE WHEN ducknng_register_http_route(
+  'http_profile_api', 'GET', '/auth/rotate', getvariable('http_profile_rotate_sql')::VARCHAR
+) THEN 1 ELSE 0 END
+----
+1
+
 query I
 SELECT CASE WHEN ducknng_register_http_profile(
   'profile-main',
@@ -181,6 +199,48 @@ FROM ducknng_ncurl(
 ----
 0	1
 
+# The same collision policy applies to the parsed-table helper.
+statement error
+SELECT * FROM ducknng_ncurl_table(
+  getvariable('http_profile_base')::VARCHAR || '/auth/data.json',
+  'GET',
+  '[{"name":"authorization","value":"Bearer attacker"}]',
+  NULL,
+  2000,
+  0::UBIGINT,
+  'profile-main'
+)
+----
+collides
+
+# The aio helper records the same fail-closed collision before launch.
+statement ok
+CREATE TEMP TABLE http_profile_collision_aio AS
+SELECT ducknng_ncurl_aio(
+  getvariable('http_profile_base')::VARCHAR || '/auth/check',
+  'GET',
+  '[{"name":"Authorization","value":"Bearer attacker"}]',
+  NULL,
+  2000,
+  0::UBIGINT,
+  'profile-main'
+) AS aio_id
+
+query II
+SELECT ok, position('collides' IN error) > 0
+FROM ducknng_ncurl_aio_collect((SELECT list_value(aio_id) FROM http_profile_collision_aio), 2000)
+----
+0	1
+
+query I
+SELECT CASE WHEN ducknng_aio_drop(aio_id) THEN 1 ELSE 0 END
+FROM http_profile_collision_aio
+----
+1
+
+statement ok
+DROP TABLE http_profile_collision_aio
+
 # Introspection is redacted: it reports the profile id, scope, version, expiry,
 # and auth header names but not the raw credential value.
 query TTTITTTIII
@@ -193,6 +253,79 @@ FROM ducknng_list_http_profiles()
 WHERE profile_id = 'profile-main'
 ----
 profile-main	http	127.0.0.1	0	/auth	GET	["Authorization"]	1	0	1
+
+# Upserting the same profile id is credential rotation: the version advances,
+# the creation timestamp is stable, introspection stays redacted, and new
+# requests use the replacement credential.
+query I
+SELECT CASE WHEN ducknng_register_http_profile(
+  'profile-rotate',
+  'http',
+  '127.0.0.1',
+  NULL::INTEGER,
+  '/auth/rotate',
+  'GET',
+  false,
+  'Authorization',
+  'Bearer rotate-v1'
+) THEN 1 ELSE 0 END
+----
+1
+
+query T
+SELECT body_text
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/auth/rotate',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-rotate'
+)
+----
+v1
+
+statement ok
+CREATE TEMP TABLE http_profile_rotate_before AS
+SELECT version, created_ms, updated_ms
+FROM ducknng_list_http_profiles()
+WHERE profile_id = 'profile-rotate'
+
+query I
+SELECT CASE WHEN ducknng_register_http_profile(
+  'profile-rotate',
+  'http',
+  '127.0.0.1',
+  NULL::INTEGER,
+  '/auth/rotate',
+  'GET',
+  false,
+  'Authorization',
+  'Bearer rotate-v2'
+) THEN 1 ELSE 0 END
+----
+1
+
+query IIIII
+SELECT p.version > b.version,
+       p.created_ms = b.created_ms,
+       p.updated_ms >= b.updated_ms,
+       position('rotate-v' IN (
+         p.profile_id || p.scheme || p.host || p.path_prefix || p.method || p.auth_header_names_json
+       )) = 0,
+       coalesce(p.allow_subjects_json, 'unrestricted') = 'unrestricted'
+FROM ducknng_list_http_profiles() p, http_profile_rotate_before b
+WHERE p.profile_id = 'profile-rotate'
+----
+1	1	1	1	1
+
+query T
+SELECT body_text
+FROM ducknng_ncurl(
+  getvariable('http_profile_base')::VARCHAR || '/auth/rotate',
+  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-rotate'
+)
+----
+v2
+
+statement ok
+DROP TABLE http_profile_rotate_before
 
 # --- Execution-subject admission ---
 
@@ -329,7 +462,7 @@ SELECT CASE WHEN ducknng_register_http_route(
 1
 
 query II
-SELECT ok, body_text = 'profile-alice:withheld,profile-main:withheld'
+SELECT ok, body_text = 'profile-alice:withheld,profile-main:withheld,profile-rotate:withheld'
 FROM ducknng_ncurl(
   getvariable('http_profile_proxy_base')::VARCHAR || '/profiles',
   'GET', NULL, NULL, 4000, 0::UBIGINT
@@ -357,7 +490,7 @@ FROM ducknng_ncurl(
 
 # Under the bob subject the restricted profile disappears from the listing.
 query II
-SELECT ok, body_text = 'profile-main:withheld'
+SELECT ok, body_text = 'profile-main:withheld,profile-rotate:withheld'
 FROM ducknng_ncurl(
   getvariable('http_profile_proxy_base')::VARCHAR || '/profiles',
   'GET', NULL, NULL, 4000, 0::UBIGINT
@@ -479,6 +612,11 @@ SELECT CASE WHEN ducknng_drop_http_profile('profile-alice') THEN 1 ELSE 0 END
 
 query I
 SELECT CASE WHEN ducknng_drop_http_profile('profile-main') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_drop_http_profile('profile-rotate') THEN 1 ELSE 0 END
 ----
 1
 
