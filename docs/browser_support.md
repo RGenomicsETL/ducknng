@@ -177,6 +177,27 @@ HTTP POST, and, later, browser WebSocket. The RPC method layer in
 - The frame wire format stays transport-independent, which is already the
   implicit contract the HTTP fallback relies on.
 
+**Status (#11): implemented.** Tracing the wire showed this needed a server half
+too, not just a client binding: native `ws://` speaks NNG SP-over-WebSocket
+(subprotocol, SP stream framing, req/rep backtrace header), which a browser JS
+`WebSocket` cannot reasonably reproduce. So the carrier is *ducknng-frame-over-
+WebSocket*, symmetric with the HTTP POST carrier, with both halves:
+
+- **Server** (`src/ducknng_ws_frame.c`): a raw-WebSocket (message-mode) nng
+  stream listener beside the HTTP RPC mount, sharing the same nng HTTP server at
+  a `/ws` sibling path (`ws://host:port/<path>/ws`, `wss://` when the mount is
+  TLS). Each connection reads one binary WS message as a ducknng frame and
+  dispatches it through `ducknng_service_authorize_and_dispatch_frame()` — the
+  same admission/authorization/accounting/session gate the HTTP handler now also
+  uses — then replies with one binary WS message.
+- **Client** (`src/ducknng_wasm_ws_bridge.c`): a `WsFrameCarrier` keeping one
+  persistent JS `WebSocket` per URL, riding the step-4 completion-queue op table
+  and pump. Replies are correlated **FIFO per socket** (the server is serial per
+  connection and the frame carries no request id). It is **async-only**: browsers
+  have no synchronous WebSocket receive, so the synchronous RPC path rejects
+  `ws://`/`wss://` and points callers at `*_rpc_aio`. `wss://` is browser-managed
+  TLS. Non-goal: browser SP-over-WS.
+
 ### 5. One conformance suite, gated by capabilities
 
 Replace the growing `--probes=load,inproc,http-sync,http-aio,...` enumeration

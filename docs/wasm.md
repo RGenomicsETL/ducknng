@@ -330,7 +330,7 @@ a stricter statement than the contract above:
 | `duckdb-wasm` `wasm_threads`: browser HTTP probes | Diagnostic only. Individual `load,http-sync,http-aio` runs can pass; repeated runs have exposed extension-load and DuckDB-wasm JSON autoload failures. |
 | Browser HTTPS remote-origin HTTP | Local HTTPS CORS is proven in Chromium; a durable public remote-origin target is not part of the release gate. |
 | Browser `ipc://`, raw `tcp://`, and native POSIX-style `tls+tcp://` | Unsupported by the browser sandbox. |
-| Browser `ws://` / `wss://` | Not implemented; requires a browser WebSocket adapter and async/AIO contract work. |
+| Browser `ws://` / `wss://` | Implemented as an async-only ducknng-frame-over-WebSocket carrier (#11): a persistent JS `WebSocket` per URL rides the fetch completion-queue op table + pump, correlating replies FIFO; it talks to the server's raw-WebSocket frame endpoint that sits beside the HTTP RPC mount. `wss://` uses browser-managed TLS. Synchronous `ws://` RPC is rejected (no synchronous WebSocket receive); use the `*_rpc_aio` path. `caps.websocket = supported`. Headless-Chromium conformance is the release gate. |
 | webR / R package wasm | Separate future runtime; no support should be inferred from `duckdb-wasm`. |
 
 Do not infer webR support from duckdb-wasm support. They are different runtimes
