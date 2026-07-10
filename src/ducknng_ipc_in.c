@@ -57,6 +57,13 @@ static int ducknng_decode_parameter_struct(const struct ArrowSchema *schema,
             "ducknng: SQL parameter count exceeds the protocol limit");
         return -1;
     }
+    if (params_view->n_children != params_schema->n_children ||
+        (params_schema->n_children > 0 &&
+            (!params_schema->children || !params_view->children))) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: params schema and array children do not match");
+        return -1;
+    }
     count = (idx_t)params_schema->n_children;
     values = (duckdb_value *)duckdb_malloc(sizeof(*values) *
         (size_t)(count > 0 ? count : 1));
