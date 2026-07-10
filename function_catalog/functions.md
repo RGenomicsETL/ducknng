@@ -30,7 +30,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_set_method_auth` | scalar | `name, requires_auth` | `BOOLEAN` | Set descriptor-level verified-peer-identity authorization for a registered RPC method. |
 | `ducknng_unregister_method` | scalar | `name` | `BOOLEAN` | Unregister a method from the runtime registry. |
 | `ducknng_unregister_family` | scalar | `family` | `UBIGINT` | Unregister all methods in a family and return the number removed. |
-| `ducknng_list_methods` | table |  | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, disabled BOOLEAN)` | List the currently registered RPC methods in the runtime registry. |
+| `ducknng_list_methods` | table |  | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry. |
 
 ## Primitive Transport
 
@@ -158,8 +158,12 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_get_rpc_manifest` | table | `url, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)` | Request the RPC manifest and return a structured result row. |
 | `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id` | `BLOB` | Request the RPC manifest and return the raw reply frame as BLOB. |
 | `ducknng_run_rpc` | table | `url, sql, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row. |
+| `ducknng_run_rpc_params` | table | `url, sql, params, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute one parameterized metadata-oriented exec RPC and return a structured result row. |
 | `ducknng_run_rpc_raw` | scalar | `url, sql, tls_config_id` | `BLOB` | Execute the exec RPC and return the raw reply frame as BLOB. |
 | `ducknng_query_rpc` | table | `url, sql, tls_config_id` | `table` | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table. |
+| `ducknng_query_rpc_params` | table | `url, sql, params, tls_config_id` | `table` | Execute a parameterized row query through the session family and expose its Arrow rows as a DuckDB table. |
+| `ducknng_prepare_query` | table | `url, sql, tls_config_id` | `table (zero rows with the prepared remote schema)` | Prepare exactly one remote SQL statement without executing it and expose its result schema. |
+| `ducknng_prepare_query_params` | table | `url, sql, params, tls_config_id` | `table (zero rows with the prepared remote schema)` | Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema. |
 
 ## RPC Session
 

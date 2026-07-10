@@ -4,6 +4,11 @@
 
 Community-extension submission to duckdb/community-extensions (#1904).
 
+- Added Arrow-encoded positional SQL parameters for `exec`, `query_open`, and `query_prepare`. Parameters are a typed `STRUCT`, are bound through DuckDB rather than interpolated into SQL text, support nested values and nulls, and are capped at 65,535 values.
+- Added `ducknng_query_rpc_params(...)`, `ducknng_run_rpc_params(...)`, `ducknng_prepare_query(...)`, and `ducknng_prepare_query_params(...)`. Remote prepare is schema-only and rejects multiple statements before execution. Fixed-schema run helpers send during scan, so `EXPLAIN` does not execute a remote write; network execution still does not promise exactly-once delivery.
+- Expanded `ducknng_list_methods()` to expose the complete registry policy, including session, mutation, idempotence, flags, limits, and version metadata. `query_open` now reports its mutation capability truthfully.
+- Made the runtime manifest and all descriptor generators report `0.1.2` consistently.
+- Hardened capability discovery and parameter decoding: the manifest lists only active parameter-capable methods, mismatched Arrow child counts fail before indexing, and descriptor byte limits serialize portably.
 - Vendored NNG 1.11.0 transport layer: inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://.
 - HTTP carrier over http:// and https:// via NNG HTTP framework.
 - Scoped outbound HTTP profiles for `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, and `ducknng_ncurl_table(...)`: profile credentials are resolved inside the HTTP client path after fail-closed scheme/host/port/segment-aware-path/method/TLS checks, caller auth-header collisions and control-character header values are rejected, Unix-epoch expiry is enforced consistently across platforms, and `ducknng_list_http_profiles()` redacts secret values.
