@@ -383,6 +383,48 @@ static int ducknng_session_check_kind(ducknng_service *svc, uint64_t session_id,
     return 0;
 }
 
+static int ducknng_bind_sql_parameters(duckdb_prepared_statement stmt,
+    duckdb_value *parameters, idx_t parameter_count, char **errmsg) {
+    idx_t expected;
+    idx_t i;
+    char detail[192];
+    if (!stmt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing prepared statement parameter context");
+        return -1;
+    }
+    expected = duckdb_nparams(stmt);
+    if (expected != parameter_count) {
+        snprintf(detail, sizeof(detail),
+            "ducknng: SQL expects %llu parameter(s), request supplied %llu",
+            (unsigned long long)expected,
+            (unsigned long long)parameter_count);
+        if (errmsg) *errmsg = ducknng_strdup(detail);
+        return -1;
+    }
+    for (i = 0; i < expected; i++) {
+        if (!parameters || !parameters[i] ||
+            duckdb_bind_value(stmt, i + 1, parameters[i]) == DuckDBError) {
+            snprintf(detail, sizeof(detail),
+                "ducknng: failed to bind SQL parameter %llu",
+                (unsigned long long)(i + 1));
+            if (errmsg) *errmsg = ducknng_strdup(detail);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int ducknng_bind_query_parameters(duckdb_prepared_statement stmt,
+    const ducknng_query_open_request *request, char **errmsg) {
+    if (!request) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: missing prepared statement parameter context");
+        return -1;
+    }
+    return ducknng_bind_sql_parameters(stmt, request->parameters,
+        request->parameter_count, errmsg);
+}
+
 static int ducknng_method_handshake_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
@@ -451,7 +493,7 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     if (!ducknng_json_append_string(&response, &len, &cap,
             ducknng_session_row_payload_format_name(row_payload_format))) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap,
-            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true}}")) goto oom;
+            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true},\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[\"exec\",\"query_open\",\"query_prepare\"],\"max_parameters\":65535}}")) goto oom;
     if (correlation_id) {
         if (!ducknng_json_append_text(&response, &len, &cap, ",\"correlation_id\":")) goto oom;
         if (!ducknng_json_append_string(&response, &len, &cap, correlation_id)) goto oom;
@@ -543,6 +585,15 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
             if (detail) duckdb_free(detail);
             return -1;
         }
+        if (open_req.parameter_count > 0 && n_stmts != 1) {
+            duckdb_destroy_extracted(&extracted);
+            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+            ducknng_service_release_session_connection(svc, session_pool_index);
+            ducknng_query_open_request_destroy(&open_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+                "ducknng: parameterized query_open requires exactly one SQL statement");
+            return -1;
+        }
         /* Execute leading statements (all but last) eagerly */
         {
             idx_t i;
@@ -594,6 +645,16 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
             return -1;
         }
         duckdb_destroy_extracted(&extracted);
+    }
+    if (ducknng_bind_query_parameters(stmt, &open_req, &errmsg) != 0) {
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        duckdb_destroy_prepare(&stmt);
+        ducknng_service_release_session_connection(svc, session_pool_index);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            errmsg ? errmsg : "ducknng: failed to bind query parameters");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
     }
     if (ducknng_pending_prepared_for_session(stmt, &pending) == DuckDBError) {
         if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
@@ -966,7 +1027,6 @@ static int ducknng_method_query_prepare_handler(ducknng_service *svc,
     size_t payload_len = 0;
     char *errmsg = NULL;
     idx_t n_stmts = 0;
-    idx_t i;
     (void)method;
 
     memset(&open_req, 0, sizeof(open_req));
@@ -1006,41 +1066,16 @@ static int ducknng_method_query_prepare_handler(ducknng_service *svc,
         if (detail) duckdb_free(detail);
         return -1;
     }
-    /* Execute leading statements eagerly (same pattern as query_open). */
-    for (i = 0; i + 1 < n_stmts; i++) {
-        duckdb_prepared_statement lead_stmt = NULL;
-        duckdb_result lead_result;
-        memset(&lead_result, 0, sizeof(lead_result));
-        if (duckdb_prepare_extracted_statement(scope.con, extracted, i, &lead_stmt) == DuckDBError) {
-            char *detail = ducknng_strdup(lead_stmt ? duckdb_prepare_error(lead_stmt) : NULL);
-            if (lead_stmt) duckdb_destroy_prepare(&lead_stmt);
-            duckdb_destroy_extracted(&extracted);
-            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
-            ducknng_service_leave_request_sql(&scope);
-            ducknng_query_open_request_destroy(&open_req);
-            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
-                detail && detail[0] ? detail : "ducknng: query_prepare: failed to prepare leading statement");
-            if (detail) duckdb_free(detail);
-            return -1;
-        }
-        if (duckdb_execute_prepared(lead_stmt, &lead_result) == DuckDBError) {
-            char *detail = ducknng_strdup(duckdb_result_error(&lead_result));
-            duckdb_destroy_result(&lead_result);
-            duckdb_destroy_prepare(&lead_stmt);
-            duckdb_destroy_extracted(&extracted);
-            if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
-            ducknng_service_leave_request_sql(&scope);
-            ducknng_query_open_request_destroy(&open_req);
-            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
-                detail && detail[0] ? detail : "ducknng: query_prepare: failed to execute leading statement");
-            if (detail) duckdb_free(detail);
-            return -1;
-        }
-        duckdb_destroy_result(&lead_result);
-        duckdb_destroy_prepare(&lead_stmt);
+    if (n_stmts != 1) {
+        duckdb_destroy_extracted(&extracted);
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_service_leave_request_sql(&scope);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            "ducknng: query_prepare requires exactly one SQL statement");
+        return -1;
     }
-    /* Prepare the final statement. */
-    if (duckdb_prepare_extracted_statement(scope.con, extracted, n_stmts - 1, &stmt) == DuckDBError) {
+    if (duckdb_prepare_extracted_statement(scope.con, extracted, 0, &stmt) == DuckDBError) {
         char *detail = ducknng_strdup(stmt ? duckdb_prepare_error(stmt) : NULL);
         if (stmt) duckdb_destroy_prepare(&stmt);
         stmt = NULL;
@@ -1055,6 +1090,17 @@ static int ducknng_method_query_prepare_handler(ducknng_service *svc,
     }
     duckdb_destroy_extracted(&extracted);
     extracted = NULL;
+
+    if (ducknng_bind_query_parameters(stmt, &open_req, &errmsg) != 0) {
+        duckdb_destroy_prepare(&stmt);
+        if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
+        ducknng_service_leave_request_sql(&scope);
+        ducknng_query_open_request_destroy(&open_req);
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INVALID,
+            errmsg ? errmsg : "ducknng: failed to bind query_prepare parameters");
+        if (errmsg) duckdb_free(errmsg);
+        return -1;
+    }
 
     if (ducknng_prepared_schema_to_ipc(scope.con, stmt, &payload, &payload_len, &errmsg) != 0) {
         duckdb_destroy_prepare(&stmt);
@@ -1077,6 +1123,56 @@ static int ducknng_method_query_prepare_handler(ducknng_service *svc,
     return 0;
 }
 
+static int ducknng_execute_parameterized_sql(duckdb_connection con,
+    const char *sql, duckdb_value *parameters, idx_t parameter_count,
+    duckdb_prepared_statement *out_stmt, duckdb_result *out_result,
+    char **errmsg) {
+    duckdb_extracted_statements extracted = NULL;
+    duckdb_prepared_statement stmt = NULL;
+    idx_t n_stmts;
+    if (out_stmt) *out_stmt = NULL;
+    if (!con || !sql || !sql[0] || !out_stmt || !out_result) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: invalid parameterized exec context");
+        return -1;
+    }
+    n_stmts = duckdb_extract_statements(con, sql, &extracted);
+    if (n_stmts != 1) {
+        if (errmsg) {
+            const char *detail = n_stmts == 0 && extracted
+                ? duckdb_extract_statements_error(extracted) : NULL;
+            *errmsg = ducknng_strdup(detail && detail[0] ? detail :
+                "ducknng: parameterized exec requires exactly one SQL statement");
+        }
+        if (extracted) duckdb_destroy_extracted(&extracted);
+        return -1;
+    }
+    if (duckdb_prepare_extracted_statement(con, extracted, 0, &stmt) == DuckDBError) {
+        if (errmsg) *errmsg = ducknng_strdup(stmt && duckdb_prepare_error(stmt)
+            ? duckdb_prepare_error(stmt) :
+            "ducknng: failed to prepare parameterized exec statement");
+        if (stmt) duckdb_destroy_prepare(&stmt);
+        duckdb_destroy_extracted(&extracted);
+        return -1;
+    }
+    duckdb_destroy_extracted(&extracted);
+    if (ducknng_bind_sql_parameters(stmt, parameters, parameter_count,
+            errmsg) != 0 ||
+        duckdb_execute_prepared(stmt, out_result) == DuckDBError) {
+        if (errmsg && !*errmsg) {
+            const char *detail = duckdb_result_error(out_result);
+            *errmsg = ducknng_strdup(detail && detail[0] ? detail :
+                "ducknng: parameterized exec failed");
+        }
+        if (out_result->internal_data) duckdb_destroy_result(out_result);
+        memset(out_result, 0, sizeof(*out_result));
+        duckdb_destroy_prepare(&stmt);
+        return -1;
+    }
+    *out_stmt = stmt;
+    return 0;
+}
+
 
 static int ducknng_method_exec_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
@@ -1084,6 +1180,7 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
     ducknng_method_reply *reply) {
     ducknng_exec_request exec_req;
     duckdb_result result;
+    duckdb_prepared_statement parameterized_stmt = NULL;
     ducknng_service_sql_scope scope;
     duckdb_statement_type stmt_type;
     duckdb_result_type result_type;
@@ -1108,7 +1205,76 @@ static int ducknng_method_exec_handler(ducknng_service *svc,
         return -1;
     }
 
-    if (exec_req.want_result) {
+    if (exec_req.parameter_count > 0) {
+        if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
+            ducknng_exec_request_destroy(&exec_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                errmsg ? errmsg : "ducknng: missing execution context");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        if (ducknng_execute_parameterized_sql(scope.con, exec_req.sql,
+                exec_req.parameters, exec_req.parameter_count,
+                &parameterized_stmt, &result, &errmsg) != 0) {
+            ducknng_service_leave_request_sql(&scope);
+            ducknng_exec_request_destroy(&exec_req);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                errmsg ? errmsg : "ducknng: parameterized exec failed");
+            if (errmsg) duckdb_free(errmsg);
+            return -1;
+        }
+        if (exec_req.want_result) {
+            if (duckdb_result_return_type(result) != DUCKDB_RESULT_TYPE_QUERY_RESULT ||
+                ducknng_result_to_ipc_stream(parameterized_stmt, result, &payload,
+                    &payload_len, &errmsg) != 0) {
+                ducknng_service_leave_request_sql(&scope);
+                duckdb_destroy_result(&result);
+                duckdb_destroy_prepare(&parameterized_stmt);
+                ducknng_exec_request_destroy(&exec_req);
+                ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
+                    errmsg ? errmsg :
+                    "ducknng: failed to encode parameterized query result as Arrow IPC");
+                if (errmsg) duckdb_free(errmsg);
+                return -1;
+            }
+            ducknng_service_leave_request_sql(&scope);
+            duckdb_destroy_result(&result);
+            duckdb_destroy_prepare(&parameterized_stmt);
+            ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
+                DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
+                payload, payload_len);
+            payload = NULL;
+        } else {
+            ducknng_service_leave_request_sql(&scope);
+            stmt_type = duckdb_result_statement_type(result);
+            result_type = duckdb_result_return_type(result);
+            if (result_type == DUCKDB_RESULT_TYPE_QUERY_RESULT) {
+                duckdb_destroy_result(&result);
+                duckdb_destroy_prepare(&parameterized_stmt);
+                ducknng_exec_request_destroy(&exec_req);
+                ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_SQL_ERROR,
+                    "ducknng: EXEC result requires want_result = true");
+                return -1;
+            }
+            rows_changed = duckdb_rows_changed(&result);
+            duckdb_destroy_result(&result);
+            duckdb_destroy_prepare(&parameterized_stmt);
+            memset(&result, 0, sizeof(result));
+            if (ducknng_exec_metadata_to_ipc((uint64_t)rows_changed,
+                    (uint32_t)stmt_type, (uint32_t)result_type, &payload,
+                    &payload_len, &errmsg) != 0) {
+                ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_ARROW_ERROR,
+                    errmsg ? errmsg :
+                    "ducknng: failed to encode parameterized exec metadata as Arrow IPC");
+            } else {
+                ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
+                    DUCKNNG_RPC_FLAG_RESULT_METADATA |
+                        DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM,
+                    payload, payload_len);
+                payload = NULL;
+            }
+        }
+    } else if (exec_req.want_result) {
         if (ducknng_service_enter_request_sql(svc, &scope, &errmsg) != 0) {
             ducknng_exec_request_destroy(&exec_req);
             ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
@@ -1762,7 +1928,7 @@ const ducknng_method_descriptor ducknng_method_query_prepare = {
     0,
     0,
     1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true}]}",
+    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"params\",\"type\":\"struct\",\"nullable\":true,\"semantics\":\"positional_sql_parameters\",\"max_children\":65535}]}",
     "{\"mode\":\"schema_only\",\"note\":\"Arrow IPC stream with schema and 0 data batches\"}",
     ducknng_method_query_prepare_handler
 };
@@ -1901,7 +2067,7 @@ const ducknng_method_descriptor ducknng_method_exec = {
     0,
     0,
     1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"want_result\",\"type\":\"bool\",\"nullable\":false}]}",
+    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"want_result\",\"type\":\"bool\",\"nullable\":false},{\"name\":\"params\",\"type\":\"struct\",\"nullable\":true,\"semantics\":\"positional_sql_parameters\",\"max_children\":65535}]}",
     "{\"mode\":\"metadata_or_rows\"}",
     ducknng_method_exec_handler
 };
@@ -1923,12 +2089,12 @@ const ducknng_method_descriptor ducknng_method_query_open = {
     0,
     1,
     0,
-    0,
+    1,
     0,
     0,
     0,
     1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true}]}",
+    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"params\",\"type\":\"struct\",\"nullable\":true,\"semantics\":\"positional_sql_parameters\",\"max_children\":65535}]}",
     "{\"type\":\"json\",\"session_open\":true,\"fields\":[{\"name\":\"session_id\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"session_token\",\"type\":\"string\",\"nullable\":false},{\"name\":\"state\",\"type\":\"string\",\"nullable\":false},{\"name\":\"next_method\",\"type\":\"string\",\"nullable\":false},{\"name\":\"idle_timeout_ms\",\"type\":\"uint64\",\"nullable\":false,\"policy\":\"server_effective\"},{\"name\":\"result_handle\",\"type\":\"string\",\"nullable\":true},{\"name\":\"ducknng_protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"row_schema_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"fetch_batch_chunks\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
     ducknng_method_query_open_handler
 };
@@ -2037,7 +2203,7 @@ const ducknng_method_descriptor ducknng_method_handshake = {
     0,
     1,
     "{\"type\":\"json\",\"fields\":[{\"name\":\"min_protocol_version\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"max_protocol_version\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"preferred_serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}]}",
-    "{\"type\":\"json\",\"fields\":[{\"name\":\"server_name\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"duckdb_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_platform\",\"type\":\"string\",\"nullable\":false},{\"name\":\"protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_serialization_mode\",\"type\":\"string\",\"nullable\":false},{\"name\":\"supported_serialization_modes\",\"type\":\"array<string>\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true}},\"note\":\"future reply metadata should be negotiated as a generic capability rather than a fake row serializer\"}",
+    "{\"type\":\"json\",\"fields\":[{\"name\":\"server_name\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"duckdb_version\",\"type\":\"string\",\"nullable\":false},{\"name\":\"server_platform\",\"type\":\"string\",\"nullable\":false},{\"name\":\"protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_protocol_version\",\"type\":\"uint64\",\"nullable\":false},{\"name\":\"selected_serialization_mode\",\"type\":\"string\",\"nullable\":false},{\"name\":\"supported_serialization_modes\",\"type\":\"array<string>\",\"nullable\":false},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true}],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[\"exec\",\"query_open\",\"query_prepare\"],\"max_parameters\":65535}},\"note\":\"future reply metadata should be negotiated as a generic capability rather than a fake row serializer\"}",
     ducknng_method_handshake_handler
 };
 

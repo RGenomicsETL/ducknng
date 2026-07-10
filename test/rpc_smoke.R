@@ -80,6 +80,22 @@ json_get_number <- function(json, key) {
   if (length(parts) < 2L) NA_real_ else as.numeric(parts[2])
 }
 
+dial_req_when_ready <- function(url, timeout_seconds = 10) {
+  deadline <- Sys.time() + timeout_seconds
+  repeat {
+    socket <- tryCatch(
+      nanonext::socket("req", dial = url, autostart = NA),
+      error = function(e) NULL
+    )
+    if (!is.null(socket)) return(socket)
+    if (Sys.time() >= deadline) {
+      stop("ducknng R smoke server did not become ready within ",
+           timeout_seconds, " seconds")
+    }
+    Sys.sleep(0.05)
+  }
+}
+
 ext_path <- normalizePath("build/release/ducknng.duckdb_extension")
 ipc_path <- tempfile(pattern = "ducknng_rpc_smoke_", tmpdir = "/tmp", fileext = ".ipc")
 ipc_url <- paste0("ipc://", ipc_path)
@@ -100,8 +116,7 @@ server_job <- parallel::mcparallel({
   rows
 })
 
-Sys.sleep(1)
-req <- nanonext::socket("req", dial = ipc_url, autostart = NA)
+req <- dial_req_when_ready(ipc_url)
 
 stopifnot(nanonext::send(req, encode_manifest_request(), mode = "raw", block = 1000L) == 0)
 manifest_reply <- decode_frame(nanonext::recv(req, mode = "raw", block = 1000L))
@@ -113,6 +128,7 @@ stopifnot(grepl('"name":"manifest"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"name":"handshake"', manifest_text, fixed = TRUE))
 stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]', manifest_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', manifest_text, fixed = TRUE))
+stopifnot(grepl('"parameter_binding":{"encoding":"arrow_struct","positional":true,"methods":["exec","query_open","query_prepare"],"max_parameters":65535}', manifest_text, fixed = TRUE))
 
 handshake_json <- paste0(
   '{"min_protocol_version":1,"max_protocol_version":1,',
@@ -127,6 +143,7 @@ stopifnot(handshake_reply$name == "handshake")
 stopifnot(grepl('"selected_serialization_mode":"arrow_ipc_stream"', handshake_text, fixed = TRUE))
 stopifnot(grepl('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]', handshake_text, fixed = TRUE))
 stopifnot(grepl('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}', handshake_text, fixed = TRUE))
+stopifnot(grepl('"parameter_binding":{"encoding":"arrow_struct","positional":true,"methods":["exec","query_open","query_prepare"],"max_parameters":65535}', handshake_text, fixed = TRUE))
 stopifnot(grepl('"ducknng_protocol_version":1', handshake_text, fixed = TRUE))
 stopifnot(grepl('"row_schema_version":1', handshake_text, fixed = TRUE))
 stopifnot(grepl('"default_fetch_batch_chunks":12', handshake_text, fixed = TRUE))

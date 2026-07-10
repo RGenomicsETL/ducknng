@@ -1,4 +1,5 @@
 #include "ducknng_ipc_in.h"
+#include "ducknng_sql_arrow.h"
 #include "ducknng_util.h"
 #include "nanoarrow/nanoarrow.h"
 #include "nanoarrow/nanoarrow_ipc.h"
@@ -8,6 +9,8 @@
 
 DUCKDB_EXTENSION_EXTERN
 
+#define DUCKNNG_MAX_QUERY_PARAMETERS 65535
+
 static char *ducknng_copy_string_view(struct ArrowStringView view) {
     char *out;
     if (!view.data || view.size_bytes < 0) return NULL;
@@ -16,6 +19,67 @@ static char *ducknng_copy_string_view(struct ArrowStringView view) {
     memcpy(out, view.data, (size_t)view.size_bytes);
     out[view.size_bytes] = '\0';
     return out;
+}
+
+static int ducknng_decode_parameter_struct(const struct ArrowSchema *schema,
+    struct ArrowArrayView *view, idx_t field_index, duckdb_value **out_values,
+    idx_t *out_count, char **errmsg) {
+    struct ArrowSchema *params_schema;
+    struct ArrowArrayView *params_view;
+    struct ArrowSchemaView params_schema_view;
+    struct ArrowError error;
+    duckdb_value *values = NULL;
+    idx_t count;
+    idx_t i;
+    if (out_values) *out_values = NULL;
+    if (out_count) *out_count = 0;
+    memset(&params_schema_view, 0, sizeof(params_schema_view));
+    memset(&error, 0, sizeof(error));
+    if (!schema || !view || !out_values || !out_count || field_index >= (idx_t)schema->n_children ||
+        field_index >= (idx_t)view->n_children) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing SQL parameter tuple");
+        return -1;
+    }
+    params_schema = schema->children[field_index];
+    params_view = view->children[field_index];
+    if (!params_schema || !params_view || !params_schema->name ||
+        strcmp(params_schema->name, "params") != 0 ||
+        ArrowSchemaViewInit(&params_schema_view, params_schema, &error) != NANOARROW_OK ||
+        params_schema_view.type != NANOARROW_TYPE_STRUCT) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: params must be a struct");
+        return -1;
+    }
+    if (ArrowArrayViewIsNull(params_view, 0)) return 0;
+    if (params_schema->n_children < 0 ||
+        (uint64_t)params_schema->n_children > DUCKNNG_MAX_QUERY_PARAMETERS) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: SQL parameter count exceeds the protocol limit");
+        return -1;
+    }
+    count = (idx_t)params_schema->n_children;
+    values = (duckdb_value *)duckdb_malloc(sizeof(*values) *
+        (size_t)(count > 0 ? count : 1));
+    if (!values) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: out of memory decoding SQL parameters");
+        return -1;
+    }
+    memset(values, 0, sizeof(*values) * (size_t)(count > 0 ? count : 1));
+    for (i = 0; i < count; i++) {
+        if (ducknng_sql_arrow_value_at(params_schema->children[i],
+                params_view->children[i], 0, &values[i], errmsg) != 0) {
+            idx_t j;
+            for (j = 0; j < count; j++) {
+                if (values[j]) duckdb_destroy_value(&values[j]);
+            }
+            duckdb_free(values);
+            return -1;
+        }
+    }
+    *out_values = values;
+    *out_count = count;
+    return 0;
 }
 
 
@@ -65,7 +129,7 @@ int ducknng_decode_exec_request_payload(const uint8_t *payload, size_t payload_l
         if (errmsg) *errmsg = ducknng_strdup(error.message);
         goto cleanup;
     }
-    if (schema.n_children != 2 || !schema.children ||
+    if ((schema.n_children != 2 && schema.n_children != 3) || !schema.children ||
         !schema.children[0] || !schema.children[1] ||
         !schema.children[0]->name || strcmp(schema.children[0]->name, "sql") != 0 ||
         !schema.children[1]->name || strcmp(schema.children[1]->name, "want_result") != 0) {
@@ -100,6 +164,10 @@ int ducknng_decode_exec_request_payload(const uint8_t *payload, size_t payload_l
     }
     out->want_result = (!ArrowArrayViewIsNull(view.children[1], 0) &&
         ArrowArrayViewGetIntUnsafe(view.children[1], 0) != 0) ? 1 : 0;
+    if (schema.n_children == 3 && ducknng_decode_parameter_struct(&schema,
+            &view, 2, &out->parameters, &out->parameter_count, errmsg) != 0) {
+        goto cleanup;
+    }
     rc = 0;
 
 cleanup:
@@ -415,6 +483,10 @@ int ducknng_decode_query_open_payload(const uint8_t *payload, size_t payload_len
             goto cleanup;
         }
     }
+    if (schema.n_children > 5) {
+        if (ducknng_decode_parameter_struct(&schema, &view, 5,
+                &out->parameters, &out->parameter_count, errmsg) != 0) goto cleanup;
+    }
     rc = 0;
 cleanup:
     if (rc != 0 && out) ducknng_query_open_request_destroy(out);
@@ -428,20 +500,38 @@ cleanup:
 }
 
 void ducknng_exec_request_destroy(ducknng_exec_request *req) {
+    idx_t i;
     if (!req) return;
     if (req->sql) duckdb_free(req->sql);
+    if (req->parameters) {
+        for (i = 0; i < req->parameter_count; i++) {
+            if (req->parameters[i]) duckdb_destroy_value(&req->parameters[i]);
+        }
+        duckdb_free(req->parameters);
+    }
     req->sql = NULL;
     req->want_result = 0;
+    req->parameters = NULL;
+    req->parameter_count = 0;
 }
 
 void ducknng_query_open_request_destroy(ducknng_query_open_request *req) {
+    idx_t i;
     if (!req) return;
     if (req->sql) duckdb_free(req->sql);
     if (req->correlation_id) duckdb_free(req->correlation_id);
     if (req->serialization_mode) duckdb_free(req->serialization_mode);
+    if (req->parameters) {
+        for (i = 0; i < req->parameter_count; i++) {
+            if (req->parameters[i]) duckdb_destroy_value(&req->parameters[i]);
+        }
+        duckdb_free(req->parameters);
+    }
     req->sql = NULL;
     req->correlation_id = NULL;
     req->serialization_mode = NULL;
+    req->parameters = NULL;
+    req->parameter_count = 0;
     req->batch_rows = 0;
     req->batch_bytes = 0;
 }

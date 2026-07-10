@@ -1,12 +1,15 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "duckdb_extension.h"
 #include "nanoarrow/nanoarrow.h"
 #include "nanoarrow/nanoarrow_ipc.h"
 
 typedef struct ducknng_exec_request {
     char *sql;
     int want_result;
+    duckdb_value *parameters;
+    idx_t parameter_count;
 } ducknng_exec_request;
 
 typedef struct ducknng_query_open_request {
@@ -15,6 +18,8 @@ typedef struct ducknng_query_open_request {
     uint64_t batch_bytes;
     char *correlation_id;
     char *serialization_mode;
+    duckdb_value *parameters;
+    idx_t parameter_count;
 } ducknng_query_open_request;
 
 typedef struct ducknng_arrow_batches {

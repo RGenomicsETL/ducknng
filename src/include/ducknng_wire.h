@@ -66,8 +66,8 @@ int ducknng_frame_name_equals(const ducknng_frame *frame, const char *name);
  *   [quack batch remaining bytes]
  * Parse is fail-closed against arbitrary bytes: it validates the fixed header
  * and the token length against the buffer before exposing any slice. On
- * success *out_session_id/*out_token/*out_token_len name the token slice (a
- * view into payload, not a copy) and *out_quack_offset is the start of the
+ * success, the output pointers name the session id and token slice (a view
+ * into payload, not a copy); *out_quack_offset is the start of the
  * quack batch (which may be empty). Returns 0 on success, -1 on a malformed
  * prefix. */
 #define DUCKNNG_UPLOAD_TOKEN_MAX 256u

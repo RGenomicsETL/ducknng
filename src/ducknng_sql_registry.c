@@ -17,8 +17,20 @@ typedef struct {
     char *request_payload_format;
     char *response_payload_format;
     char *response_mode;
+    char *session_behavior;
     bool requires_auth;
+    bool requires_session;
+    bool opens_session;
+    bool closes_session;
+    bool mutates_state;
+    bool idempotent;
+    bool deprecated;
     bool disabled;
+    uint32_t accepted_request_flags;
+    uint32_t emitted_reply_flags;
+    uint64_t max_request_bytes;
+    uint64_t max_reply_bytes;
+    int32_t version_introduced;
     char *request_schema_json;
     char *response_schema_json;
 } ducknng_method_row;
@@ -45,6 +57,7 @@ static void destroy_methods_bind_data(void *ptr) {
         if (data->rows[i].request_payload_format) duckdb_free(data->rows[i].request_payload_format);
         if (data->rows[i].response_payload_format) duckdb_free(data->rows[i].response_payload_format);
         if (data->rows[i].response_mode) duckdb_free(data->rows[i].response_mode);
+        if (data->rows[i].session_behavior) duckdb_free(data->rows[i].session_behavior);
         if (data->rows[i].request_schema_json) duckdb_free(data->rows[i].request_schema_json);
         if (data->rows[i].response_schema_json) duckdb_free(data->rows[i].response_schema_json);
     }
@@ -76,11 +89,23 @@ static int ducknng_method_row_copy(ducknng_method_row *row,
     if (!ducknng_strdup_field(&row->request_payload_format, view->request_payload_format)) return 0;
     if (!ducknng_strdup_field(&row->response_payload_format, view->response_payload_format)) return 0;
     if (!ducknng_strdup_field(&row->response_mode, view->response_mode)) return 0;
+    if (!ducknng_strdup_field(&row->session_behavior, view->session_behavior)) return 0;
     if (!ducknng_strdup_field(&row->request_schema_json, view->request_schema_json)) return 0;
     if (!ducknng_strdup_field(&row->response_schema_json, view->response_schema_json)) return 0;
 
     row->requires_auth = view->requires_auth ? true : false;
+    row->requires_session = view->requires_session ? true : false;
+    row->opens_session = view->opens_session ? true : false;
+    row->closes_session = view->closes_session ? true : false;
+    row->mutates_state = view->mutates_state ? true : false;
+    row->idempotent = view->idempotent ? true : false;
+    row->deprecated = view->deprecated ? true : false;
     row->disabled = view->disabled ? true : false;
+    row->accepted_request_flags = view->accepted_request_flags;
+    row->emitted_reply_flags = view->emitted_reply_flags;
+    row->max_request_bytes = (uint64_t)view->max_request_bytes;
+    row->max_reply_bytes = (uint64_t)view->max_reply_bytes;
+    row->version_introduced = (int32_t)view->version_introduced;
     return 1;
 }
 
@@ -372,12 +397,30 @@ static void ducknng_methods_bind(duckdb_bind_info info) {
     duckdb_bind_add_result_column(info, "request_payload_format", type);
     duckdb_bind_add_result_column(info, "response_payload_format", type);
     duckdb_bind_add_result_column(info, "response_mode", type);
+    duckdb_bind_add_result_column(info, "session_behavior", type);
     duckdb_bind_add_result_column(info, "request_schema_json", type);
     duckdb_bind_add_result_column(info, "response_schema_json", type);
     duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
     duckdb_bind_add_result_column(info, "requires_auth", type);
+    duckdb_bind_add_result_column(info, "requires_session", type);
+    duckdb_bind_add_result_column(info, "opens_session", type);
+    duckdb_bind_add_result_column(info, "closes_session", type);
+    duckdb_bind_add_result_column(info, "mutates_state", type);
+    duckdb_bind_add_result_column(info, "idempotent", type);
+    duckdb_bind_add_result_column(info, "deprecated", type);
     duckdb_bind_add_result_column(info, "disabled", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
+    duckdb_bind_add_result_column(info, "accepted_request_flags", type);
+    duckdb_bind_add_result_column(info, "emitted_reply_flags", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_bind_add_result_column(info, "max_request_bytes", type);
+    duckdb_bind_add_result_column(info, "max_reply_bytes", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+    duckdb_bind_add_result_column(info, "version_introduced", type);
     duckdb_destroy_logical_type(&type);
     duckdb_bind_set_bind_data(info, bind, destroy_methods_bind_data);
 }
@@ -405,10 +448,22 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
     duckdb_vector request_payload_format_col;
     duckdb_vector response_payload_format_col;
     duckdb_vector response_mode_col;
+    duckdb_vector session_behavior_col;
     duckdb_vector request_schema_json_col;
     duckdb_vector response_schema_json_col;
     bool *requires_auth;
+    bool *requires_session;
+    bool *opens_session;
+    bool *closes_session;
+    bool *mutates_state;
+    bool *idempotent;
+    bool *deprecated;
     bool *disabled;
+    uint32_t *accepted_request_flags;
+    uint32_t *emitted_reply_flags;
+    uint64_t *max_request_bytes;
+    uint64_t *max_reply_bytes;
+    int32_t *version_introduced;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
@@ -429,10 +484,22 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
     request_payload_format_col = duckdb_data_chunk_get_vector(output, 4);
     response_payload_format_col = duckdb_data_chunk_get_vector(output, 5);
     response_mode_col = duckdb_data_chunk_get_vector(output, 6);
-    request_schema_json_col = duckdb_data_chunk_get_vector(output, 7);
-    response_schema_json_col = duckdb_data_chunk_get_vector(output, 8);
-    requires_auth = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 9));
-    disabled = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
+    session_behavior_col = duckdb_data_chunk_get_vector(output, 7);
+    request_schema_json_col = duckdb_data_chunk_get_vector(output, 8);
+    response_schema_json_col = duckdb_data_chunk_get_vector(output, 9);
+    requires_auth = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
+    requires_session = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
+    opens_session = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 12));
+    closes_session = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 13));
+    mutates_state = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 14));
+    idempotent = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 15));
+    deprecated = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 16));
+    disabled = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 17));
+    accepted_request_flags = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 18));
+    emitted_reply_flags = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 19));
+    max_request_bytes = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 20));
+    max_reply_bytes = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 21));
+    version_introduced = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 22));
 
     for (i = 0; i < chunk_size; i++) {
         ducknng_method_row *row = &bind->rows[init->offset + i];
@@ -446,12 +513,24 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
         ducknng_methods_assign_string(response_payload_format_col, i,
             row->response_payload_format);
         ducknng_methods_assign_string(response_mode_col, i, row->response_mode);
+        ducknng_methods_assign_string(session_behavior_col, i, row->session_behavior);
         ducknng_methods_assign_string(request_schema_json_col, i,
             row->request_schema_json);
         ducknng_methods_assign_string(response_schema_json_col, i,
             row->response_schema_json);
         requires_auth[i] = row->requires_auth;
+        requires_session[i] = row->requires_session;
+        opens_session[i] = row->opens_session;
+        closes_session[i] = row->closes_session;
+        mutates_state[i] = row->mutates_state;
+        idempotent[i] = row->idempotent;
+        deprecated[i] = row->deprecated;
         disabled[i] = row->disabled;
+        accepted_request_flags[i] = row->accepted_request_flags;
+        emitted_reply_flags[i] = row->emitted_reply_flags;
+        max_request_bytes[i] = row->max_request_bytes;
+        max_reply_bytes[i] = row->max_reply_bytes;
+        version_introduced[i] = row->version_introduced;
     }
 
     init->offset += chunk_size;

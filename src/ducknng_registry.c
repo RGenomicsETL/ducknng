@@ -449,7 +449,7 @@ char *ducknng_method_registry_manifest_json(const ducknng_method_registry *regis
         if (!append_text(&buf, &len, &cap, numbuf)) goto oom;
     }
     if (!append_text(&buf, &len, &cap,
-            "},\"capabilities\":{\"handshake\":true,\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true}},\"methods\":[")) goto oom;
+            "},\"capabilities\":{\"handshake\":true,\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true},\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[\"exec\",\"query_open\",\"query_prepare\"],\"max_parameters\":65535}},\"methods\":[")) goto oom;
     for (i = 0; i < registry->method_count; i++) {
         const ducknng_method_descriptor *m = registry->methods[i];
         ducknng_method_projection view;
