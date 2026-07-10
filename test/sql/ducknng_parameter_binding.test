@@ -16,7 +16,7 @@ SELECT ducknng_start_server(
 statement ok
 SELECT ducknng_register_exec_method(false)
 
-query IIII
+query IIIII
 SELECT
   (json_extract_string(manifest,
     '$.capabilities.parameter_binding.encoding') = 'arrow_struct')::INTEGER,
@@ -25,13 +25,14 @@ SELECT
   (json_extract(manifest,
     '$.capabilities.parameter_binding.max_parameters')::INTEGER = 65535)::INTEGER,
   contains(manifest,
-    '"methods":["exec","query_open","query_prepare"]')::INTEGER
+    '"methods":["exec","query_open","query_prepare"]')::INTEGER,
+  (json_extract_string(manifest, '$.server.version') = '0.1.2')::INTEGER
 FROM ducknng_get_rpc_manifest(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   0::UBIGINT
 )
 ----
-1	1	1	1
+1	1	1	1	1
 
 # Registry policy is locally inspectable and truthful: query_open can execute
 # arbitrary DuckDB SQL, whereas query_prepare is stateless and non-mutating.
