@@ -1,73 +1,93 @@
-# ducknng type support and schema policy
+# ducknng type contract
 
-This document is binding for how `ducknng` declares and supports types in method inputs and outputs. The project does not want a vague promise that it uses Arrow. It needs an explicit, stable contract describing which Arrow logical types are accepted, how they map to DuckDB logical types, which subset is considered canonical for output, and which advanced or exotic types are intentionally deferred.
+`ducknng` moves tables through two negotiated row codecs. Arrow IPC is the
+portable default. `ducknng_quack_batch` preserves DuckDB chunks for DuckDB-aware
+peers. The codec is independent of the NNG, HTTP, or WebSocket carrier.
 
-The guiding principle is that Arrow IPC is the transport-level tabular encoding and DuckDB logical types are the execution-level types. The protocol contract sits between them. That contract must be narrow enough to be reliable and broad enough to be useful. Early versions of the project should therefore prefer a strong and explicit supported subset over a theoretically complete but poorly specified compatibility claim.
+The executable contract is the end-to-end matrix in
+`test/sql/ducknng_type_roundtrip.test`. It sends values through a running server
+and compares the decoded values on the client over both codecs. Parameter
+binding is covered separately by `test/sql/ducknng_parameter_binding.test`.
 
-## Normative type mappings
+## Arrow IPC
 
-The following mappings are part of the public 0.1.0 contract. Each type listed here has test coverage in `test/sql/ducknng_rpc_client_smoke.test` and is safe to rely on.
+The receive path accepts these Arrow storage types and constructs the listed
+DuckDB logical types:
 
-Arrow `bool` maps to DuckDB `BOOLEAN`. Arrow `int8`, `int16`, `int32`, and `int64` map to DuckDB `TINYINT`, `SMALLINT`, `INTEGER`, and `BIGINT`. Arrow `uint8`, `uint16`, `uint32`, and `uint64` map to DuckDB `UTINYINT`, `USMALLINT`, `UINTEGER`, and `UBIGINT`. Arrow `float32` and `float64` map to DuckDB `FLOAT` and `DOUBLE`. Arrow `utf8` maps to DuckDB `VARCHAR`, and Arrow `binary` maps to DuckDB `BLOB`. Arrow `date32` maps to DuckDB `DATE`. Arrow `time64[us]` maps to DuckDB `TIME` and Arrow `time64[ns]` maps to DuckDB `TIME_NS`. Timezone-free Arrow timestamps map to the corresponding DuckDB timestamp unit: `timestamp[s]` to `TIMESTAMP_S`, `timestamp[ms]` to `TIMESTAMP_MS`, `timestamp[us]` to `TIMESTAMP`, and `timestamp[ns]` to `TIMESTAMP_NS`. DuckDB `DECIMAL` values are emitted as Arrow `decimal128` with the same precision and scale. Arrow `struct` maps to DuckDB `STRUCT` and Arrow `list` maps to DuckDB list values. Nesting of `struct` and `list` is supported to arbitrary depth.
+| Arrow | DuckDB |
+| --- | --- |
+| `null` | `SQLNULL` |
+| `bool` | `BOOLEAN` |
+| signed and unsigned 8/16/32/64-bit integers | matching DuckDB integer |
+| `float32`, `float64` | `FLOAT`, `DOUBLE` |
+| `utf8`, `large_utf8` | `VARCHAR` |
+| `binary`, `large_binary`, `fixed_size_binary` | `BLOB` |
+| `date32`, `date64` | `DATE` |
+| `time32`, `time64` | `TIME`, or `TIME_NS` for nanoseconds |
+| timestamp seconds/milliseconds/microseconds/nanoseconds | matching DuckDB timestamp unit |
+| timestamp with timezone metadata | `TIMESTAMP WITH TIME ZONE` |
+| decimal32/64/128 | `DECIMAL(precision, scale)` |
+| duration and Arrow interval variants | `INTERVAL` |
+| list and large list | `LIST` |
+| fixed-size list | `ARRAY` |
+| struct | `STRUCT` |
+| map | `MAP` |
+| dense and sparse union | `UNION` |
 
-## Emit-only projections (stable, receive-side only)
+Nested combinations of list, array, struct, map, and union are decoded
+recursively. Null parent values and null children are preserved.
 
-The following DuckDB types are emitted as Arrow but are not accepted back on the input side or roundtripped to the same DuckDB type. Clients receive the projected Arrow type and are responsible for any re-interpretation they need.
+The DuckDB-to-Arrow producer uses DuckDB's Arrow conversion, so a few DuckDB
+types have canonical wire projections rather than identical logical types:
 
-`HUGEINT` is projected as Arrow `decimal128(38, 0)`. `UUID` is projected as Arrow `utf8` in canonical 36-character form. `TIMESTAMP WITH TIME ZONE` is projected as a timezone-free Arrow `timestamp[us]`; timezone metadata is dropped on the wire and the microsecond value is preserved as-is. `ENUM` is projected as the resolved Arrow `utf8` label, not as a dictionary-encoded Arrow array. `MAP` is projected as Arrow `map` with key and value children matching the DuckDB key and value types; roundtripping a result back to a DuckDB `MAP` column is a caller responsibility. `UNION` (DuckDB dense union) is projected as Arrow `dense_union` on the emit side only; the DuckDB-facing decoder for `dense_union` vectors is not yet implemented, so queries returning `UNION` values through `ducknng_query_rpc` currently return an error.
+- `HUGEINT` and `UHUGEINT` are emitted as `decimal128(38,0)` and return as
+  `DECIMAL(38,0)`. Values outside that decimal domain are not representable.
+- `UUID` and `ENUM` are emitted as UTF-8 and return as `VARCHAR`.
+- `TIME WITH TIME ZONE` returns as `TIME`; its offset is not preserved.
+- `TIMESTAMP WITH TIME ZONE` uses an Arrow timezone timestamp and returns as
+  DuckDB `TIMESTAMP WITH TIME ZONE`; the instant is preserved, not an original
+  named-zone identity.
+- Ordinary DuckDB strings and blobs are emitted as `utf8` and `binary` even
+  though the receiver also accepts large and fixed-size variants.
 
-## Explicitly deferred
+These are declared normalizations, not silent claims of identity.
 
-The following features are intentionally outside the current contract. They are not ruled out permanently, but they must not be advertised as supported until they have dedicated implementation, tests, and documentation.
+## Quack-derived batches
 
-**Dictionary-preserving roundtrips.** The server does not emit Arrow dictionary arrays and does not accept them. `ENUM` is always projected as plain `utf8`. Dictionary-encoded inputs from third-party clients are not currently decoded.
+`ducknng_quack_batch` is not Arrow. It carries DuckDB logical types and data
+chunks through the ducknng session protocol. The round-trip matrix covers the
+scalar numeric, string/blob, temporal, decimal, interval, huge integer, UUID,
+list, array, struct, map, and union families, including recursive nesting and
+nested nulls. A client selecting this codec must implement the ducknng Quack
+batch format; selecting it does not change session ownership, fetch, cancel, or
+end-of-stream semantics.
 
-**Extension types.** The server emits no Arrow extension metadata and ignores extension metadata on incoming schemas. Extension type claims require an explicit registry, a defined name, and test coverage before they can be part of the contract.
+## SQL parameter tuples
 
-**Run-end encoded arrays.** Not implemented on either the emit or accept side.
+`exec`, `query_open`, and `query_prepare` may receive an optional one-row Arrow
+`STRUCT` named `params`. Its children form a positional tuple: child order binds
+the SQL `?` parameters, while child names are descriptive only. The protocol
+limit is 65,535 parameters. A missing or null `params` row means no parameters.
 
-**Large UTF-8 / large binary / fixed-size binary.** Not implemented. The server emits ordinary `utf8` and `binary` regardless of value size.
+Parameters use the same Arrow-to-DuckDB value mappings above, including nested
+list, array, struct, map, and union values. They are bound with
+`duckdb_bind_value`; values are never interpolated into SQL text. DuckDB's C
+value API represents a top-level null as untyped `SQLNULL`, so null parameters
+need type context in the SQL, for example `?::BIGINT`. Nulls inside a typed
+list, struct, map, array, or union retain their container type.
 
-**Duration.** DuckDB `INTERVAL` falls through to an error at the Arrow IPC encoder boundary. No `duration` Arrow type is emitted.
+Parameterized `exec` and parameterized `query_open` accept exactly one SQL
+statement. `query_prepare` also accepts exactly one statement and returns its
+schema without executing it.
 
-**UNION input decoding.** DuckDB `UNION` values can be emitted as Arrow `dense_union` (emit-only, see above) but the DuckDB vector decoder for `dense_union` is not implemented. Queries returning `UNION` columns through the RPC surface return an error until a decoder is added.
+## Bounds and unsupported encodings
 
-**Timezone semantics for TIMESTAMP WITH TIME ZONE.** The server emits `TIMESTAMP_TZ` as a timezone-free `timestamp[us]` with no UTC adjustment. Proper timezone-aware handling is deferred.
+The Arrow producer rejects logical nesting deeper than 16. The receiver caps
+recursive schema and value conversion at 64, in addition to nanoarrow IPC
+validation. The Quack decoder has its own checked length arithmetic and nesting
+bound. Unknown or malformed types fail with a DuckDB-visible error before row
+materialization.
 
-## Scan-phase Arrow conversion
-
-The scan callbacks for `ducknng_fetch_query_table` and `ducknng_parse_body` use a hand-rolled nanoarrow-to-DuckDB-vector conversion (739-line `ducknng_sql_arrow_assign_column_at` switch statement) instead of DuckDB's unstable C API functions `duckdb_schema_from_arrow` and `duckdb_data_chunk_from_arrow`. Both of those functions require a `duckdb_connection` handle that is not available in scan callbacks.
-
-Two approaches exist to remove the hand-rolled path:
-
-1. **Bind/init-phase conversion** — convert Arrow data to DuckDB data chunks in the bind or init callback (where a `duckdb_client_context` is available via `duckdb_table_function_get_client_context`, from which a connection can be opened), cache the chunks in bind_data, and serve them from the cache in scan. Simple, synchronous, adequate for single-batch results. This is the planned path.
-
-2. **Dedicated decode thread** — a background thread owns a connection, converts Arrow chunks as they arrive, and pushes to a bounded queue consumed by the scan callback. Adds pipeline parallelism and streaming memory but requires thread lifecycle, queue synchronization, backpressure, and error forwarding. Noted here for future investigation.
-
-## Expansion tier
-
-These are reasonable next additions once the core contract is stable, but they are not blocked on: large UTF-8 / large binary, fixed-size binary, duration, timezone-aware timestamps, and accepting dictionary-encoded inputs by decoding to plain values. None of these require implementation before 0.1.0 is sealed.
-
-## Nullability
-
-Nullability is part of the contract rather than an afterthought. Methods must declare whether fields are nullable, and implementations must not silently weaken or strengthen nullability without updating the manifest and this document. The server preserves null semantics faithfully for all supported types.
-
-## Nested types
-
-Structs and lists are in scope and tested. Nesting depth is bounded rather than unrestricted: a result column whose `LIST`/`STRUCT`/`MAP`/`ARRAY`/`UNION` nesting exceeds the producer's limit (`DUCKNNG_ARROW_PRODUCE_MAX_NESTING`, currently 16) is rejected with a clear error instead of being serialized. This bound exists because the Arrow IPC schema is a FlatBuffer, and the vendored flatcc verifier the consumer runs is exponential in nesting depth — an unbounded deep schema would stall the peer's decode-side verification rather than fail cleanly. The decoder additionally caps the flatcc verifier's recursion budget (`FLATCC_VERIFIER_MAX_LEVELS`, set in `CMakeLists.txt`) so an over-deep schema from an untrusted peer fails fast with a bounded "max nesting level reached" error rather than hanging. The `ducknng_quack_batch` codec does not use FlatBuffers and is not subject to the flatcc bound, though it enforces its own `DUCKNNG_QUACK_MAX_NESTING` depth cap. Deeply nested `MAP` or `UNION` combinations are not tested beyond single-level examples and should not be claimed as supported until tests exist.
-
-## Method schemas
-
-Method schemas declare concrete field names and types rather than informal descriptions. `exec` declares a request schema with non-null `sql: utf8` and non-null `want_result: bool`. Its metadata reply declares non-null `rows_changed: uint64`, non-null `statement_type: int32`, and non-null `result_type: int32`. `query_open` declares a request schema with non-null `sql: utf8`, nullable `batch_rows: uint64`, nullable `batch_bytes: uint64`, nullable `correlation_id: string`, and nullable `serialization_mode: string`. Its JSON control reply declares non-null `session_id: uint64`, non-null `session_token: string`, non-null `state: string`, non-null `next_method: string`, non-null `idle_timeout_ms: uint64`, plus nullable `result_handle: string`, nullable `serialization_mode: string`, and nullable `correlation_id: string`. `fetch`, `close`, and `cancel` carry JSON request objects with non-null `session_id: uint64`, non-null `session_token: string`, and optional `correlation_id: string`.
-
-The dynamic row schema returned by `fetch` is fixed for the life of the session. `fetch` must not change column names or logical types across batches of the same session. End-of-stream, cancellation acknowledgement, and already-closed status are communicated through JSON control metadata, not through empty row payloads with sentinel columns. Fetch metadata such as `result_handle`, terminal `batch_index`, and echoed `correlation_id` is therefore part of the control contract today; if row-bearing metadata is ever needed later, it should be introduced as a generic negotiated extension rather than by pretending one serializer is another.
-
-`ducknng_quack_batch` is an additional row-payload mode layered under the same method schemas. It reuses Quack-style DuckDB BinarySerializer encoding for logical types and may carry multiple `DataChunk` results per `fetch` reply, but it does not replace the ducknng session lifecycle or control JSON. The first payload for a result carries the row schema; later payloads use the `row_schema_version` negotiated in the `query_open` reply and may omit the repeated names and types. Version and schema compatibility are negotiated by the ducknng session contract rather than by renaming the serializer token. Full Quack uses `application/vnd.duckdb` protocol messages with connection-time `quackVersion` negotiation, while this mode carries only a standalone ducknng batch body. The decoder treats standalone bodies as untrusted input: top-level column counts, blob lengths, fixed-width vector byte counts, list/array child sizes, chunk row counts, and cumulative row counts are checked for overflow before allocation, casts, pointer arithmetic, or copies, and one source chunk may not exceed the DuckDB output vector capacity. The current `ducknng_quack_batch` subset is intentionally narrower than the Arrow IPC path: it supports the scalar bool, signed/unsigned integer, float, double, date, time, timestamp, decimal, interval, hugeint, UUID, `VARCHAR`, and `BLOB` families that the new benchmark and smoke paths exercise. Nested types, enum-specific metadata, map/list/struct/array payloads, and other advanced Quack physical encodings remain outside the current `ducknng_quack_batch` contract until they have dedicated implementation and tests.
-
-## Compatibility decisions
-
-If the server normalizes an input type, that normalization must be written here. Canonical output is part of the contract: the server emits ordinary `utf8` rather than `large_utf8`, emits `binary` rather than `large_binary`, and preserves DuckDB timestamp unit variants as the matching Arrow timestamp unit. If a client sends `large_utf8`, behaviour is currently unspecified and should not be relied upon.
-
-## Checklist for new type claims
-
-Before a new type or encoding is added to the contract: the Arrow logical type must be named here, the DuckDB mapping must be declared here or in the manifest, nullability behaviour must be explicit, canonical output behaviour must be explicit, and test coverage must exist for both successful roundtrip and failure on unsupported types. If those conditions are not met, the claim is not yet part of the public contract.
+Dictionary-preserving round trips, Arrow extension-type semantics, and run-end
+encoded arrays are not supported. `ENUM` is deliberately normalized to UTF-8;
+arbitrary extension metadata is not treated as an executable type registry.

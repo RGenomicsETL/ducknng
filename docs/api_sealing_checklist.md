@@ -49,7 +49,7 @@ The stable async contract is raw-result-first. NNG and RPC AIO helpers collect r
 
 ### 7. Arrow type contract
 
-The normative type set, emit-only projections, and explicitly deferred encodings are documented in `docs/types.md` and covered by `test/sql/ducknng_rpc_client_smoke.test`. The 0.1.0 contract covers: all scalar integer and float types, `VARCHAR`, `BLOB`, `DATE`, `TIME`, `TIME_NS`, all four timestamp units, `DECIMAL`/`HUGEINT` as `decimal128`, `UUID` as `utf8`, `TIMESTAMP_TZ` as timezone-free `timestamp[us]`, `ENUM` as `utf8`, `LIST`, `STRUCT`, `MAP` (emit-only), and `UNION` (emit-only; input decoder not yet implemented). Dictionary-preserving roundtrips, extension types, run-end encoding, `UNION` input decoding, and per-principal rate limits are all explicitly deferred and documented as such. **Resolved.**
+The current type contract is documented in `docs/types.md` and exercised by `test/sql/ducknng_type_roundtrip.test` over Arrow IPC and Quack-derived batches. Arrow receive supports scalar, temporal, decimal, interval, large/fixed binary, list, array, struct, map, and union families; the documented HUGEINT, UUID, ENUM, and time-with-zone projections are explicit normalizations. Dictionary-preserving round trips, extension-type semantics, and run-end encoding remain unsupported. **Resolved.**
 
 ### 8. Representative protocol examples and tests
 

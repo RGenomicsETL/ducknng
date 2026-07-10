@@ -54,7 +54,7 @@ It also draws on [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) for the
 | Layer | What it does |
 | --- | --- |
 | **Transport** | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry. |
-| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. `manifest` is always on; `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path. |
+| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path. |
 | **Policy** | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary. |
 | **Codecs** | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng `ducknng_quack_batch` batch media type, and text/raw fallback. User-registered codec hooks extend the set. |
 
@@ -578,6 +578,43 @@ FROM ducknng_query_rpc(
   0::UBIGINT
 );
 ```
+
+The `_params` helpers carry a typed Arrow `STRUCT`; child order binds SQL `?`
+parameters and values are never interpolated into SQL text. Use explicit SQL
+type context for a null parameter, such as `?::BIGINT`.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT rows_changed
+FROM ducknng_run_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'INSERT INTO rpc_demo_t VALUES (?)',
+  struct_pack(value := 13::INTEGER),
+  0::UBIGINT
+);
+
+SELECT i
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ? ORDER BY i',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
+
+DESCRIBE SELECT *
+FROM ducknng_prepare_query_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ?',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
+```
+
+The query helpers discover the remote result schema during DuckDB bind, which
+may happen more than once; use them for read-only or idempotent SQL. The
+fixed-schema `run_rpc` helpers send `exec` during scan, so `EXPLAIN` does not
+perform the remote statement. This avoids bind-time mutation but does not make
+a network write exactly once: after a lost reply, retry policy belongs to the
+application.
 
 You can also request the Quack-derived batch serializer over the same session contract. Unlike upstream [Quack](https://github.com/duckdb/duckdb-quack), ducknng keeps transport choice separate from row serialization, so the same `ducknng_quack_batch` mode can ride over `http`, `tcp`, `ipc`, or `ws`. Version and schema compatibility belong to the negotiated ducknng session contract rather than to a suffix on the serializer token; full Quack protocol traffic uses `application/vnd.duckdb` messages and negotiates `quackVersion` during the connection exchange, but this fetch payload is not wrapped in that Quack connection envelope. `ducknng.fetch_batch_chunks` controls the default number of DuckDB chunks requested per fetch; it defaults to 12 and applies to Arrow IPC and `ducknng_quack_batch` alike unless the client sends an explicit `batch_rows` hint.
 
@@ -1266,7 +1303,7 @@ A strong direct-exposure baseline:
 
 - **Local development / single-user IPC**: `inproc://`, loopback, or `ipc://` under a private directory; `exec` may be enabled for convenience.
 - **Trusted service mesh**: `tls+tcp://`, `wss://`, or `https://` with mTLS, exact peer allowlists, IP/CIDR allowlists, and service limits.
-- **Shared or semi-trusted clients**: prefer query sessions plus a short SQL authorizer; use deployment-level DuckDB/process controls for filesystem, extension loading, outbound network, and attachments.
+- **Shared or semi-trusted clients**: authorize both `query_open` and `exec`; query sessions are streaming, not a read-only policy. Use deployment-level DuckDB/process controls for filesystem, extension loading, outbound network, and attachments.
 - **Public/untrusted internet**: do not expose raw DuckDB SQL directly. Put `ducknng` behind a gateway that authenticates, rate-limits, and maps users to fixed application operations.
 
 ```sql

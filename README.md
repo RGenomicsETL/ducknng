@@ -32,7 +32,7 @@ inside the ducknng RPC/session protocol; it is not yet a full Quack
 | Layer          | What it does                                                                                                                                                                                                                                                               |
 |----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Transport**  | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.                                                                                                                                                                              |
-| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. `manifest` is always on; `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                                                                                               |
+| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                                                                    |
 | **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                                                                                |
 | **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng `ducknng_quack_batch` batch media type, and text/raw fallback. User-registered codec hooks extend the set. |
 
@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:38569 |
+| tls+tcp://127.0.0.1:35561 |
 +---------------------------+
 
 +--------+
@@ -163,7 +163,6 @@ ORDER BY aio_id;
 | aio_id |  ok  | has_frame |
 +--------+------+-----------+
 | 1      | true | true      |
-| 2      | true | true      |
 +--------+------+-----------+
 ```
 
@@ -487,6 +486,7 @@ table below is generated fresh on every README render:
 | `unstable_new_scalar_function_state_functions` | `duckdb_scalar_function_set_init`                                                                                                                                                                                                                                                                                                       |     1 |
 | `unstable_new_string_functions`                | `duckdb_valid_utf8_check`                                                                                                                                                                                                                                                                                                               |     1 |
 | `unstable_new_table_function_functions`        | `duckdb_table_function_get_client_context`                                                                                                                                                                                                                                                                                              |     1 |
+| `unstable_new_value_functions`                 | `duckdb_create_map_value`, `duckdb_create_time_ns`, `duckdb_create_union_value`                                                                                                                                                                                                                                                         |     3 |
 | `unstable_new_vector_functions`                | `duckdb_unsafe_vector_assign_string_element_len`                                                                                                                                                                                                                                                                                        |     1 |
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
@@ -566,14 +566,14 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Method Registry
 
-| name                              | kind   | arguments             | returns                                                                                                                                                                                                                                                                       | description                                                                                 |
-|-----------------------------------|--------|-----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `ducknng_register_exec_method`    | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                     | Register the built-in exec RPC method explicitly.                                           |
-| `ducknng_register_upload_methods` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                     | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
-| `ducknng_set_method_auth`         | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                     | Set descriptor-level verified-peer-identity authorization for a registered RPC method.      |
-| `ducknng_unregister_method`       | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                     | Unregister a method from the runtime registry.                                              |
-| `ducknng_unregister_family`       | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                     | Unregister all methods in a family and return the number removed.                           |
-| `ducknng_list_methods`            | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, disabled BOOLEAN)` | List the currently registered RPC methods in the runtime registry.                          |
+| name                              | kind   | arguments             | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | description                                                                                 |
+|-----------------------------------|--------|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `ducknng_register_exec_method`    | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in exec RPC method explicitly.                                           |
+| `ducknng_register_upload_methods` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
+| `ducknng_set_method_auth`         | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Set descriptor-level verified-peer-identity authorization for a registered RPC method.      |
+| `ducknng_unregister_method`       | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister a method from the runtime registry.                                              |
+| `ducknng_unregister_family`       | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister all methods in a family and return the number removed.                           |
+| `ducknng_list_methods`            | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry.                          |
 
 ## Primitive Transport
 
@@ -701,8 +701,12 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_get_rpc_manifest`     | table  | `url, tls_config_id`                               | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)`                                                  | Request the RPC manifest and return a structured result row.                                                                                                    |
 | `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id`                               | `BLOB`                                                                                                | Request the RPC manifest and return the raw reply frame as BLOB.                                                                                                |
 | `ducknng_run_rpc`              | table  | `url, sql, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row.                                                                                        |
+| `ducknng_run_rpc_params`       | table  | `url, sql, params, tls_config_id`                  | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute one parameterized metadata-oriented exec RPC and return a structured result row.                                                                        |
 | `ducknng_run_rpc_raw`          | scalar | `url, sql, tls_config_id`                          | `BLOB`                                                                                                | Execute the exec RPC and return the raw reply frame as BLOB.                                                                                                    |
 | `ducknng_query_rpc`            | table  | `url, sql, tls_config_id`                          | `table`                                                                                               | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.                                     |
+| `ducknng_query_rpc_params`     | table  | `url, sql, params, tls_config_id`                  | `table`                                                                                               | Execute a parameterized row-returning query through the session family and expose its Arrow rows as a DuckDB table.                                             |
+| `ducknng_prepare_query`        | table  | `url, sql, tls_config_id`                          | `table (zero rows with the prepared remote schema)`                                                   | Prepare exactly one remote SQL statement without executing it and expose its result schema.                                                                     |
+| `ducknng_prepare_query_params` | table  | `url, sql, params, tls_config_id`                  | `table (zero rows with the prepared remote schema)`                                                   | Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.                                      |
 | `ducknng_upload_table`         | table  | `url, source_query, target_table[, tls_config_id]` | `TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)`                                                  | Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded. |
 
 ## RPC Session
@@ -1085,6 +1089,58 @@ FROM ducknng_query_rpc(
 +----+-------+
 ```
 
+The `_params` helpers carry a typed Arrow `STRUCT`; child order binds
+SQL `?` parameters and values are never interpolated into SQL text. Use
+explicit SQL type context for a null parameter, such as `?::BIGINT`.
+
+``` sql
+SELECT rows_changed
+FROM ducknng_run_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'INSERT INTO rpc_demo_t VALUES (?)',
+  struct_pack(value := 13::INTEGER),
+  0::UBIGINT
+);
+SELECT i
+FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ? ORDER BY i',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
+DESCRIBE SELECT *
+FROM ducknng_prepare_query_params(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i FROM rpc_demo_t WHERE i >= ?',
+  struct_pack(minimum := 11::INTEGER),
+  0::UBIGINT
+);
++--------------+
+| rows_changed |
++--------------+
+| 1            |
++--------------+
++----+
+| i  |
++----+
+| 11 |
+| 12 |
+| 13 |
++----+
++-------------+-------------+------+------+---------+-------+
+| column_name | column_type | null | key  | default | extra |
++-------------+-------------+------+------+---------+-------+
+| i           | INTEGER     | YES  | NULL | NULL    | NULL  |
++-------------+-------------+------+------+---------+-------+
+```
+
+The query helpers discover the remote result schema during DuckDB bind,
+which may happen more than once; use them for read-only or idempotent
+SQL. The fixed-schema `run_rpc` helpers send `exec` during scan, so
+`EXPLAIN` does not perform the remote statement. This avoids bind-time
+mutation but does not make a network write exactly once: after a lost
+reply, retry policy belongs to the application.
+
 You can also request the Quack-derived batch serializer over the same
 session contract. Unlike upstream
 [Quack](https://github.com/duckdb/duckdb-quack), ducknng keeps transport
@@ -1114,6 +1170,7 @@ FROM ducknng_query_rpc_mode(
 | 10 | false |
 | 11 | true  |
 | 12 | true  |
+| 13 | true  |
 +----+-------+
 ```
 
@@ -2102,9 +2159,10 @@ Profiles by use case:
   convenience.
 - **Trusted service mesh**: `tls+tcp://`, `wss://`, or `https://` with
   mTLS, exact peer allowlists, IP/CIDR allowlists, and service limits.
-- **Shared or semi-trusted clients**: prefer query sessions plus a short
-  SQL authorizer; use deployment-level DuckDB/process controls for
-  filesystem, extension loading, outbound network, and attachments.
+- **Shared or semi-trusted clients**: authorize both `query_open` and
+  `exec`; query sessions are streaming, not a read-only policy. Use
+  deployment-level DuckDB/process controls for filesystem, extension
+  loading, outbound network, and attachments.
 - **Public/untrusted internet**: do not expose raw DuckDB SQL directly.
   Put `ducknng` behind a gateway that authenticates, rate-limits, and
   maps users to fixed application operations.
@@ -2246,7 +2304,7 @@ FROM ducknng_list_pipes('monitor_demo');
 +-----------+---------------+-----------------+---------------+
 |  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
 +-----------+---------------+-----------------+---------------+
-| 419925224 | 1783358495173 | 127.0.0.1:34568 | NULL          |
+| 252915180 | 1783657659697 | 127.0.0.1:50300 | NULL          |
 +-----------+---------------+-----------------+---------------+
 ```
 

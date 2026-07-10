@@ -441,11 +441,10 @@ without executing a query.
 Useful in TVF bind callbacks and scalar bind callbacks where values must be returned
 without executing a query.
 
-**Recommendation: NOT applicable.** MAP, UNION, and TIME_NS are not part of the current
-RPC payload surface. `ducknng` bind callbacks use `duckdb_get_varchar` / `duckdb_get_int64`
-/ `duckdb_get_double` for constant-folded values in HTTP lookup functions. Revisit if
-`ducknng` needs to return MAP or UNION typed results from bind-phase constant folding or
-from new RPC methods.
+**Status: ADOPTED.** Arrow parameter tuples are decoded into `duckdb_value` objects and
+bound to prepared statements. MAP, UNION, ARRAY, TIME_NS, nested containers, and the
+other supported Arrow types therefore use the value constructors in this group. The
+end-to-end contract is covered by `test/sql/ducknng_parameter_binding.test`.
 
 ---
 
@@ -453,7 +452,7 @@ from new RPC methods.
 
 | Group | Priority | Action |
 |---|---|---|
-| `unstable_new_arrow_functions` | **DONE** | Emit side adopted in `ducknng_ipc_out.c`; receive side deferred |
+| `unstable_new_arrow_functions` | **DONE** | Emit and receive paths are implemented in `ducknng_ipc_out.c` and `ducknng_sql_arrow.c` |
 | `unstable_new_error_data_functions` | **DONE** | Adopted in `ducknng_ipc_out.c` alongside Arrow rewrite |
 | `unstable_new_string_functions` / vector string | **DONE** | `duckdb_valid_utf8_check` in `ducknng_sql_bytes_look_text`; `duckdb_unsafe_vector_assign_string_element_len` at all vector string-assign sites |
 | `unstable_new_scalar_function_functions` | **DONE** | Bind phase adopted for the four HTTP lookup scalar functions; bind data pre-folds constant name argument |
@@ -466,7 +465,7 @@ from new RPC methods.
 | `unstable_new_prepared_statement_functions` | **DONE** | `query_prepare` RPC method; `ducknng_prepared_schema_to_ipc` in `ducknng_ipc_out.c` |
 | `unstable_new_query_execution_functions` | **DONE** | `duckdb_result_get_arrow_options` in result path; `duckdb_connection_get_arrow_options` in prepared-schema path |
 | `unstable_new_scalar_function_state_functions` | **DONE** | Per-thread scratch buffer for `ducknng_http_headers_build` in `ducknng_sql_http.c` |
-| `unstable_new_value_functions` | NOT applicable | MAP/UNION/TIME_NS not part of current payload surface |
+| `unstable_new_value_functions` | **DONE** | Arrow parameter decoding constructs MAP, UNION, ARRAY, TIME_NS, and other typed DuckDB values before prepared-statement binding |
 | `unstable_new_vector_functions` | PARTIAL | `duckdb_unsafe_vector_assign_string_element_len` adopted; remaining vector manipulation functions not needed |
 | `unstable_new_geo_functions` | NOT applicable | GEOMETRY CRS metadata; `ducknng` does not handle geometry columns |
 | `unstable_new_table_description_functions` | NOT applicable | Named-table schema introspection not used |
