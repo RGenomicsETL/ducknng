@@ -4,7 +4,7 @@
     "extension": {
       "name": "ducknng",
       "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC \u2014 with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "language": "C",
       "build": "cmake",
       "license": "MIT",
@@ -173,7 +173,34 @@
       "category": "Framed RPC",
       "signature": "query_rpc(url, sql, tls_config_id)",
       "returns": "table",
-      "description": "Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.",
+      "description": "Run read-only or idempotent remote SQL through a query session and return its rows.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_query_rpc_params",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "query_rpc_params(url, sql, params, tls_config_id)",
+      "returns": "table",
+      "description": "Run one parameterized read-only or idempotent remote statement and return its rows.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_prepare_query",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "prepare_query(url, sql, tls_config_id)",
+      "returns": "table",
+      "description": "Prepare one remote statement without executing it and expose its result schema.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_prepare_query_params",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "prepare_query_params(url, sql, params, tls_config_id)",
+      "returns": "table",
+      "description": "Bind a typed parameter tuple and expose the prepared remote result schema without execution.",
       "examples": []
     },
     {
@@ -183,6 +210,15 @@
       "signature": "run_rpc(url, sql, tls_config_id)",
       "returns": "table",
       "description": "Execute SQL via the exec method. Returns rows_changed + metadata.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_run_rpc_params",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "run_rpc_params(url, sql, params, tls_config_id)",
+      "returns": "table",
+      "description": "Execute one parameterized statement through exec and return rows_changed plus metadata.",
       "examples": []
     },
     {
