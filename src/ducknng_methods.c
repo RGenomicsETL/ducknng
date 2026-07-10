@@ -440,10 +440,11 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     char *errmsg = NULL;
     size_t len = 0;
     size_t cap = 0;
+    size_t i;
     char numbuf[160];
+    static const char *parameter_methods[] = {"exec", "query_open", "query_prepare"};
     (void)method;
-    (void)svc;
-    if (!reply) return -1;
+    if (!svc || !svc->rt || !reply) return -1;
     if (req && req->frame && req->frame->payload_len > 0) {
         json = ducknng_copy_payload_json(req);
         if (!json) {
@@ -480,7 +481,7 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     if (!ducknng_json_append_text(&response, &len, &cap, "\"server_name\":")) goto oom;
     if (!ducknng_json_append_string(&response, &len, &cap, "ducknng")) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap, ",\"server_version\":")) goto oom;
-    if (!ducknng_json_append_string(&response, &len, &cap, "0.1.1")) goto oom;
+    if (!ducknng_json_append_string(&response, &len, &cap, DUCKNNG_VERSION)) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap, ",\"duckdb_version\":")) goto oom;
     if (!ducknng_json_append_string(&response, &len, &cap, duckdb_version)) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap, ",\"server_platform\":")) goto oom;
@@ -493,7 +494,30 @@ static int ducknng_method_handshake_handler(ducknng_service *svc,
     if (!ducknng_json_append_string(&response, &len, &cap,
             ducknng_session_row_payload_format_name(row_payload_format))) goto oom;
     if (!ducknng_json_append_text(&response, &len, &cap,
-            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true},\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[\"exec\",\"query_open\",\"query_prepare\"],\"max_parameters\":65535}}")) goto oom;
+            ",\"supported_serialization_modes\":[\"arrow_ipc_stream\",\"ducknng_quack_batch\"],\"capabilities\":{\"fetch_metadata\":{\"correlation_id\":true,\"result_handle\":true,\"batch_index\":true},\"session_schema\":{\"ducknng_protocol_version\":true,\"row_schema_version\":true,\"fetch_batch_chunks\":true},\"parameter_binding\":{\"encoding\":\"arrow_struct\",\"positional\":true,\"methods\":[")) goto oom;
+    {
+        int emitted = 0;
+        int append_ok = 1;
+        ducknng_mutex_lock(&svc->rt->mu);
+        for (i = 0; i < sizeof(parameter_methods) / sizeof(parameter_methods[0]); i++) {
+            const char *name = parameter_methods[i];
+            if (!ducknng_method_registry_find(&svc->rt->registry,
+                    (const uint8_t *)name, (uint32_t)strlen(name))) continue;
+            if (emitted && !ducknng_json_append_text(&response, &len, &cap, ",")) {
+                append_ok = 0;
+                break;
+            }
+            if (!ducknng_json_append_string(&response, &len, &cap, name)) {
+                append_ok = 0;
+                break;
+            }
+            emitted = 1;
+        }
+        ducknng_mutex_unlock(&svc->rt->mu);
+        if (!append_ok) goto oom;
+    }
+    if (!ducknng_json_append_text(&response, &len, &cap,
+            "],\"max_parameters\":65535}}")) goto oom;
     if (correlation_id) {
         if (!ducknng_json_append_text(&response, &len, &cap, ",\"correlation_id\":")) goto oom;
         if (!ducknng_json_append_string(&response, &len, &cap, correlation_id)) goto oom;

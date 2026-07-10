@@ -13,6 +13,18 @@ SELECT ducknng_start_server(
   0::UBIGINT
 )
 
+query II
+SELECT
+  contains(manifest,
+    '"methods":["query_open","query_prepare"]')::INTEGER,
+  contains(manifest, '"name":"exec"')::INTEGER
+FROM ducknng_get_rpc_manifest(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  0::UBIGINT
+)
+----
+1	0
+
 statement ok
 SELECT ducknng_register_exec_method(false)
 
