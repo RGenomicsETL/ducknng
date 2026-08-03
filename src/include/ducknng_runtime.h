@@ -2,6 +2,7 @@
 #include "duckdb_extension.h"
 #include "ducknng_service.h"
 #include "ducknng_thread.h"
+#include "ducknng_http_client_stream.h"
 #include "ducknng_registry.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -84,7 +85,9 @@ enum ducknng_client_aio_kind {
     DUCKNNG_CLIENT_AIO_KIND_REQUEST = 1,
     DUCKNNG_CLIENT_AIO_KIND_SEND = 2,
     DUCKNNG_CLIENT_AIO_KIND_RECV = 3,
-    DUCKNNG_CLIENT_AIO_KIND_NCURL = 4
+    DUCKNNG_CLIENT_AIO_KIND_NCURL = 4,
+    DUCKNNG_CLIENT_AIO_KIND_NCURL_STREAM_OPEN = 5,
+    DUCKNNG_CLIENT_AIO_KIND_NCURL_STREAM_RECV = 6
 };
 
 enum ducknng_client_aio_state {
@@ -112,7 +115,12 @@ typedef struct ducknng_client_aio {
     char *http_headers_json;
     uint8_t *http_body;
     size_t http_body_len;
+    size_t http_body_capacity;
     char *http_body_text;
+    uint64_t http_stream_id;
+    ducknng_http_client_stream *http_stream_ref;
+    int http_end_of_stream;
+    int http_stream_claimed;
     int owns_socket;
     int open;
     int has_ctx;
@@ -221,6 +229,9 @@ typedef struct ducknng_runtime {
     ducknng_client_aio **client_aios;
     size_t client_aio_count;
     size_t client_aio_cap;
+    ducknng_http_client_stream **http_client_streams;
+    size_t http_client_stream_count;
+    size_t http_client_stream_cap;
     ducknng_tls_config **tls_configs;
     size_t tls_config_count;
     size_t tls_config_cap;
@@ -236,6 +247,7 @@ typedef struct ducknng_runtime {
     uint64_t next_service_id;
     uint64_t next_client_socket_id;
     uint64_t next_client_aio_id;
+    uint64_t next_http_client_stream_id;
     uint64_t next_tls_config_id;
     uint64_t next_http_profile_version;
     int shutting_down;
@@ -295,6 +307,14 @@ ducknng_client_socket *ducknng_runtime_remove_client_socket(ducknng_runtime *rt,
 int ducknng_runtime_add_client_aio(ducknng_runtime *rt, ducknng_client_aio *aio, char **errmsg);
 ducknng_client_aio *ducknng_runtime_remove_client_aio(ducknng_runtime *rt, uint64_t aio_id);
 void ducknng_client_aio_destroy(ducknng_client_aio *aio);
+int ducknng_runtime_add_http_client_stream(ducknng_runtime *rt,
+    ducknng_http_client_stream *stream, char **errmsg);
+ducknng_http_client_stream *ducknng_runtime_find_http_client_stream_locked(
+    ducknng_runtime *rt, uint64_t stream_id);
+ducknng_http_client_stream *ducknng_runtime_remove_http_client_stream(
+    ducknng_runtime *rt, uint64_t stream_id);
+void ducknng_runtime_release_http_client_stream(ducknng_runtime *rt,
+    ducknng_http_client_stream *stream);
 ducknng_tls_config *ducknng_runtime_find_tls_config(ducknng_runtime *rt, uint64_t tls_config_id);
 int ducknng_runtime_add_tls_config(ducknng_runtime *rt, ducknng_tls_config *cfg, char **errmsg);
 ducknng_tls_config *ducknng_runtime_remove_tls_config(ducknng_runtime *rt, uint64_t tls_config_id);

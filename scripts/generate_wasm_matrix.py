@@ -36,23 +36,23 @@ def render_table() -> str:
     con.execute(f"LOAD '{EXTENSION}'")
     rows = con.execute(
         """
-        SELECT target, http, https, inproc, tcp, ipc, tls_tcp, websocket,
+        SELECT target, http, https, http_response_stream, inproc, tcp, ipc, tls_tcp, websocket,
                async_is_real, honors_timeout, honors_cancel, tls_owner
         FROM ducknng_list_transport_capabilities()
         ORDER BY CASE target WHEN 'native' THEN 0 WHEN 'wasm_eh' THEN 1 ELSE 2 END
         """
     ).fetchall()
     header = (
-        "| target | http | https | inproc | tcp | ipc | tls+tcp | ws/wss | "
+        "| target | http | https | response stream | inproc | tcp | ipc | tls+tcp | ws/wss | "
         "real async | timeout | cancel | TLS owner |\n"
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
     body = []
     for row in rows:
         target, *caps = row
-        caps_cells = caps[:7]
-        flags = ["yes" if flag else "no" for flag in caps[7:10]]
-        tls_owner = caps[10]
+        caps_cells = caps[:8]
+        flags = ["yes" if flag else "no" for flag in caps[8:11]]
+        tls_owner = caps[11]
         body.append(
             "| `" + target + "` | " + " | ".join(list(caps_cells) + flags + [tls_owner]) + " |"
         )

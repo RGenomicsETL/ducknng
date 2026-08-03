@@ -112,6 +112,7 @@ typedef struct ducknng_net_caps {
     /* per-transport: unsupported | experimental | supported */
     ducknng_cap http;        /* http://  */
     ducknng_cap https;       /* https:// (TLS ownership below) */
+    ducknng_cap http_response_stream; /* incremental client body reads */
     ducknng_cap inproc;      /* inproc:// */
     ducknng_cap tcp;         /* tcp:// */
     ducknng_cap ipc;         /* ipc:// */
@@ -128,8 +129,9 @@ typedef struct ducknng_net_caps {
 
 The native backend reports everything `supported`, real async, native TLS. The
 browser `wasm_eh` backend reports `http`/`https` supported, browser-managed TLS,
-and (initially) `async_is_real = false`; everything else `unsupported`. The
-`wasm_threads` `inproc://` spike sets `inproc = experimental`. The compatibility
+and real unary async Fetch handles; incremental `http_response_stream` remains
+unsupported until the backend uses `ReadableStream`. The `wasm_threads`
+`inproc://` spike sets `inproc = experimental`. The compatibility
 table in `docs/wasm.md` becomes a *rendering* of this descriptor rather than a
 source of truth maintained by hand.
 

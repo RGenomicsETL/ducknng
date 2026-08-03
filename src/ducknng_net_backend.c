@@ -22,6 +22,7 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .backend_name = "native",
         .http = DUCKNNG_NET_CAP_SUPPORTED,
         .https = DUCKNNG_NET_CAP_SUPPORTED,
+        .http_response_stream = DUCKNNG_NET_CAP_SUPPORTED,
         .inproc = DUCKNNG_NET_CAP_SUPPORTED,
         .tcp = DUCKNNG_NET_CAP_SUPPORTED,
         .ipc = DUCKNNG_NET_CAP_SUPPORTED,
@@ -36,6 +37,7 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .backend_name = "wasm_eh",
         .http = DUCKNNG_NET_CAP_SUPPORTED,
         .https = DUCKNNG_NET_CAP_SUPPORTED,
+        .http_response_stream = DUCKNNG_NET_CAP_UNSUPPORTED,
         .inproc = DUCKNNG_NET_CAP_UNSUPPORTED, /* no pthread worker for NNG progress */
         .tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
@@ -56,6 +58,7 @@ static const ducknng_net_caps ducknng_all_caps[] = {
         .backend_name = "wasm_threads",
         .http = DUCKNNG_NET_CAP_SUPPORTED,
         .https = DUCKNNG_NET_CAP_SUPPORTED,
+        .http_response_stream = DUCKNNG_NET_CAP_UNSUPPORTED,
         .inproc = DUCKNNG_NET_CAP_EXPERIMENTAL, /* pthread progress spike; not a gate */
         .tcp = DUCKNNG_NET_CAP_UNSUPPORTED,
         .ipc = DUCKNNG_NET_CAP_UNSUPPORTED,
@@ -147,13 +150,15 @@ char *ducknng_net_caps_to_json(const ducknng_net_caps *caps) {
     if (!caps) return NULL;
     written = snprintf(buf, sizeof(buf),
         "{\"backend\":\"%s\","
-        "\"http\":\"%s\",\"https\":\"%s\",\"inproc\":\"%s\",\"tcp\":\"%s\","
+        "\"http\":\"%s\",\"https\":\"%s\",\"http_response_stream\":\"%s\","
+        "\"inproc\":\"%s\",\"tcp\":\"%s\","
         "\"ipc\":\"%s\",\"tls_tcp\":\"%s\",\"websocket\":\"%s\","
         "\"async_is_real\":%s,\"honors_timeout\":%s,\"honors_cancel\":%s,"
         "\"tls_owner\":\"%s\"}",
         caps->backend_name ? caps->backend_name : "unknown",
         ducknng_net_cap_name(caps->http),
         ducknng_net_cap_name(caps->https),
+        ducknng_net_cap_name(caps->http_response_stream),
         ducknng_net_cap_name(caps->inproc),
         ducknng_net_cap_name(caps->tcp),
         ducknng_net_cap_name(caps->ipc),

@@ -501,6 +501,7 @@ static void ducknng_list_transport_capabilities_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "http", type);
     duckdb_bind_add_result_column(info, "https", type);
+    duckdb_bind_add_result_column(info, "http_response_stream", type);
     duckdb_bind_add_result_column(info, "inproc", type);
     duckdb_bind_add_result_column(info, "tcp", type);
     duckdb_bind_add_result_column(info, "ipc", type);
@@ -549,9 +550,9 @@ static void ducknng_list_transport_capabilities_scan(duckdb_function_info info,
         return;
     }
     actives = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1));
-    async_real = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 9));
-    timeouts = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
-    cancels = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
+    async_real = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
+    timeouts = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
+    cancels = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 12));
     for (i = init->offset; i < (idx_t)count && emitted < duckdb_vector_size(); i++, emitted++) {
         const ducknng_net_caps *row = &all[i];
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 0), emitted,
@@ -562,19 +563,21 @@ static void ducknng_list_transport_capabilities_scan(duckdb_function_info info,
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 3), emitted,
             ducknng_net_cap_name(row->https));
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 4), emitted,
-            ducknng_net_cap_name(row->inproc));
+            ducknng_net_cap_name(row->http_response_stream));
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 5), emitted,
-            ducknng_net_cap_name(row->tcp));
+            ducknng_net_cap_name(row->inproc));
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 6), emitted,
-            ducknng_net_cap_name(row->ipc));
+            ducknng_net_cap_name(row->tcp));
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 7), emitted,
-            ducknng_net_cap_name(row->tls_tcp));
+            ducknng_net_cap_name(row->ipc));
         duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 8), emitted,
+            ducknng_net_cap_name(row->tls_tcp));
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 9), emitted,
             ducknng_net_cap_name(row->websocket));
         async_real[emitted] = row->async_is_real != 0;
         timeouts[emitted] = row->honors_timeout != 0;
         cancels[emitted] = row->honors_cancel != 0;
-        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 12), emitted,
+        duckdb_vector_assign_string_element(duckdb_data_chunk_get_vector(output, 13), emitted,
             ducknng_net_tls_owner_name(row->tls_owner));
     }
     init->offset = i;

@@ -30,6 +30,7 @@ typedef struct ducknng_net_caps {
     /* per-transport support level */
     ducknng_net_cap http;       /* http://  */
     ducknng_net_cap https;      /* https:// (TLS ownership below) */
+    ducknng_net_cap http_response_stream; /* incremental client response body */
     ducknng_net_cap inproc;     /* inproc:// */
     ducknng_net_cap tcp;        /* tcp:// */
     ducknng_net_cap ipc;        /* ipc:// */

@@ -75,6 +75,8 @@ If you launch an aio with:
 - `ducknng_close_query_raw_aio(...)`
 - `ducknng_cancel_query_raw_aio(...)`
 - `ducknng_ncurl_aio(...)`
+- `ducknng_ncurl_stream_open_aio(...)`
+- `ducknng_ncurl_stream_recv_aio(...)`
 
 then you should eventually release the aio handle explicitly with:
 
@@ -83,8 +85,16 @@ then you should eventually release the aio handle explicitly with:
 Important:
 
 - `ducknng_aio_cancel(aio_id)` requests cancellation, but it is **not** the destructor
-- `ducknng_aio_collect(...)` and `ducknng_ncurl_aio_collect(...)` collect terminal results, but they do **not** auto-free the aio slot
+- the aio collect helpers, including the unary and streaming ncurl collectors, collect terminal results, but they do **not** auto-free the aio slot
 - dropping the aio handle is still the explicit cleanup step
+
+### HTTP response streams
+
+A successful `ducknng_ncurl_stream_open_aio_collect(...)` call returns a separate `stream_id`. Close it with:
+
+- `ducknng_ncurl_stream_close(stream_id)`
+
+The open aio and stream are different resources. Before successful open collection, the stream is unclaimed and dropping the open aio closes it. Collection claims the stream, after which dropping the aio does not close the stream. Every claimed stream needs explicit close, including after `end_of_stream = true`. Closing aborts a pending body receive; the receive aio still needs collection or waiting followed by `ducknng_aio_drop(...)`.
 
 ### TLS config handles
 
@@ -142,6 +152,7 @@ Treat `ducknng` like a low-level systems binding:
 - if you **start** a server, you should **stop** it
 - if you **open** a socket, you should **close** it
 - if you **launch** an aio, you should **drop** it
+- if you **open** an HTTP response stream, you should **close** it
 - if you **create** a TLS config, you should **drop** it
 - if you **open** a query session, you should **close** it
 

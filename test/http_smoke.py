@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 
 class SmokeHandler(http.server.BaseHTTPRequestHandler):
@@ -14,6 +15,19 @@ class SmokeHandler(http.server.BaseHTTPRequestHandler):
     retry_lock = threading.Lock()
 
     def do_GET(self) -> None:
+        if self.path == "/stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for body in (b'{"event":1}\n', b'{"event":2}\n'):
+                self.wfile.write(f"{len(body):x}\r\n".encode("ascii"))
+                self.wfile.write(body + b"\r\n")
+                self.wfile.flush()
+                time.sleep(0.2)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            return
         if self.path.startswith("/retry"):
             with self.retry_lock:
                 type(self).retry_count += 1
@@ -86,6 +100,7 @@ def main() -> None:
             out1 = tmpdir_path / "hello.tsv"
             out2 = tmpdir_path / "echo.tsv"
             out3 = tmpdir_path / "retry.tsv"
+            out4 = tmpdir_path / "stream.tsv"
             sql = f"""
 LOAD '{sql_quote(str(ext_path))}';
 COPY (
@@ -119,6 +134,53 @@ COPY (
          max(attempt)::INTEGER AS max_attempt
   FROM attempts
 ) TO '{sql_quote(str(out3))}' (DELIMITER '\t', HEADER FALSE);
+CREATE TEMP TABLE stream_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:{port}/stream', 'GET', NULL, NULL, 2000, 0::UBIGINT
+) AS aio_id;
+CREATE TEMP TABLE stream_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list_value(aio_id) FROM stream_open_aio), 2000
+);
+CREATE TEMP TABLE stream_results(seq INTEGER, body BLOB, end_of_stream BOOLEAN);
+CREATE TEMP TABLE stream_recv_aio AS
+SELECT ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM stream_open), 65536::UBIGINT, 2000
+) AS aio_id;
+INSERT INTO stream_results
+SELECT 1, body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM stream_recv_aio), 2000
+);
+SELECT ducknng_aio_drop(aio_id) FROM stream_recv_aio;
+DELETE FROM stream_recv_aio;
+INSERT INTO stream_recv_aio
+SELECT ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM stream_open), 65536::UBIGINT, 2000
+);
+INSERT INTO stream_results
+SELECT 2, body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM stream_recv_aio), 2000
+);
+SELECT ducknng_aio_drop(aio_id) FROM stream_recv_aio;
+DELETE FROM stream_recv_aio;
+INSERT INTO stream_recv_aio
+SELECT ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM stream_open), 65536::UBIGINT, 2000
+);
+INSERT INTO stream_results
+SELECT 3, body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM stream_recv_aio), 2000
+);
+COPY (
+  SELECT seq, coalesce(hex(body), ''), end_of_stream
+  FROM stream_results ORDER BY seq
+) TO '{sql_quote(str(out4))}' (DELIMITER '\t', HEADER FALSE);
+SELECT ducknng_aio_drop(aio_id) FROM stream_recv_aio;
+SELECT ducknng_ncurl_stream_close(stream_id) FROM stream_open;
+SELECT ducknng_aio_drop(aio_id) FROM stream_open_aio;
 """
             try:
                 import duckdb
@@ -142,10 +204,16 @@ COPY (
             hello = read_tsv_line(out1)
             echo = read_tsv_line(out2)
             retry = read_tsv_line(out3)
+            stream = out4.read_text(encoding="utf-8").strip().splitlines()
 
             assert hello == ["true", "200", "hello from ducknng http", "true"], hello
             assert echo == ["true", "200", "01020304", "true", "true"], echo
             assert retry == ["503:1|503:2|200:3", "3"], retry
+            assert stream == [
+                "1\t7B226576656E74223A317D0A\tfalse",
+                "2\t7B226576656E74223A327D0A\tfalse",
+                '3\t""\ttrue',
+            ], stream
             assert SmokeHandler.retry_count == 3, SmokeHandler.retry_count
             print("ducknng http smoke: ok")
     finally:

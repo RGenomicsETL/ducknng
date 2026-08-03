@@ -1044,7 +1044,7 @@ if (file.exists(pidfile)) {
 unlink(c(script, logfile, cafile))
 ```
 
-`ducknng_ncurl_aio(...)` is the async form; `ducknng_ncurl_table(...)` parses the response body through the codec layer and returns a table directly.
+`ducknng_ncurl_aio(...)` is the unary async form and still completes with the full response body. The `ducknng_ncurl_stream_open_aio(...)` / `ducknng_ncurl_stream_recv_aio(...)` family below is the incremental form; `ducknng_ncurl_table(...)` parses a complete response body through the codec layer.
 
 ### `ducknng_start_server` on `http://` and `https://`
 
@@ -1173,6 +1173,60 @@ WHERE service_name = 'http_sse' AND path = '/events';
 ```{duckdb collapse=TRUE, comment=""}
 SELECT ok, status, headers_json, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
+```
+
+For incremental consumption, the open aio completes as soon as the response status and headers arrive. Each receive aio then returns raw application body bytes with HTTP chunk framing removed. Completion is a separate `end_of_stream = true` row, and the claimed stream is closed independently of its aio handles.
+
+```{duckdb collapse=TRUE, comment=""}
+SET VARIABLE sse_open_aio = ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT
+);
+CREATE TEMP TABLE sse_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  list_value(getvariable('sse_open_aio')::UBIGINT), 2000
+);
+SET VARIABLE sse_stream = (SELECT stream_id FROM sse_open WHERE ok);
+
+SET VARIABLE sse_recv_1 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS event, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_1')::UBIGINT), 2000
+);
+
+-- Further receives return the remaining events and finally explicit EOF.
+SET VARIABLE sse_recv_2 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_2 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_2')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_3 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_3 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_3')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_eof = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_eof')::UBIGINT), 2000
+);
+
+SELECT ducknng_ncurl_stream_close(getvariable('sse_stream')::UBIGINT);
+SELECT ducknng_aio_drop(getvariable('sse_open_aio')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_1')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_2')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_3')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_eof')::UBIGINT) AS dropped;
+DROP TABLE sse_open;
 
 SELECT ducknng_stop_server('http_sse');
 ```

@@ -2,6 +2,7 @@
 
 ## ducknng 0.1.2 — TLS and codec hardening release
 
+- Added native incremental asynchronous HTTP response streams without changing unary `ducknng_ncurl_aio()` semantics. `ducknng_ncurl_stream_open_aio()` exposes status and duplicate-preserving headers before body completion; `ducknng_ncurl_stream_recv_aio()` provides one cancellable bounded raw-body receive at a time; dedicated collectors report body slices and explicit EOF; and `ducknng_ncurl_stream_close()` owns final connection cleanup. The native adapter handles Content-Length, close-delimited bodies, and chunked transfer decoding below callers, leaving SSE/NDJSON parsing above the transport. Browser builds fail closed for this new surface until a `ReadableStream` backend exists. SQL lifecycle coverage and the external Python HTTP smoke test exercise early headers, cancellation, dechunked incremental reads, EOF, and explicit cleanup.
 This release fixes verified security issues in outbound TLS client verification, HTTP header handling, and the Quack-derived row codec. The extension metadata is bumped to 0.1.2.
 
 - Added Arrow-encoded positional SQL parameters for `exec`, `query_open`, and `query_prepare`, with nested DuckDB values, null handling, a 65,535-parameter limit, and no SQL text interpolation. New SQL helpers expose parameterized row queries, scan-time unary execution, and schema-only remote prepare. `query_prepare` now rejects multiple statements before any statement can run.

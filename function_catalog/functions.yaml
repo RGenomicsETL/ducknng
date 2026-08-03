@@ -730,8 +730,8 @@
       "implemented": true,
       "description": "Return the active net backend's capability descriptor as a JSON object.",
       "notes": [
-        "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
-        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS; the wasm targets report http/https with browser-managed TLS and real async AIO through the fetch completion bridge (handles stay pending until the worker event loop settles them; timeout and cancel abort the fetch; the synchronous ncurl path still uses blocking XHR and ignores timeout_ms), with inproc experimental only under wasm_threads.",
+        "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, http_response_stream, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
+        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS. The wasm targets report http/https with browser-managed TLS and real unary async AIO through the fetch completion bridge: handles stay pending until the worker event loop settles them, and timeout and cancel abort the fetch. Their synchronous ncurl path still uses blocking XHR, http_response_stream is unsupported, and inproc is experimental only under wasm_threads.",
         "Harnesses should gate assertions on this descriptor instead of maintaining per-target probe lists; claiming a capability that fails, or passing one that is claimed unsupported, is a bug in either the claim or the behavior."
       ],
       "examples": [
@@ -744,7 +744,7 @@
       "kind": "table",
       "category": "Service Control",
       "signature": "ducknng_list_transport_capabilities()",
-      "returns": "TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)",
+      "returns": "TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, http_response_stream VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)",
       "since": "0.1.2",
       "implemented": true,
       "description": "List the capability contract for every build target; exactly one row is active.",
@@ -986,6 +986,99 @@
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl_aio_collect(list_value(1::UBIGINT), 1000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_open_aio",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_open_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
+      "returns": "UBIGINT",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Open an HTTP or HTTPS response stream asynchronously and return an aio handle for the response headers.",
+      "notes": [
+        "Collect the open aio with ducknng_ncurl_stream_open_aio_collect(); status and headers become available without waiting for the response body to finish.",
+        "The collected stream_id owns one HTTP connection until ducknng_ncurl_stream_close() is called.",
+        "Existing ducknng_ncurl_aio() remains the unary full-response operation; this is an additive split-phase primitive for SSE, NDJSON, and progressive bodies.",
+        "Optional profile_id uses the same fail-closed outbound HTTP profile resolution as ducknng_ncurl_aio().",
+        "Incremental client response streams are currently native-only; browser wasm builds return a terminal error aio rather than buffering and pretending to stream."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_open_aio('http://127.0.0.1:8080/events', 'GET', NULL, NULL, 5000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_open_aio_collect",
+      "kind": "table",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_open_aio_collect(aio_ids, wait_ms)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, status INTEGER, error VARCHAR, headers_json VARCHAR)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Wait for streaming HTTP open aios and return response status, headers, and a readable stream handle.",
+      "notes": [
+        "ok means the request was sent and response headers were received; HTTP 4xx and 5xx statuses are still successful transport opens.",
+        "Collection claims the stream handle. Dropping a successful open aio before collecting it closes the unclaimed stream.",
+        "Release the aio with ducknng_aio_drop() and release the stream separately with ducknng_ncurl_stream_close()."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_ncurl_stream_open_aio_collect(list_value(1::UBIGINT), 1000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_recv_aio",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_recv_aio(stream_id, max_bytes, timeout_ms)",
+      "returns": "UBIGINT",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Launch one cancellable asynchronous raw-body receive from an opened HTTP response stream.",
+      "notes": [
+        "Only one receive may be pending per stream.",
+        "max_bytes must be between 1 and 67108864 and bounds the returned body BLOB.",
+        "HTTP chunk framing is decoded internally; callers receive application body bytes, never transfer-encoding delimiters.",
+        "Collect with ducknng_ncurl_stream_recv_aio_collect() and cancel a pending receive with ducknng_aio_cancel(). Any receive error makes the stream unreadable; close it explicitly."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_recv_aio(1::UBIGINT, 65536::UBIGINT, 30000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_recv_aio_collect",
+      "kind": "table",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_recv_aio_collect(aio_ids, wait_ms)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, error VARCHAR, body BLOB, end_of_stream BOOLEAN)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Wait for streaming HTTP receive aios and return one raw body slice or explicit end-of-stream result per ready handle.",
+      "notes": [
+        "A successful data result has a non-empty body and end_of_stream = false.",
+        "Completion is a separate successful row with body NULL and end_of_stream = true, so callers never infer EOF from an empty or timed-out read.",
+        "SSE and NDJSON parsing remains the caller's responsibility above these raw, de-framed bytes."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_ncurl_stream_recv_aio_collect(list_value(2::UBIGINT), 30000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_close",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_close(stream_id)",
+      "returns": "BOOLEAN",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Close and release an HTTP response stream handle.",
+      "notes": [
+        "Closing aborts an active receive before releasing the underlying HTTP connection.",
+        "Returns FALSE for unknown or already-closing stream handles.",
+        "A stream must be closed explicitly even after end_of_stream because SQL handles have no automatic finalizer."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_close(1::UBIGINT);"
       ]
     },
     {

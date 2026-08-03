@@ -88,7 +88,7 @@ SELECT (ducknng_dial_socket(
 +---------------------------+
 |        listen_url         |
 +---------------------------+
-| tls+tcp://127.0.0.1:35561 |
+| tls+tcp://127.0.0.1:45825 |
 +---------------------------+
 
 +--------+
@@ -538,16 +538,16 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Service Control
 
-| name                                  | kind   | arguments                                                                                     | returns                                                                                                                                                                                                                                     | description                                                                                                                                        |
-|---------------------------------------|--------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_start_server`                | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN`                                                                                                                                                                                                                                   | Start a named ducknng service and choose the carrier from the listen URL scheme.                                                                   |
-| `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN`                                                                                                                                                                                                                                   | Stop a named ducknng service.                                                                                                                      |
-| `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT`                                                                                                                                                                                                                                   | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
-| `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN`                                                                                                                                                                                                                                   | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
-| `ducknng_transport_capabilities`      | scalar |                                                                                               | `VARCHAR`                                                                                                                                                                                                                                   | Return the active net backend’s capability descriptor as a JSON object.                                                                            |
-| `ducknng_list_transport_capabilities` | table  |                                                                                               | `TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)` | List the capability contract for every build target; exactly one row is active.                                                                    |
-| `ducknng_set_execution_pool_max`      | scalar | `n`                                                                                           | `UBIGINT`                                                                                                                                                                                                                                   | Set the runtime execution-connection pool grow ceiling and return the effective value.                                                             |
-| `ducknng_execution_pool_max`          | scalar |                                                                                               | `UBIGINT`                                                                                                                                                                                                                                   | Return the current execution-connection pool grow ceiling.                                                                                         |
+| name                                  | kind   | arguments                                                                                     | returns                                                                                                                                                                                                                                                                   | description                                                                                                                                        |
+|---------------------------------------|--------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_start_server`                | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN`                                                                                                                                                                                                                                                                 | Start a named ducknng service and choose the carrier from the listen URL scheme.                                                                   |
+| `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN`                                                                                                                                                                                                                                                                 | Stop a named ducknng service.                                                                                                                      |
+| `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT`                                                                                                                                                                                                                                                                 | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
+| `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN`                                                                                                                                                                                                                                                                 | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
+| `ducknng_transport_capabilities`      | scalar |                                                                                               | `VARCHAR`                                                                                                                                                                                                                                                                 | Return the active net backend’s capability descriptor as a JSON object.                                                                            |
+| `ducknng_list_transport_capabilities` | table  |                                                                                               | `TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, http_response_stream VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)` | List the capability contract for every build target; exactly one row is active.                                                                    |
+| `ducknng_set_execution_pool_max`      | scalar | `n`                                                                                           | `UBIGINT`                                                                                                                                                                                                                                                                 | Set the runtime execution-connection pool grow ceiling and return the effective value.                                                             |
+| `ducknng_execution_pool_max`          | scalar |                                                                                               | `UBIGINT`                                                                                                                                                                                                                                                                 | Return the current execution-connection pool grow ceiling.                                                                                         |
 
 ## Introspection
 
@@ -621,15 +621,20 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## HTTP Transport
 
-| name                            | kind   | arguments                                                                                                                                        | returns                                                                                                                                                                                                                                                                                           | description                                                                                                                         |
-|---------------------------------|--------|--------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_ncurl`                 | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                            | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
-| `ducknng_ncurl_aio`             | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                         | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
-| `ducknng_ncurl_aio_collect`     | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                            | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
-| `ducknng_ncurl_table`           | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(dynamic by response Content-Type)`                                                                                                                                                                                                                                                         | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
-| `ducknng_register_http_profile` | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Register or replace an outbound HTTP credential profile with fail-closed request scope.                                             |
-| `ducknng_drop_http_profile`     | scalar | `profile_id`                                                                                                                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Drop a registered outbound HTTP credential profile.                                                                                 |
-| `ducknng_list_http_profiles`    | table  |                                                                                                                                                  | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)` | List registered outbound HTTP profiles with redacted credential metadata.                                                           |
+| name                                    | kind   | arguments                                                                                                                                        | returns                                                                                                                                                                                                                                                                                           | description                                                                                                                         |
+|-----------------------------------------|--------|--------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_ncurl`                         | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                            | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
+| `ducknng_ncurl_aio`                     | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                         | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
+| `ducknng_ncurl_aio_collect`             | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                            | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
+| `ducknng_ncurl_stream_open_aio`         | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                         | Open an HTTP or HTTPS response stream asynchronously and return an aio handle for the response headers.                             |
+| `ducknng_ncurl_stream_open_aio_collect` | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, status INTEGER, error VARCHAR, headers_json VARCHAR)`                                                                                                                                                                                       | Wait for streaming HTTP open aios and return response status, headers, and a readable stream handle.                                |
+| `ducknng_ncurl_stream_recv_aio`         | scalar | `stream_id, max_bytes, timeout_ms`                                                                                                               | `UBIGINT`                                                                                                                                                                                                                                                                                         | Launch one cancellable asynchronous raw-body receive from an opened HTTP response stream.                                           |
+| `ducknng_ncurl_stream_recv_aio_collect` | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, error VARCHAR, body BLOB, end_of_stream BOOLEAN)`                                                                                                                                                                                           | Wait for streaming HTTP receive aios and return one raw body slice or explicit end-of-stream result per ready handle.               |
+| `ducknng_ncurl_stream_close`            | scalar | `stream_id`                                                                                                                                      | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Close and release an HTTP response stream handle.                                                                                   |
+| `ducknng_ncurl_table`                   | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(dynamic by response Content-Type)`                                                                                                                                                                                                                                                         | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
+| `ducknng_register_http_profile`         | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Register or replace an outbound HTTP credential profile with fail-closed request scope.                                             |
+| `ducknng_drop_http_profile`             | scalar | `profile_id`                                                                                                                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Drop a registered outbound HTTP credential profile.                                                                                 |
+| `ducknng_list_http_profiles`            | table  |                                                                                                                                                  | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)` | List registered outbound HTTP profiles with redacted credential metadata.                                                           |
 
 ## Body Codecs
 
@@ -1719,9 +1724,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
 +---------------------------------------------------------------------+
 ```
 
-`ducknng_ncurl_aio(...)` is the async form; `ducknng_ncurl_table(...)`
-parses the response body through the codec layer and returns a table
-directly.
+`ducknng_ncurl_aio(...)` is the unary async form and still completes
+with the full response body. The `ducknng_ncurl_stream_open_aio(...)` /
+`ducknng_ncurl_stream_recv_aio(...)` family below is the incremental
+form; `ducknng_ncurl_table(...)` parses a complete response body through
+the codec layer.
 
 ### `ducknng_start_server` on `http://` and `https://`
 
@@ -1973,7 +1980,6 @@ is the concatenation of all SSE events written by the server.
 ``` sql
 SELECT ok, status, headers_json, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-SELECT ducknng_stop_server('http_sse');
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
 |  ok  | status |                                                                          headers_json                                                                           | body_text |
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
@@ -1985,6 +1991,92 @@ data: row 3
 
           |
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
+```
+
+For incremental consumption, the open aio completes as soon as the
+response status and headers arrive. Each receive aio then returns raw
+application body bytes with HTTP chunk framing removed. Completion is a
+separate `end_of_stream = true` row, and the claimed stream is closed
+independently of its aio handles.
+
+``` sql
+SET VARIABLE sse_open_aio = ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT
+);
+CREATE TEMP TABLE sse_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  list_value(getvariable('sse_open_aio')::UBIGINT), 2000
+);
+SET VARIABLE sse_stream = (SELECT stream_id FROM sse_open WHERE ok);
+SET VARIABLE sse_recv_1 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS event, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_1')::UBIGINT), 2000
+);
+-- Further receives return the remaining events and finally explicit EOF.
+SET VARIABLE sse_recv_2 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_2 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_2')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_3 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_3 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_3')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_eof = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_eof')::UBIGINT), 2000
+);
+SELECT ducknng_ncurl_stream_close(getvariable('sse_stream')::UBIGINT);
+SELECT ducknng_aio_drop(getvariable('sse_open_aio')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_1')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_2')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_3')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_eof')::UBIGINT) AS dropped;
+DROP TABLE sse_open;
+SELECT ducknng_stop_server('http_sse');
+
+
+
+
++-------------------+---------------+
+|       event       | end_of_stream |
++-------------------+---------------+
+| data: row 1\\n\\n | false         |
++-------------------+---------------+
+
+
+
+
+
++------+---------------+
+| body | end_of_stream |
++------+---------------+
+| NULL | true          |
++------+---------------+
++--------------------------------------------------------------------------+
+| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS "UBIGINT")) |
++--------------------------------------------------------------------------+
+| true                                                                     |
++--------------------------------------------------------------------------+
++---------+
+| dropped |
++---------+
+| true    |
++---------+
+
 +---------------------------------+
 | ducknng_stop_server('http_sse') |
 +---------------------------------+
@@ -2301,11 +2393,11 @@ FROM ducknng_monitor_status('monitor_demo');
 ``` sql
 SELECT pipe_id, opened_ms, remote_addr, peer_identity
 FROM ducknng_list_pipes('monitor_demo');
-+-----------+---------------+-----------------+---------------+
-|  pipe_id  |   opened_ms   |   remote_addr   | peer_identity |
-+-----------+---------------+-----------------+---------------+
-| 252915180 | 1783657659697 | 127.0.0.1:50300 | NULL          |
-+-----------+---------------+-----------------+---------------+
++------------+---------------+-----------------+---------------+
+|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
++------------+---------------+-----------------+---------------+
+| 1644454022 | 1784202846088 | 127.0.0.1:39948 | NULL          |
++------------+---------------+-----------------+---------------+
 ```
 
 ``` sql

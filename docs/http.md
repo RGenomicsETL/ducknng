@@ -18,14 +18,25 @@ The shipped low-level synchronous client entry point is:
 ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
 ```
 
-Its asynchronous companion is:
+Its unary asynchronous companion is:
 
 ```sql
 ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
 ducknng_ncurl_aio_collect(aio_ids, wait_ms)
 ```
 
-They are modeled ergonomically on `nanonext::ncurl()` / `ncurl_aio()` while staying faithful to DuckDB SQL conventions and the project preference for in-band error tables.
+Incremental response bodies use an additive split-phase lifecycle:
+
+```sql
+ducknng_ncurl_stream_open_aio(url, method, headers_json, body,
+                              timeout_ms, tls_config_id[, profile_id])
+ducknng_ncurl_stream_open_aio_collect(aio_ids, wait_ms)
+ducknng_ncurl_stream_recv_aio(stream_id, max_bytes, timeout_ms)
+ducknng_ncurl_stream_recv_aio_collect(aio_ids, wait_ms)
+ducknng_ncurl_stream_close(stream_id)
+```
+
+They are modeled ergonomically on `nanonext::ncurl()` / `ncurl_aio()` while staying faithful to DuckDB SQL conventions and the project preference for in-band error tables. Existing `ducknng_ncurl_aio()` remains a unary operation that completes with the full body; callers opt into stream handles explicitly rather than having an established function change meaning.
 
 The implemented return shape is:
 
@@ -42,6 +53,12 @@ TABLE(
 
 `ok` means the HTTP transport operation completed and a response was received. It does not mean the response status was 2xx. `status` is the HTTP status code when present. `error` is reserved for local client, connection, timeout, TLS, cancellation, or adapter failures. `headers_json` is the response header block in a canonical JSON form that preserves order and duplicates. `body` is the raw response body. `body_text` is a best-effort UTF-8 decoding of `body` and is `NULL` when the body is absent or not valid text. The raw `ducknng_ncurl(...)` helper is registered through a volatile execution path, so constant arguments are not folded into one cached HTTP response across recursive CTE iterations or repeated row execution. If a retry loop must avoid speculative calls after a stop condition, make the HTTP expression depend on the filtered recursive row, for example by including the attempt number in a query parameter or request body. `ducknng_ncurl_aio_collect(...)` returns the same raw result columns plus `aio_id` for terminal handles launched by `ducknng_ncurl_aio(...)`; expected launch failures such as unsupported schemes or invalid TLS handles are represented as immediate terminal error aio handles and are inspected through the same collect/status path. Those handles are inspected with `ducknng_aio_status(...)` and released with `ducknng_aio_drop(...)` like other aio handles.
 
+The incremental open collect returns `aio_id`, `ok`, `stream_id`, `status`, `error`, and `headers_json` as soon as the response head has arrived. A successful HTTP 4xx or 5xx response still has `ok = true`, just like unary ncurl. The stream id then accepts one pending receive at a time. Receive collection returns `aio_id`, `ok`, `stream_id`, `error`, `body`, and `end_of_stream`. A data result always has a non-empty raw `body` and `end_of_stream = false`; completion is a separate successful result with `body = NULL` and `end_of_stream = true`. A timeout, cancellation, malformed HTTP body, or premature fixed/chunked body close is an error rather than EOF. Any receive error makes the stream unreadable; the caller still closes its stream handle explicitly.
+
+Native streaming reads parse `Content-Length`, close-delimited responses, and HTTP/1.1 chunked transfer coding below the SQL surface. Chunk-size lines, chunk delimiters, and trailers never appear in `body`; content codings such as gzip are not transparently decompressed. SSE, NDJSON, and other application-level record parsing remain caller responsibilities. `max_bytes` bounds one returned body slice and must be between 1 and 67,108,864 bytes. Only one receive aio may be pending per stream.
+
+Open aios and stream handles have separate lifetimes. Collecting a successful open aio claims its stream id. Dropping a successful open aio before collection closes the unclaimed stream. After collection, callers drop every open/receive aio with `ducknng_aio_drop()` and close the stream independently with `ducknng_ncurl_stream_close()`, including after EOF. Closing a stream aborts an active receive before releasing the connection.
+
 The request-side `headers_json` argument uses the same canonical JSON shape for symmetry. The preferred contract is an array of objects such as `[{"name":"Content-Type","value":"application/json"}]` rather than a plain JSON object, because HTTP header names may repeat and order sometimes matters operationally. Header names must be HTTP tokens, and header values must not contain CR, LF, NUL, tab, DEL, or any other control character. That validation is shared by the client request path, route response headers, explicit response `content_type` values, stream route content types, and `ducknng_http_headers_build(...)`, so JSON escapes such as `\r`, `\n`, and `\u000a` are rejected before an HTTP request or response is sent.
 
 Outbound HTTP credential profiles are runtime-local records resolved inside the HTTP client path rather than in caller SQL. They are managed with:
@@ -54,7 +71,7 @@ ducknng_drop_http_profile(profile_id)
 ducknng_list_http_profiles()
 ```
 
-When `profile_id` is supplied to `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, or `ducknng_ncurl_table(...)`, ducknng looks up the profile, checks the request scope, and injects the profile's authentication header before the request is sent. Scope checks are fail-closed and cover scheme, exact host, optional exact port, segment-aware path prefix, HTTP method, and whether TLS is required. A prefix such as `/auth` matches `/auth` and `/auth/...` but not `/authz`; use `/` or a trailing slash for deliberately broad scopes. The current implementation deliberately rejects a caller-supplied header that collides with the profile auth header, including `Authorization` when that is the profile header, instead of letting caller SQL override the credential. This collision policy applies consistently across the sync, table, and AIO helpers. A broader host-owned header policy should be represented as explicit profile metadata, for example owning the whole header set or accepting only an allowlist of caller headers. `ducknng_list_http_profiles()` is redacted: it exposes profile id, scope, auth header names, version, Unix-epoch-millisecond timestamps, and expiry, but never raw credential values. These profiles are ducknng runtime credentials; the vendored DuckDB C API in this repository does not expose a stable Secret Manager registration/lookup path, so the resolver is shaped to allow a future Secret Manager or C++ bridge without pretending that integration exists today.
+When `profile_id` is supplied to `ducknng_ncurl(...)`, `ducknng_ncurl_aio(...)`, `ducknng_ncurl_stream_open_aio(...)`, or `ducknng_ncurl_table(...)`, ducknng looks up the profile, checks the request scope, and injects the profile's authentication header before the request is sent. Scope checks are fail-closed and cover scheme, exact host, optional exact port, segment-aware path prefix, HTTP method, and whether TLS is required. A prefix such as `/auth` matches `/auth` and `/auth/...` but not `/authz`; use `/` or a trailing slash for deliberately broad scopes. The current implementation deliberately rejects a caller-supplied header that collides with the profile auth header, including `Authorization` when that is the profile header, instead of letting caller SQL override the credential. This collision policy applies consistently across the sync, table, and AIO helpers. A broader host-owned header policy should be represented as explicit profile metadata, for example owning the whole header set or accepting only an allowlist of caller headers. `ducknng_list_http_profiles()` is redacted: it exposes profile id, scope, auth header names, version, Unix-epoch-millisecond timestamps, and expiry, but never raw credential values. These profiles are ducknng runtime credentials; the vendored DuckDB C API in this repository does not expose a stable Secret Manager registration/lookup path, so the resolver is shaped to allow a future Secret Manager or C++ bridge without pretending that integration exists today.
 
 The raw helper deliberately does not parse response bodies by default. Provider-driven parsing is opt-in through two table helpers:
 
@@ -84,7 +101,7 @@ The matching stop and introspection path remains generic rather than adding HTTP
 
 `ducknng_ncurl(...)` and `ducknng_ncurl_aio(...)` are transport-local and not manifest-derived. They are meant for generic HTTP interactions, adapter debugging, and future interoperability helpers. They are not the only route to `ducknng` RPC over HTTP because the higher-level synchronous helpers already use the same carrier automatically.
 
-In browser wasm builds, HTTP/HTTPS client operations use the browser-safe adapter behind the same transport boundary. Same-origin requests work directly; cross-origin requests require the remote origin to allow CORS under the browser's normal rules. HTTPS trust is browser-managed, so nonzero ducknng TLS config handles are rejected in browser mode instead of being silently ignored. The current browser AIO path performs the XHR transaction at launch and records an immediate terminal handle, preserving SQL-visible collect/status/drop lifecycle without claiming cancellable background Fetch semantics.
+In browser wasm builds, unary HTTP/HTTPS client operations use the browser-safe adapter behind the same transport boundary. Same-origin requests work directly; cross-origin requests require the remote origin to allow CORS under the browser's normal rules. HTTPS trust is browser-managed, so nonzero ducknng TLS config handles are rejected in browser mode instead of being silently ignored. Unary browser aios use the asynchronous Fetch completion bridge and support cancellation. Incremental client response streams are currently native-only: browser builds return a terminal error open aio instead of buffering `Response.arrayBuffer()` and pretending that it is incremental. A future browser implementation must use `ReadableStream.getReader()` behind the same open/receive/close contract.
 
 ## Companion route framework
 
@@ -219,6 +236,6 @@ The following are explicitly not part of the first HTTP adapter contract.
 
 Human-friendly convenience routes such as `GET /manifest` are deferred. They may later be added as transport conveniences that internally map onto the same registry-backed methods, but they are not part of the first binding.
 
-HTTP-carrier WebSocket, SSE, NDJSON, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG `ws://` and `wss://` transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.
+Additional HTTP-carrier WebSocket application APIs, application-level SSE/NDJSON parsers, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG `ws://` and `wss://` transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.
 
 The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching plus small request-accessor and response-builder helpers. Richer web-toolkit features are still deferred. Static asset serving, route-local authentication policy, HTTP-carrier WebSocket/SSE/NDJSON work, worker lifecycle management, and application gateway products must remain additive layers beside the frame carrier. They must not mint method copies such as `http_exec`, `http_query_open`, or `http_fetch`, and they must not change the frame endpoint's `POST application/vnd.ducknng.frame` contract.

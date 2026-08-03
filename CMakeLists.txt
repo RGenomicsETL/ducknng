@@ -120,6 +120,7 @@ set(EXTENSION_SOURCES
     src/ducknng_transport.c
     src/ducknng_http_profile.c
     src/ducknng_http_compat.c
+    src/ducknng_http_client_stream.c
     src/ducknng_ws_frame.c
     src/ducknng_net_backend.c
     src/ducknng_wasm_http_fetch.c

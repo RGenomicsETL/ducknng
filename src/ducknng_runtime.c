@@ -108,6 +108,7 @@ int ducknng_runtime_init(duckdb_connection connection, duckdb_extension_info inf
     rt->next_service_id = 1;
     rt->next_client_socket_id = 1;
     rt->next_client_aio_id = 1;
+    rt->next_http_client_stream_id = 1;
     rt->next_tls_config_id = 1;
     rt->next_http_profile_version = 1;
     atomic_store_explicit(&rt->current_request_service_ptr, (uintptr_t)0, memory_order_release);
@@ -414,6 +415,20 @@ void ducknng_client_aio_destroy(ducknng_client_aio *aio) {
     if (aio->has_ctx) ducknng_ctx_close(aio->ctx);
     if (aio->owns_socket && aio->open) ducknng_socket_close(aio->sock);
     if (aio->socket_ref) ducknng_runtime_release_client_socket(aio->socket_ref);
+    if (aio->http_stream_ref && aio->rt) {
+        ducknng_runtime_release_http_client_stream(aio->rt,
+            aio->http_stream_ref);
+        aio->http_stream_ref = NULL;
+    }
+    if (aio->kind == DUCKNNG_CLIENT_AIO_KIND_NCURL_STREAM_OPEN &&
+            !aio->http_stream_claimed && aio->http_stream_id != 0 && aio->rt) {
+        ducknng_http_client_stream *stream =
+            ducknng_runtime_remove_http_client_stream(aio->rt,
+                aio->http_stream_id);
+        if (stream)
+            ducknng_runtime_release_http_client_stream(aio->rt, stream);
+        aio->http_stream_id = 0;
+    }
     if (aio->error) duckdb_free(aio->error);
     duckdb_free(aio);
 }
@@ -457,6 +472,15 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->client_sockets = NULL;
         rt->client_socket_count = 0;
         rt->client_socket_cap = 0;
+    }
+    if (rt->http_client_streams) {
+        for (i = 0; i < rt->http_client_stream_count; i++) {
+            ducknng_http_client_stream_destroy(rt->http_client_streams[i]);
+        }
+        duckdb_free(rt->http_client_streams);
+        rt->http_client_streams = NULL;
+        rt->http_client_stream_count = 0;
+        rt->http_client_stream_cap = 0;
     }
     if (rt->tls_configs) {
         for (i = 0; i < rt->tls_config_count; i++) {
@@ -928,6 +952,83 @@ ducknng_client_aio *ducknng_runtime_remove_client_aio(ducknng_runtime *rt, uint6
     }
     ducknng_mutex_unlock(&rt->mu);
     return aio;
+}
+
+int ducknng_runtime_add_http_client_stream(ducknng_runtime *rt,
+    ducknng_http_client_stream *stream, char **errmsg) {
+    ducknng_http_client_stream **new_streams;
+    size_t new_cap;
+    if (!rt || !stream) return -1;
+    ducknng_mutex_lock(&rt->mu);
+    if (rt->http_client_stream_count == rt->http_client_stream_cap) {
+        new_cap = rt->http_client_stream_cap ?
+            rt->http_client_stream_cap * 2 : 4;
+        new_streams = (ducknng_http_client_stream **)duckdb_malloc(
+            sizeof(*new_streams) * new_cap);
+        if (!new_streams) {
+            ducknng_mutex_unlock(&rt->mu);
+            if (errmsg) *errmsg = ducknng_strdup("out of memory");
+            return -1;
+        }
+        memset(new_streams, 0, sizeof(*new_streams) * new_cap);
+        if (rt->http_client_streams && rt->http_client_stream_count) {
+            memcpy(new_streams, rt->http_client_streams,
+                sizeof(*new_streams) * rt->http_client_stream_count);
+        }
+        if (rt->http_client_streams) duckdb_free(rt->http_client_streams);
+        rt->http_client_streams = new_streams;
+        rt->http_client_stream_cap = new_cap;
+    }
+    stream->stream_id = rt->next_http_client_stream_id++;
+    stream->refcount = 1; /* runtime registry ownership */
+    rt->http_client_streams[rt->http_client_stream_count++] = stream;
+    ducknng_mutex_unlock(&rt->mu);
+    return 0;
+}
+
+ducknng_http_client_stream *ducknng_runtime_find_http_client_stream_locked(
+    ducknng_runtime *rt, uint64_t stream_id) {
+    size_t i;
+    if (!rt || stream_id == 0) return NULL;
+    for (i = 0; i < rt->http_client_stream_count; i++) {
+        if (rt->http_client_streams[i] &&
+                rt->http_client_streams[i]->stream_id == stream_id) {
+            return rt->http_client_streams[i];
+        }
+    }
+    return NULL;
+}
+
+ducknng_http_client_stream *ducknng_runtime_remove_http_client_stream(
+    ducknng_runtime *rt, uint64_t stream_id) {
+    ducknng_http_client_stream *stream = NULL;
+    size_t i;
+    if (!rt || stream_id == 0) return NULL;
+    ducknng_mutex_lock(&rt->mu);
+    for (i = 0; i < rt->http_client_stream_count; i++) {
+        if (rt->http_client_streams[i] &&
+                rt->http_client_streams[i]->stream_id == stream_id) {
+            stream = rt->http_client_streams[i];
+            for (; i + 1 < rt->http_client_stream_count; i++) {
+                rt->http_client_streams[i] = rt->http_client_streams[i + 1];
+            }
+            rt->http_client_stream_count--;
+            break;
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
+    return stream;
+}
+
+void ducknng_runtime_release_http_client_stream(ducknng_runtime *rt,
+    ducknng_http_client_stream *stream) {
+    int destroy = 0;
+    if (!rt || !stream) return;
+    ducknng_mutex_lock(&rt->mu);
+    if (stream->refcount > 0) stream->refcount--;
+    if (stream->refcount == 0) destroy = 1;
+    ducknng_mutex_unlock(&rt->mu);
+    if (destroy) ducknng_http_client_stream_destroy(stream);
 }
 
 ducknng_tls_config *ducknng_runtime_find_tls_config(ducknng_runtime *rt, uint64_t tls_config_id) {
