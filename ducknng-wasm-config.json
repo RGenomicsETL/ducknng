@@ -1,0 +1,13 @@
+{
+  "platform": "wasm_threads",
+  "worker": "duckdb-browser-coi.worker.js",
+  "wasm": "duckdb-coi.wasm",
+  "pthreadWorker": "duckdb-browser-coi.pthread.worker.js",
+  "requiresCrossOriginIsolation": 1,
+  "coiServiceWorker": "ducknng-coi-service-worker.js",
+  "duckdbWasmNpmVersion": "1.33.1-dev55.0",
+  "duckdbVersion": "v1.5.3",
+  "nngInprocOnly": 1,
+  "sourceCommit": "91f3997a9c3f87da2f4f16f81ddd1bd98c364b22",
+  "extensionReleaseUrl": "https://github.com/RGenomicsETL/ducknng/releases/download/ducknng-wasm-demo-latest/ducknng-wasm_threads.duckdb_extension.wasm"
+}
