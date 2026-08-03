@@ -3194,10 +3194,27 @@ int ducknng_register_sql_aio(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_fetch_query_raw_aio", 7, ducknng_fetch_query_raw_aio_scalar, ctx, fetch_query_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_close_query_raw_aio", 5, ducknng_close_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_cancel_query_raw_aio", 5, ducknng_cancel_query_raw_aio_scalar, ctx, session_control_raw_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload ncurl_overloads[] = {
+            {6, ducknng_ncurl_aio_scalar, NULL, ncurl_aio_types, DUCKDB_TYPE_UBIGINT},
+            {7, ducknng_ncurl_aio_scalar, ducknng_sql_connection_bind_cb, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT}
+        };
+        ducknng_sql_scalar_overload stream_overloads[] = {
+            {6, ducknng_ncurl_stream_open_aio_scalar, NULL, ncurl_aio_types, DUCKDB_TYPE_UBIGINT},
+            {7, ducknng_ncurl_stream_open_aio_scalar, ducknng_sql_connection_bind_cb, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_ncurl_aio", ncurl_overloads, 2, ctx)) return 0;
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_ncurl_stream_open_aio", stream_overloads, 2, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_aio", 6, ducknng_ncurl_aio_scalar, ctx, ncurl_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_ncurl_aio", 7, ducknng_ncurl_aio_scalar, ducknng_sql_connection_bind_cb, ctx, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_stream_open_aio", 6, ducknng_ncurl_stream_open_aio_scalar, ctx, ncurl_aio_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(con, "ducknng_ncurl_stream_open_aio", 7, ducknng_ncurl_stream_open_aio_scalar, ducknng_sql_connection_bind_cb, ctx, ncurl_aio_profile_types, DUCKDB_TYPE_UBIGINT)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_stream_recv_aio", 3, ducknng_ncurl_stream_recv_aio_scalar, ctx, ncurl_stream_recv_types, DUCKDB_TYPE_UBIGINT)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_ncurl_stream_close", 1, ducknng_ncurl_stream_close_scalar, ctx, aio_id_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_send_socket_raw_aio", 3, ducknng_send_socket_raw_aio_scalar, ctx, request_socket_types, DUCKDB_TYPE_UBIGINT)) return 0;

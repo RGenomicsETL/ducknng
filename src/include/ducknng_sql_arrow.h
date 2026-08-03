@@ -1,6 +1,6 @@
 #pragma once
 
-#include "duckdb_extension.h"
+#include "ducknng_duckdb_compat.h"
 #include "nanoarrow/nanoarrow.h"
 #include "nanoarrow/nanoarrow_ipc.h"
 

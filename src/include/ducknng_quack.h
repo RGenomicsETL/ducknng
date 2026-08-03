@@ -1,5 +1,5 @@
 #pragma once
-#include "duckdb_extension.h"
+#include "ducknng_duckdb_compat.h"
 #include <stddef.h>
 #include <stdint.h>
 

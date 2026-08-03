@@ -456,6 +456,21 @@ static void ducknng_service_inflight_scalar(duckdb_function_info info, duckdb_da
     }
 }
 
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+static void ducknng_legacy_sleep_ms_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    int32_t *out = (int32_t *)duckdb_vector_get_data(output);
+    idx_t row;
+    (void)info;
+    for (row = 0; row < count; row++) {
+        int32_t ms = arg_int32(duckdb_data_chunk_get_vector(input, 0), row, 0);
+        if (ms > 0) nng_msleep((unsigned)ms);
+        out[row] = 0;
+    }
+}
+#endif
+
 static void ducknng_nng_version_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     (void)info;
     idx_t count = duckdb_data_chunk_get_size(input);
@@ -630,6 +645,14 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     duckdb_type service_limits_peer_identity8_types[8] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
     duckdb_type execution_model_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        duckdb_type sleep_types[1] = {DUCKDB_TYPE_INTEGER};
+        if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng__sleep_ms", 1,
+                ducknng_legacy_sleep_ms_scalar, ctx, sleep_types,
+                DUCKDB_TYPE_INTEGER)) return 0;
+    }
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_nng_version", 0, ducknng_nng_version_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_transport_capabilities", 0, ducknng_transport_capabilities_scalar, ctx, NULL, DUCKDB_TYPE_VARCHAR)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_transport_capabilities", ctx, 0, NULL,
@@ -639,6 +662,22 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
         duckdb_type inflight_types[1] = {DUCKDB_TYPE_VARCHAR};
         if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_service_inflight", 1, ducknng_service_inflight_scalar, ctx, inflight_types, DUCKDB_TYPE_UBIGINT)) return 0;
     }
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload overloads[] = {
+            {2, ducknng_set_service_limits_scalar, NULL, service_limits_types, DUCKDB_TYPE_BOOLEAN},
+            {3, ducknng_set_service_limits_scalar, NULL, service_limits_extended_types, DUCKDB_TYPE_BOOLEAN},
+            {4, ducknng_set_service_limits_scalar, NULL, service_limits_full_types, DUCKDB_TYPE_BOOLEAN},
+            {5, ducknng_set_service_limits_scalar, NULL, service_limits_identity_types, DUCKDB_TYPE_BOOLEAN},
+            {6, ducknng_set_service_limits_scalar, NULL, service_limits_peer_identity6_types, DUCKDB_TYPE_BOOLEAN},
+            {7, ducknng_set_service_limits_scalar, NULL, service_limits_peer_identity7_types, DUCKDB_TYPE_BOOLEAN},
+            {8, ducknng_set_service_limits_scalar, NULL, service_limits_peer_identity8_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_set_service_limits", overloads,
+                sizeof(overloads) / sizeof(overloads[0]), ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 2, ducknng_set_service_limits_scalar, ctx, service_limits_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 3, ducknng_set_service_limits_scalar, ctx, service_limits_extended_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 4, ducknng_set_service_limits_scalar, ctx, service_limits_full_types, DUCKDB_TYPE_BOOLEAN)) return 0;
@@ -646,6 +685,7 @@ int ducknng_register_sql_service(duckdb_connection con, ducknng_sql_context *ctx
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 6, ducknng_set_service_limits_scalar, ctx, service_limits_peer_identity6_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 7, ducknng_set_service_limits_scalar, ctx, service_limits_peer_identity7_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_limits", 8, ducknng_set_service_limits_scalar, ctx, service_limits_peer_identity8_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_service_execution_model", 2, ducknng_set_service_execution_model_scalar, ctx, execution_model_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     {
         duckdb_type pool_max_types[1] = {DUCKDB_TYPE_UBIGINT};

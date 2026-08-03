@@ -52,6 +52,8 @@ types have canonical wire projections rather than identical logical types:
 
 These are declared normalizations, not silent claims of identity.
 
+On the DuckDB 1.4.0 backport, the upstream Arrow producer is narrower. It emits `UHUGEINT` as `BLOB`, rejects `TIME_NS`, and emits `TIME WITH TIME ZONE` as `TIME`; ducknng therefore does not advertise those three Arrow round trips on that branch. The executable 1.4 matrix keeps the remaining Arrow temporal and numeric types and exercises the exact alternatives through the Quack-derived codec where DuckDB's C type API permits them.
+
 ## Quack-derived batches
 
 `ducknng_quack_batch` is not Arrow. It carries DuckDB logical types and data
@@ -65,6 +67,12 @@ are accepted for the signed and unsigned integer logical types that DuckDB emits
 as sequences. FSST vectors remain unsupported and fail closed. A client
 selecting this codec must implement the ducknng Quack batch format; selecting it
 does not change session ownership, fetch, cancel, or end-of-stream semantics.
+
+DuckDB 1.4.0 declares `DUCKDB_TYPE_TIME_NS`, but its `LogicalTypeIdToC`
+conversion does not handle the corresponding internal logical id and returns
+`DUCKDB_TYPE_INVALID`. The 1.4 Quack backport therefore rejects `TIME_NS` rather
+than guessing from its physical integer representation. `UHUGEINT` and `TIMETZ`
+remain exact over Quack on that branch.
 
 DuckDB v1.5.2 also defines `GEOMETRY` (logical id 60) and `VARIANT`
 (logical id 109), but neither is part of this codec contract. `GEOMETRY` adds a

@@ -475,6 +475,7 @@ static void ducknng_headers_build_state_destroy(void *ptr) {
     duckdb_free(s);
 }
 
+#ifndef DUCKNNG_DUCKDB_PRE_1_5
 static void ducknng_headers_build_init_cb(duckdb_init_info info) {
     ducknng_headers_build_state *s =
         (ducknng_headers_build_state *)duckdb_malloc(sizeof(*s));
@@ -485,6 +486,7 @@ static void ducknng_headers_build_init_cb(duckdb_init_info info) {
     memset(s, 0, sizeof(*s));
     duckdb_scalar_function_init_set_state(info, s, ducknng_headers_build_state_destroy);
 }
+#endif
 
 static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_data_chunk input,
     duckdb_vector output) {
@@ -495,8 +497,12 @@ static void ducknng_http_headers_build_scalar(duckdb_function_info info, duckdb_
     duckdb_list_entry *value_entries = (duckdb_list_entry *)duckdb_vector_get_data(values_vec);
     duckdb_vector name_child = duckdb_list_vector_get_child(names_vec);
     duckdb_vector value_child = duckdb_list_vector_get_child(values_vec);
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    ducknng_headers_build_state *state = NULL;
+#else
     ducknng_headers_build_state *state =
         (ducknng_headers_build_state *)duckdb_scalar_function_get_state(info);
+#endif
     idx_t row;
     for (row = 0; row < row_count; row++) {
         duckdb_list_entry name_entry = name_entries[row];
@@ -1269,7 +1275,9 @@ static int register_http_headers_build_scalar(duckdb_connection con, ducknng_sql
         duckdb_scalar_function_add_parameter(f, param_types[1]);
         duckdb_scalar_function_set_return_type(f, return_type);
         duckdb_scalar_function_set_function(f, ducknng_http_headers_build_scalar);
+#ifndef DUCKNNG_DUCKDB_PRE_1_5
         duckdb_scalar_function_set_init(f, ducknng_headers_build_init_cb);
+#endif
         duckdb_scalar_function_set_special_handling(f);
         duckdb_scalar_function_set_volatile(f);
         if (ducknng_set_scalar_sql_context(f, ctx)) {
@@ -1676,6 +1684,22 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
     duckdb_type route_auth5_types[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR};
     duckdb_type worker_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload route_overloads[] = {
+            {4, ducknng_register_http_route_scalar, NULL, route_types, DUCKDB_TYPE_BOOLEAN},
+            {5, ducknng_register_http_route_scalar, NULL, route_types_with_limit, DUCKDB_TYPE_BOOLEAN}
+        };
+        ducknng_sql_scalar_overload pattern_overloads[] = {
+            {5, ducknng_register_http_route_pattern_scalar, NULL, route_pattern_types, DUCKDB_TYPE_BOOLEAN},
+            {6, ducknng_register_http_route_pattern_scalar, NULL, route_pattern_types_with_limit, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_register_http_route", route_overloads, 2, ctx)) return 0;
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_register_http_route_pattern", pattern_overloads, 2, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route", 4,
             ducknng_register_http_route_scalar, ctx, route_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route", 5,
@@ -1684,6 +1708,7 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_register_http_route_pattern_scalar, ctx, route_pattern_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_route_pattern", 6,
             ducknng_register_http_route_pattern_scalar, ctx, route_pattern_types_with_limit, DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_route", 3,
             ducknng_unregister_http_route_scalar, ctx, unregister_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_route_pattern", 4,
@@ -1692,19 +1717,40 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
         /* ducknng_add_stream_route(service, method, path, sql [, content_type]) */
         duckdb_type stream_route_types4[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
         duckdb_type stream_route_types5[5] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+        ducknng_sql_scalar_overload overloads[] = {
+            {4, ducknng_add_stream_route_scalar, NULL, stream_route_types4, DUCKDB_TYPE_BOOLEAN},
+            {5, ducknng_add_stream_route_scalar, NULL, stream_route_types5, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_add_stream_route", overloads, 2, ctx)) return 0;
+#else
         if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_add_stream_route", 4,
                 ducknng_add_stream_route_scalar, ctx, stream_route_types4, DUCKDB_TYPE_BOOLEAN)) return 0;
         if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_add_stream_route", 5,
                 ducknng_add_stream_route_scalar, ctx, stream_route_types5, DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     }
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_static", 3,
             ducknng_register_http_static_scalar, ctx, three_varchar_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload overloads[] = {
+            {3, ducknng_set_http_route_auth_scalar, NULL, route_auth3_types, DUCKDB_TYPE_BOOLEAN},
+            {4, ducknng_set_http_route_auth_scalar, NULL, route_auth4_types, DUCKDB_TYPE_BOOLEAN},
+            {5, ducknng_set_http_route_auth_scalar, NULL, route_auth5_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_set_http_route_auth", overloads, 3, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_http_route_auth", 3,
             ducknng_set_http_route_auth_scalar, ctx, route_auth3_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_http_route_auth", 4,
             ducknng_set_http_route_auth_scalar, ctx, route_auth4_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_http_route_auth", 5,
             ducknng_set_http_route_auth_scalar, ctx, route_auth5_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_worker", 4,
             ducknng_register_http_worker_scalar, ctx, worker_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_unregister_http_worker", 2,

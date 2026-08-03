@@ -551,6 +551,22 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
     duckdb_type method_family_types[1] = {DUCKDB_TYPE_VARCHAR};
     duckdb_type register_exec_auth_types[1] = {DUCKDB_TYPE_BOOLEAN};
 
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload exec_overloads[] = {
+            {0, ducknng_register_exec_method_scalar, NULL, NULL, DUCKDB_TYPE_BOOLEAN},
+            {1, ducknng_register_exec_method_scalar, NULL, register_exec_auth_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        ducknng_sql_scalar_overload upload_overloads[] = {
+            {0, ducknng_register_upload_methods_scalar, NULL, NULL, DUCKDB_TYPE_BOOLEAN},
+            {1, ducknng_register_upload_methods_scalar, NULL, register_exec_auth_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_register_exec_method", exec_overloads, 2, ctx)) return 0;
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_register_upload_methods", upload_overloads, 2, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 0,
             ducknng_register_exec_method_scalar, ctx, NULL, DUCKDB_TYPE_BOOLEAN)) {
         return 0;
@@ -569,6 +585,7 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
             DUCKDB_TYPE_BOOLEAN)) {
         return 0;
     }
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_set_method_auth", 2,
             ducknng_set_method_auth_scalar, ctx, method_auth_types,
             DUCKDB_TYPE_BOOLEAN)) {

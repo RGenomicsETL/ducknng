@@ -910,39 +910,44 @@ static int register_socket_monitor(duckdb_connection con, ducknng_sql_context *c
 static void ducknng_enable_log_capture_fn(duckdb_function_info info,
     duckdb_data_chunk input, duckdb_vector output) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
-    duckdb_log_storage ls;
-    bool result;
     (void)input;
     if (!ctx || !ctx->rt) {
         duckdb_scalar_function_set_error(info, "ducknng: runtime not available");
         return;
     }
-    if (ctx->rt->log_capture_enabled) {
-        /* Already active — return TRUE without re-registering. */
-        ((bool *)duckdb_vector_get_data(output))[0] = true;
-        return;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    /* DuckDB 1.4 does not expose the log-storage C API. */
+    ((bool *)duckdb_vector_get_data(output))[0] = false;
+#else
+    {
+        duckdb_log_storage ls;
+        bool result;
+        if (ctx->rt->log_capture_enabled) {
+            /* Already active — return TRUE without re-registering. */
+            ((bool *)duckdb_vector_get_data(output))[0] = true;
+            return;
+        }
+        ls = duckdb_create_log_storage();
+        if (!ls) {
+            ((bool *)duckdb_vector_get_data(output))[0] = false;
+            return;
+        }
+        duckdb_log_storage_set_name(ls, "ducknng");
+        duckdb_log_storage_set_extra_data(ls, ctx->rt, NULL);
+        /* ducknng_log_write_entry (ducknng_runtime.c) has the exact
+         * duckdb_logger_write_log_entry_t signature. */
+        duckdb_log_storage_set_write_log_entry(ls,
+            (duckdb_logger_write_log_entry_t)ducknng_log_write_entry);
+        result = (duckdb_register_log_storage(ctx->rt->db, ls) == DuckDBSuccess);
+        /* Ownership of ls transfers to DuckDB on success; destroy only on failure. */
+        if (!result) {
+            duckdb_destroy_log_storage(&ls);
+        } else {
+            ctx->rt->log_capture_enabled = 1;
+        }
+        ((bool *)duckdb_vector_get_data(output))[0] = result;
     }
-    ls = duckdb_create_log_storage();
-    if (!ls) {
-        ((bool *)duckdb_vector_get_data(output))[0] = false;
-        return;
-    }
-    duckdb_log_storage_set_name(ls, "ducknng");
-    duckdb_log_storage_set_extra_data(ls, ctx->rt, NULL);
-    /* ducknng_log_write_entry (ducknng_runtime.c) has the exact
-     * duckdb_logger_write_log_entry_t signature:
-     *   void cb(void *extra, duckdb_timestamp *ts, const char *level,
-     *           const char *log_type, const char *msg) */
-    duckdb_log_storage_set_write_log_entry(ls,
-        (duckdb_logger_write_log_entry_t)ducknng_log_write_entry);
-    result = (duckdb_register_log_storage(ctx->rt->db, ls) == DuckDBSuccess);
-    /* Ownership of ls transfers to DuckDB on success; destroy only on failure. */
-    if (!result) {
-        duckdb_destroy_log_storage(&ls);
-    } else {
-        ctx->rt->log_capture_enabled = 1;
-    }
-    ((bool *)duckdb_vector_get_data(output))[0] = result;
+#endif
 }
 
 static int register_enable_log_capture_scalar(duckdb_connection con, ducknng_sql_context *ctx) {

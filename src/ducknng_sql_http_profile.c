@@ -347,6 +347,17 @@ ducknng_register_sql_http_profiles(duckdb_connection con, ducknng_sql_context *c
     duckdb_type profile_id_types[1] = {DUCKDB_TYPE_VARCHAR};
 
     if (!ctx || !ctx->rt) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload overloads[] = {
+            {9, ducknng_register_http_profile_scalar, NULL, register_types, DUCKDB_TYPE_BOOLEAN},
+            {10, ducknng_register_http_profile_scalar, NULL, register_expiry_types, DUCKDB_TYPE_BOOLEAN},
+            {11, ducknng_register_http_profile_scalar, NULL, register_subjects_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(con,
+                "ducknng_register_http_profile", overloads, 3, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_profile", 9,
             ducknng_register_http_profile_scalar, ctx, register_types,
             DUCKDB_TYPE_BOOLEAN)) return 0;
@@ -356,6 +367,7 @@ ducknng_register_sql_http_profiles(duckdb_connection con, ducknng_sql_context *c
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_http_profile", 11,
             ducknng_register_http_profile_scalar, ctx, register_subjects_types,
             DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_drop_http_profile", 1,
             ducknng_drop_http_profile_scalar, ctx, profile_id_types,
             DUCKDB_TYPE_BOOLEAN)) return 0;

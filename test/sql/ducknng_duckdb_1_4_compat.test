@@ -1,0 +1,40 @@
+# name: test/sql/ducknng_duckdb_1_4_compat.test
+# group: [ducknng]
+
+require ducknng
+
+# DuckDB 1.4 has no extension log-storage C API.
+query I
+SELECT ducknng_enable_log_capture()::INTEGER
+----
+0
+
+# DuckDB 1.4 has no extension config-option registration C API. The runtime
+# uses the documented compiled defaults instead of pretending SET succeeded.
+statement error
+SET ducknng.fetch_batch_chunks = 8
+----
+unrecognized configuration parameter "ducknng.fetch_batch_chunks"
+
+statement error
+SET ducknng.csv_max_columns = 8
+----
+unrecognized configuration parameter "ducknng.csv_max_columns"
+
+# DuckDB 1.4 also predates sleep_ms(). This internal compatibility scalar keeps
+# lifecycle and quota tests deterministic without adding a public function.
+query I
+SELECT ducknng__sleep_ms(1)
+----
+0
+
+# DuckDB 1.4 cannot register overloaded table functions through the C API.
+# The public upload surface remains one defaulted table macro over the internal
+# four-argument function.
+query I
+SELECT count(*)::INTEGER
+FROM duckdb_functions()
+WHERE function_name = 'ducknng_upload_table'
+  AND function_type = 'table_macro'
+----
+1

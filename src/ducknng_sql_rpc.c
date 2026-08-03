@@ -150,6 +150,65 @@ static int ducknng_register_struct_row_scalar_named(duckdb_connection con,
     return ok;
 }
 
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+static int ducknng_register_struct_row_scalar_pair_named(duckdb_connection con,
+    ducknng_sql_context *ctx, const char *name,
+    idx_t nparams_a, const duckdb_type *param_ids_a, duckdb_scalar_function_bind_t bind_a,
+    idx_t nparams_b, const duckdb_type *param_ids_b, duckdb_scalar_function_bind_t bind_b,
+    duckdb_scalar_function_t fn, idx_t nfields, const duckdb_type *field_type_ids,
+    const char **field_names) {
+    duckdb_logical_type *params_a = NULL;
+    duckdb_logical_type *params_b = NULL;
+    duckdb_logical_type *fields = NULL;
+    duckdb_logical_type return_type = NULL;
+    ducknng_sql_logical_scalar_overload overloads[2];
+    idx_t i;
+    int ok = 0;
+    params_a = (duckdb_logical_type *)duckdb_malloc(sizeof(*params_a) * nparams_a);
+    params_b = (duckdb_logical_type *)duckdb_malloc(sizeof(*params_b) * nparams_b);
+    fields = (duckdb_logical_type *)duckdb_malloc(sizeof(*fields) * nfields);
+    if (!params_a || !params_b || !fields) goto cleanup;
+    memset(params_a, 0, sizeof(*params_a) * nparams_a);
+    memset(params_b, 0, sizeof(*params_b) * nparams_b);
+    memset(fields, 0, sizeof(*fields) * nfields);
+    for (i = 0; i < nparams_a; i++) {
+        params_a[i] = duckdb_create_logical_type(param_ids_a[i]);
+        if (!params_a[i]) goto cleanup;
+    }
+    for (i = 0; i < nparams_b; i++) {
+        params_b[i] = duckdb_create_logical_type(param_ids_b[i]);
+        if (!params_b[i]) goto cleanup;
+    }
+    for (i = 0; i < nfields; i++) {
+        fields[i] = duckdb_create_logical_type(field_type_ids[i]);
+        if (!fields[i]) goto cleanup;
+    }
+    return_type = duckdb_create_struct_type(fields, field_names, nfields);
+    if (!return_type) goto cleanup;
+    overloads[0] = (ducknng_sql_logical_scalar_overload){
+        nparams_a, fn, bind_a, params_a, return_type};
+    overloads[1] = (ducknng_sql_logical_scalar_overload){
+        nparams_b, fn, bind_b, params_b, return_type};
+    ok = ducknng_sql_register_volatile_logical_scalar_overloads(con, name,
+        overloads, 2, ctx);
+cleanup:
+    if (params_a) {
+        ducknng_destroy_logical_types(params_a, nparams_a);
+        duckdb_free(params_a);
+    }
+    if (params_b) {
+        ducknng_destroy_logical_types(params_b, nparams_b);
+        duckdb_free(params_b);
+    }
+    if (fields) {
+        ducknng_destroy_logical_types(fields, nfields);
+        duckdb_free(fields);
+    }
+    if (return_type) duckdb_destroy_logical_type(&return_type);
+    return ok;
+}
+#endif
+
 static const char *ducknng_rpc_type_name(uint8_t type) {
     switch (type) {
     case DUCKNNG_RPC_MANIFEST: return "manifest";
@@ -2903,13 +2962,26 @@ static void ducknng_upload_table_scan(duckdb_function_info info, duckdb_data_chu
 }
 
 static int register_upload_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
-    duckdb_type p3[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
     duckdb_type p4[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UBIGINT};
     if (!ctx || !ctx->rt) return 0;
-    if (!DUCKNNG_REGISTER_TABLE(con, name, ctx, 3, p3, ducknng_upload_table_bind,
-            ducknng_upload_table_init, ducknng_upload_table_scan)) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    (void)name;
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng__upload_table4", ctx, 4, p4,
+            ducknng_upload_table_bind, ducknng_upload_table_init,
+            ducknng_upload_table_scan)) return 0;
+    return execute_sql(con,
+        "CREATE OR REPLACE MACRO ducknng_upload_table(url, source_query, target_table, "
+        "tls_config_id := 0::UBIGINT) AS TABLE SELECT * FROM "
+        "ducknng__upload_table4(url, source_query, target_table, tls_config_id)");
+#else
+    {
+        duckdb_type p3[3] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR};
+        if (!DUCKNNG_REGISTER_TABLE(con, name, ctx, 3, p3, ducknng_upload_table_bind,
+                ducknng_upload_table_init, ducknng_upload_table_scan)) return 0;
+    }
     return DUCKNNG_REGISTER_TABLE(con, name, ctx, 4, p4, ducknng_upload_table_bind,
         ducknng_upload_table_init, ducknng_upload_table_scan);
+#endif
 }
 
 static int register_remote_table_named_mode(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
@@ -3003,11 +3075,19 @@ static int register_http_result_table_named(duckdb_connection con, ducknng_sql_c
         "FROM _row";
     (void)name;
     if (!ctx || !ctx->rt) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    if (!ducknng_register_struct_row_scalar_pair_named(con, ctx,
+            "ducknng__ncurl_row",
+            6, param_types, NULL,
+            7, profile_param_types, ducknng_sql_connection_bind_cb,
+            ducknng_ncurl_row_scalar, 6, field_types, field_names)) return 0;
+#else
     if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 6,
             param_types, ducknng_ncurl_row_scalar, NULL, 6, field_types, field_names)) return 0;
     if (!ducknng_register_struct_row_scalar_named(con, ctx, "ducknng__ncurl_row", 7,
             profile_param_types, ducknng_ncurl_row_scalar, ducknng_sql_connection_bind_cb,
             6, field_types, field_names)) return 0;
+#endif
     return execute_sql(con, sql);
 }
 
@@ -3029,8 +3109,19 @@ int ducknng_register_sql_rpc(duckdb_connection connection, ducknng_sql_context *
     duckdb_type request_tls_types[4] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT};
     duckdb_type request_socket_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER};
     if (!ctx) return 0;
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    {
+        ducknng_sql_scalar_overload overloads[] = {
+            {6, ducknng_server_start_scalar, NULL, start_tls_config_types, DUCKDB_TYPE_BOOLEAN},
+            {7, ducknng_server_start_scalar, NULL, start_tls_config_ip_types, DUCKDB_TYPE_BOOLEAN}
+        };
+        if (!ducknng_sql_register_volatile_scalar_overloads(connection,
+                "ducknng_start_server", overloads, 2, ctx)) return 0;
+    }
+#else
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_start_server", 6, ducknng_server_start_scalar, ctx, start_tls_config_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_start_server", 7, ducknng_server_start_scalar, ctx, start_tls_config_ip_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+#endif
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_stop_server", 1, ducknng_server_stop_scalar, ctx, stop_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_set_service_peer_allowlist", 2, ducknng_set_service_peer_allowlist_scalar, ctx, service_allowlist_types, DUCKDB_TYPE_BOOLEAN)) return 0;
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(connection, "ducknng_set_service_ip_allowlist", 2, ducknng_set_service_ip_allowlist_scalar, ctx, service_allowlist_types, DUCKDB_TYPE_BOOLEAN)) return 0;

@@ -6,6 +6,10 @@ This document records findings from a systematic review of all `unstable_*` API 
 
 ---
 
+## DuckDB 1.4.0 backport exceptions
+
+DuckDB 1.4.0 predates the config-option, log-storage, filesystem, scalar-function-state, unchecked string-assignment, and overload-on-conflict C APIs used by the forward line. The backport keeps those differences in `DUCKNNG_DUCKDB_PRE_1_5` code paths. Session config options retain the compiled defaults because 1.4 cannot register them; `ducknng_enable_log_capture()` returns false; body-codec temporary files use `fopen`/`fwrite` and are deleted on every exit; `ducknng_http_headers_build` uses its existing per-call allocation path; and the old length-aware vector assignment is paired with a local strict UTF-8 validator. Scalar overloads are registered atomically through `duckdb_scalar_function_set`, while the overloaded upload table function is represented by a defaulted table macro over one internal four-argument function. These are tested on the exact 1.4.0 runtime and do not weaken the 1.5 implementation.
+
 ## `unstable_new_arrow_functions`
 
 **Functions:** `duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`,

@@ -5,6 +5,7 @@
 #include "ducknng_util.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdio.h>
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #else
@@ -92,27 +93,78 @@ void ducknng_sql_assign_blob(duckdb_vector vec, idx_t row, const uint8_t *data, 
     duckdb_unsafe_vector_assign_string_element_len(vec, row, (const char *)data, len);
 }
 
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+static int ducknng_sql_valid_utf8_legacy(const uint8_t *data, size_t len) {
+    size_t i = 0;
+    while (i < len) {
+        uint8_t c = data[i++];
+        if (c < 0x80) continue;
+        if (c >= 0xc2 && c <= 0xdf) {
+            if (i >= len || data[i] < 0x80 || data[i] > 0xbf) return 0;
+            i++;
+            continue;
+        }
+        if (c >= 0xe0 && c <= 0xef) {
+            uint8_t c1;
+            if (i + 1 >= len) return 0;
+            c1 = data[i];
+            if (c == 0xe0) {
+                if (c1 < 0xa0 || c1 > 0xbf) return 0;
+            } else if (c == 0xed) {
+                if (c1 < 0x80 || c1 > 0x9f) return 0;
+            } else if (c1 < 0x80 || c1 > 0xbf) {
+                return 0;
+            }
+            if (data[i + 1] < 0x80 || data[i + 1] > 0xbf) return 0;
+            i += 2;
+            continue;
+        }
+        if (c >= 0xf0 && c <= 0xf4) {
+            uint8_t c1;
+            if (i + 2 >= len) return 0;
+            c1 = data[i];
+            if (c == 0xf0) {
+                if (c1 < 0x90 || c1 > 0xbf) return 0;
+            } else if (c == 0xf4) {
+                if (c1 < 0x80 || c1 > 0x8f) return 0;
+            } else if (c1 < 0x80 || c1 > 0xbf) {
+                return 0;
+            }
+            if (data[i + 1] < 0x80 || data[i + 1] > 0xbf ||
+                    data[i + 2] < 0x80 || data[i + 2] > 0xbf) return 0;
+            i += 3;
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+#endif
+
 int ducknng_sql_bytes_look_text(const uint8_t *data, size_t len) {
     size_t i;
-    duckdb_error_data err;
     if (len == 0) return 1;
     if (!data) return 0;
     /* Reject null bytes and disallowed control characters (below U+0020 except
-     * horizontal tab, line feed, carriage return). This cannot be delegated to
-     * duckdb_valid_utf8_check, which only validates UTF-8 encoding. */
+     * horizontal tab, line feed, carriage return). */
     for (i = 0; i < len; i++) {
         uint8_t b = data[i];
         if (b == 0) return 0;
         if (b < 0x20 && b != '\t' && b != '\n' && b != '\r') return 0;
     }
-    /* Use the unstable API to validate UTF-8 encoding. */
-    err = duckdb_valid_utf8_check((const char *)data, (idx_t)len);
-    if (duckdb_error_data_has_error(err)) {
+#ifdef DUCKNNG_DUCKDB_PRE_1_5
+    return ducknng_sql_valid_utf8_legacy(data, len);
+#else
+    {
+        duckdb_error_data err = duckdb_valid_utf8_check((const char *)data, (idx_t)len);
+        if (duckdb_error_data_has_error(err)) {
+            duckdb_destroy_error_data(&err);
+            return 0;
+        }
         duckdb_destroy_error_data(&err);
-        return 0;
     }
-    duckdb_destroy_error_data(&err);
     return 1;
+#endif
 }
 
 char *ducknng_sql_sockaddr_addr_dup(const nng_sockaddr *addr, char **out_ip, int32_t *out_port) {
@@ -212,6 +264,57 @@ int ducknng_sql_register_volatile_scalar(duckdb_connection con, const char *name
         return_type_id, 1);
 }
 
+int ducknng_sql_register_volatile_scalar_overloads(duckdb_connection con,
+    const char *name, const ducknng_sql_scalar_overload *overloads,
+    idx_t overload_count, ducknng_sql_context *ctx) {
+    duckdb_scalar_function_set set = NULL;
+    idx_t overload_index;
+    int ok = 0;
+    if (!con || !name || !overloads || overload_count == 0) return 0;
+    set = duckdb_create_scalar_function_set(name);
+    if (!set) return 0;
+    for (overload_index = 0; overload_index < overload_count; overload_index++) {
+        const ducknng_sql_scalar_overload *overload = &overloads[overload_index];
+        duckdb_scalar_function fn = NULL;
+        duckdb_logical_type return_type = NULL;
+        idx_t param_index;
+        fn = duckdb_create_scalar_function();
+        if (!fn) goto cleanup;
+        duckdb_scalar_function_set_name(fn, name);
+        for (param_index = 0; param_index < overload->nparams; param_index++) {
+            duckdb_logical_type param_type =
+                duckdb_create_logical_type(overload->param_types[param_index]);
+            if (!param_type) {
+                duckdb_destroy_scalar_function(&fn);
+                goto cleanup;
+            }
+            duckdb_scalar_function_add_parameter(fn, param_type);
+            duckdb_destroy_logical_type(&param_type);
+        }
+        return_type = duckdb_create_logical_type(overload->return_type_id);
+        if (!return_type) {
+            duckdb_destroy_scalar_function(&fn);
+            goto cleanup;
+        }
+        duckdb_scalar_function_set_return_type(fn, return_type);
+        duckdb_destroy_logical_type(&return_type);
+        duckdb_scalar_function_set_function(fn, overload->fn);
+        if (overload->bind_fn) duckdb_scalar_function_set_bind(fn, overload->bind_fn);
+        duckdb_scalar_function_set_special_handling(fn);
+        duckdb_scalar_function_set_volatile(fn);
+        if (!ducknng_set_scalar_sql_context(fn, ctx) ||
+                duckdb_add_scalar_function_to_set(set, fn) == DuckDBError) {
+            duckdb_destroy_scalar_function(&fn);
+            goto cleanup;
+        }
+        duckdb_destroy_scalar_function(&fn);
+    }
+    ok = duckdb_register_scalar_function_set(con, set) == DuckDBSuccess;
+cleanup:
+    duckdb_destroy_scalar_function_set(&set);
+    return ok;
+}
+
 int ducknng_sql_register_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
     duckdb_logical_type return_type) {
@@ -224,6 +327,49 @@ int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, co
     duckdb_logical_type *param_types, duckdb_logical_type return_type) {
     return ducknng_sql_register_scalar_logical_types_ex(con, name, nparams, fn, NULL, ctx,
         param_types, return_type, 1);
+}
+
+int ducknng_sql_register_volatile_logical_scalar_overloads(duckdb_connection con,
+    const char *name, const ducknng_sql_logical_scalar_overload *overloads,
+    idx_t overload_count, ducknng_sql_context *ctx) {
+    duckdb_scalar_function_set set = NULL;
+    idx_t overload_index;
+    int ok = 0;
+    if (!con || !name || !overloads || overload_count == 0) return 0;
+    set = duckdb_create_scalar_function_set(name);
+    if (!set) return 0;
+    for (overload_index = 0; overload_index < overload_count; overload_index++) {
+        const ducknng_sql_logical_scalar_overload *overload = &overloads[overload_index];
+        duckdb_scalar_function fn = duckdb_create_scalar_function();
+        idx_t param_index;
+        if (!fn || !overload->return_type) {
+            if (fn) duckdb_destroy_scalar_function(&fn);
+            goto cleanup;
+        }
+        duckdb_scalar_function_set_name(fn, name);
+        for (param_index = 0; param_index < overload->nparams; param_index++) {
+            if (!overload->param_types || !overload->param_types[param_index]) {
+                duckdb_destroy_scalar_function(&fn);
+                goto cleanup;
+            }
+            duckdb_scalar_function_add_parameter(fn, overload->param_types[param_index]);
+        }
+        duckdb_scalar_function_set_return_type(fn, overload->return_type);
+        duckdb_scalar_function_set_function(fn, overload->fn);
+        if (overload->bind_fn) duckdb_scalar_function_set_bind(fn, overload->bind_fn);
+        duckdb_scalar_function_set_special_handling(fn);
+        duckdb_scalar_function_set_volatile(fn);
+        if (!ducknng_set_scalar_sql_context(fn, ctx) ||
+                duckdb_add_scalar_function_to_set(set, fn) == DuckDBError) {
+            duckdb_destroy_scalar_function(&fn);
+            goto cleanup;
+        }
+        duckdb_destroy_scalar_function(&fn);
+    }
+    ok = duckdb_register_scalar_function_set(con, set) == DuckDBSuccess;
+cleanup:
+    duckdb_destroy_scalar_function_set(&set);
+    return ok;
 }
 
 int ducknng_sql_register_volatile_scalar_logical_types_with_bind(duckdb_connection con,
@@ -364,6 +510,7 @@ int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_s
  * connection with SET ducknng.option = value while the extension-wide
  * default applies when no per-session override is set.
  * --------------------------------------------------------------------------- */
+#ifndef DUCKNNG_DUCKDB_PRE_1_5
 static int ducknng_register_one_config_option(duckdb_connection con,
     const char *name, const char *description, uint64_t default_ubigint) {
     duckdb_config_option opt;
@@ -413,6 +560,19 @@ uint64_t ducknng_sql_get_config_ubigint(duckdb_client_context ctx,
     duckdb_destroy_value(&val);
     return result;
 }
+#else
+static int ducknng_register_config_options(duckdb_connection con) {
+    (void)con;
+    return 1;
+}
+
+uint64_t ducknng_sql_get_config_ubigint(duckdb_client_context ctx,
+    const char *name, uint64_t fallback) {
+    (void)ctx;
+    (void)name;
+    return fallback;
+}
+#endif
 
 int ducknng_register_sql_api(duckdb_connection connection, ducknng_runtime *rt) {
     ducknng_sql_context ctx;

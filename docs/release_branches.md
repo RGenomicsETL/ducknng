@@ -4,6 +4,8 @@
 
 A release branch pins three things together in `Makefile`: `TARGET_DUCKDB_VERSION`, `DUCKDB_TEST_VERSION`, and `DUCKDB_HEADER_VERSION`. The checked-in `duckdb_capi/duckdb.h` and `duckdb_capi/duckdb_extension.h` must come from the same DuckDB tag. Do not change one of these without the others.
 
+The `release/duckdb-1.4.0` line also carries narrowly scoped compatibility code for C APIs first exposed in DuckDB 1.5. It registers overloaded scalars as function sets, exposes the optional fourth `ducknng_upload_table` argument through a table macro over one internal four-argument table function, uses DuckDB 1.4's length-aware vector assignment, validates UTF-8 locally, and writes internally generated body-codec temporary files through the OS. DuckDB 1.4 has no C API for extension config options or log storage, so `ducknng.csv_max_columns` and `ducknng.fetch_batch_chunks` retain their compiled defaults and `ducknng_enable_log_capture()` returns false. `docs/types.md` records the narrower 1.4 codec matrix.
+
 The backport workflow is: land the fix on `main`, cherry-pick it to every supported `release/duckdb-X.Y.Z` branch, update the version pins and C API headers for that branch if the branch is newly created, then build and test with the matching DuckDB runtime. `make release` refreshes `configure/extension_version.txt` before appending metadata so a branch switch does not reuse a stale git-derived extension version from a previous build:
 
 ```sh

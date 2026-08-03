@@ -6,7 +6,7 @@ rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
 
 http_smoke: release
-	python3 test/http_smoke.py build/release/ducknng.duckdb_extension
+	./configure/venv/bin/python3 test/http_smoke.py build/release/ducknng.duckdb_extension
 
 ws_smoke: release
 	python3 test/ws_smoke.py build/release/ducknng.duckdb_extension
@@ -37,9 +37,9 @@ PROP_HDRS := \
 PROP_COMMON_CFLAGS := \
 	-std=c99 -g -O1 -Wall -Wextra -Wno-unused-function -D_DEFAULT_SOURCE \
 	-DDUCKDB_EXTENSION_API_VERSION_MAJOR=1 \
-	-DDUCKDB_EXTENSION_API_VERSION_MINOR=5 \
-	-DDUCKDB_EXTENSION_API_VERSION_PATCH=2 \
-	-DDUCKDB_EXTENSION_API_VERSION_UNSTABLE=v1.5.2 \
+	-DDUCKDB_EXTENSION_API_VERSION_MINOR=4 \
+	-DDUCKDB_EXTENSION_API_VERSION_PATCH=0 \
+	-DDUCKDB_EXTENSION_API_VERSION_UNSTABLE=v1.4.0 \
 	-DTHEFT_USE_FLOATING_POINT=0 \
 	-ffunction-sections -fdata-sections \
 	-Itest/vendor/greatest \
@@ -146,14 +146,14 @@ USE_UNSTABLE_C_API=1
 # Target DuckDB version — must match DUCKDB_HEADER_VERSION so the unstable
 # vtable layout seen at compile time matches the runtime vtable provided by the
 # host.  Both the Python sqllogictest runner and the R duckdb package in use
-# are v1.5.2, so all three version pins are kept in sync here.
-TARGET_DUCKDB_VERSION=v1.5.2
+# are v1.4.0, so all three version pins are kept in sync here.
+TARGET_DUCKDB_VERSION=v1.4.0
 
 # DuckDB version used by the Python sqllogictest runner — must match TARGET_DUCKDB_VERSION
-DUCKDB_TEST_VERSION=1.5.2
+DUCKDB_TEST_VERSION=1.4.0
 
 # Actual DuckDB release to fetch headers from for compilation
-DUCKDB_HEADER_VERSION=v1.5.2
+DUCKDB_HEADER_VERSION=v1.4.0
 
 all: configure release
 

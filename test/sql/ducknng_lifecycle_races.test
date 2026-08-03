@@ -67,7 +67,7 @@ SET VARIABLE stop_auth_active_url = (
 
 query I
 SELECT CASE
-  WHEN ducknng_set_service_authorizer('stop_auth_active', 'SELECT true AS allow, sleep_ms(500) AS slept')
+  WHEN ducknng_set_service_authorizer('stop_auth_active', 'SELECT true AS allow, ducknng__sleep_ms(500) AS slept')
   THEN 1 ELSE 0 END
 ----
 1
@@ -84,7 +84,7 @@ WITH RECURSIVE poll(i, c) AS (
   SELECT 1, COALESCE((SELECT inflight_requests FROM ducknng_list_servers() WHERE name = 'stop_auth_active'), 0)
   UNION ALL
   SELECT i + 1, (
-    COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+    COALESCE(CASE WHEN c < 1 THEN ducknng__sleep_ms(10) ELSE 0 END, 0) * 0 +
     COALESCE((SELECT inflight_requests FROM ducknng_list_servers() WHERE name = 'stop_auth_active'), 0)
   )
   FROM poll WHERE c < 1 AND i < 500

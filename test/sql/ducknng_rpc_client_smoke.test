@@ -163,15 +163,16 @@ FROM ducknng_query_rpc(
 ----
 TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP_NS	1	1	1
 
-query TI
-SELECT typeof(t_ns), t_ns = '03:04:05.123456789'::TIME_NS
+# DuckDB 1.4's Arrow C conversion rejects TIME_NS.
+statement error
+SELECT *
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT ''03:04:05.123456789''::TIME_NS AS t_ns',
   0::UBIGINT
 )
 ----
-TIME_NS	1
+Unsupported Arrow type TIME_NS
 
 query IIIII
 SELECT xs[1] = 1, xs[2] IS NULL, xs[3] = 3, st.a = 7, st.b = 'bee'

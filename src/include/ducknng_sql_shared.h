@@ -1,5 +1,5 @@
 #pragma once
-#include "duckdb_extension.h"
+#include "ducknng_duckdb_compat.h"
 #include "ducknng_runtime.h"
 
 typedef struct {
@@ -23,12 +23,32 @@ int ducknng_sql_register_scalar(duckdb_connection con, const char *name, idx_t n
 int ducknng_sql_register_volatile_scalar(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_type *param_types,
     duckdb_type return_type_id);
+typedef struct ducknng_sql_scalar_overload {
+    idx_t nparams;
+    duckdb_scalar_function_t fn;
+    duckdb_scalar_function_bind_t bind_fn;
+    duckdb_type *param_types;
+    duckdb_type return_type_id;
+} ducknng_sql_scalar_overload;
+int ducknng_sql_register_volatile_scalar_overloads(duckdb_connection con,
+    const char *name, const ducknng_sql_scalar_overload *overloads,
+    idx_t overload_count, ducknng_sql_context *ctx);
 int ducknng_sql_register_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
     duckdb_logical_type return_type);
 int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, ducknng_sql_context *ctx, duckdb_logical_type *param_types,
     duckdb_logical_type return_type);
+typedef struct ducknng_sql_logical_scalar_overload {
+    idx_t nparams;
+    duckdb_scalar_function_t fn;
+    duckdb_scalar_function_bind_t bind_fn;
+    duckdb_logical_type *param_types;
+    duckdb_logical_type return_type;
+} ducknng_sql_logical_scalar_overload;
+int ducknng_sql_register_volatile_logical_scalar_overloads(duckdb_connection con,
+    const char *name, const ducknng_sql_logical_scalar_overload *overloads,
+    idx_t overload_count, ducknng_sql_context *ctx);
 int ducknng_sql_register_volatile_scalar_with_bind(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, duckdb_scalar_function_bind_t bind_fn, ducknng_sql_context *ctx,
     duckdb_type *param_types, duckdb_type return_type_id);

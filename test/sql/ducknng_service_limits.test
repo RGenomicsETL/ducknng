@@ -184,7 +184,7 @@ SELECT max_inflight_requests FROM ducknng_list_servers() WHERE name = 'inflight_
 1
 
 query I
-SELECT CASE WHEN ducknng_set_service_authorizer('inflight_rpc', 'SELECT true AS allow, sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
+SELECT CASE WHEN ducknng_set_service_authorizer('inflight_rpc', 'SELECT true AS allow, ducknng__sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
 ----
 1
 
@@ -197,7 +197,7 @@ WITH RECURSIVE poll(i, c) AS (
   SELECT 1, ducknng_service_inflight('inflight_rpc')
   UNION ALL
   SELECT i + 1, (
-      COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+      COALESCE(CASE WHEN c < 1 THEN ducknng__sleep_ms(10) ELSE 0 END, 0) * 0 +
       ducknng_service_inflight('inflight_rpc')
   )
   FROM poll
@@ -258,7 +258,7 @@ SELECT max_inflight_per_peer_identity FROM ducknng_list_servers() WHERE name = '
 1
 
 query I
-SELECT CASE WHEN ducknng_set_service_authorizer('inflight_principal_rpc', 'SELECT true AS allow, sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
+SELECT CASE WHEN ducknng_set_service_authorizer('inflight_principal_rpc', 'SELECT true AS allow, ducknng__sleep_ms(2000) AS slept') THEN 1 ELSE 0 END
 ----
 1
 
@@ -271,7 +271,7 @@ WITH RECURSIVE poll(i, c) AS (
   SELECT 1, ducknng_service_inflight('inflight_principal_rpc')
   UNION ALL
   SELECT i + 1, (
-      COALESCE(CASE WHEN c < 1 THEN sleep_ms(10) ELSE 0 END, 0) * 0 +
+      COALESCE(CASE WHEN c < 1 THEN ducknng__sleep_ms(10) ELSE 0 END, 0) * 0 +
       ducknng_service_inflight('inflight_principal_rpc')
   )
   FROM poll
