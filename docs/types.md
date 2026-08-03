@@ -66,10 +66,10 @@ as sequences. FSST vectors remain unsupported and fail closed. A client
 selecting this codec must implement the ducknng Quack batch format; selecting it
 does not change session ownership, fetch, cancel, or end-of-stream semantics.
 
-DuckDB v1.5.2 also defines `GEOMETRY` (logical id 60) and `VARIANT`
+DuckDB v1.5.0 also defines `GEOMETRY` (logical id 60) and `VARIANT`
 (logical id 109), but neither is part of this codec contract. `GEOMETRY` adds a
 versioned vector-format field and optional CRS type metadata that this codec does
-not yet preserve. `VARIANT` is a struct-like internal logical type, but v1.5.2's
+not yet preserve. `VARIANT` is a struct-like internal logical type, but v1.5.0's
 C API does not expose a `DUCKDB_TYPE_VARIANT` constructor or vector contract.
 Both fail closed rather than being silently normalized to `BLOB` or `STRUCT`.
 Support must be gated and tested against each pinned DuckDB serializer/C API

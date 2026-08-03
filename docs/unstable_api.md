@@ -255,7 +255,7 @@ callback. `duckdb_log_storage_set_name` labels the sink for diagnostics.
 **Status: ADOPTED (deferred registration).** The log ring buffer (`ducknng_log_ring`,
 capacity 512) is in place and `ducknng_log_write_entry` (`src/ducknng_runtime.c`) is the
 registered callback. However, calling `duckdb_register_log_storage` from the extension
-entry point triggers a DuckDB v1.5.2 internal assertion failure ("Attempted to
+entry point triggers a DuckDB v1.5.0 internal assertion failure ("Attempted to
 dereference unique_ptr that is NULL"). The fix is to defer registration to query time
 via `ducknng_enable_log_capture()`, a volatile scalar that calls
 `duckdb_create_log_storage` + `duckdb_log_storage_set_*` + `duckdb_register_log_storage`
@@ -293,7 +293,7 @@ is set. Users can raise the limit for wide CSV inputs with
 
 The original Arrow result-set APIs are deprecated in favour of
 `unstable_new_arrow_functions` and remain forbidden. The pending-result streaming
-pair is different: DuckDB v1.5.2 has no undeprecated C API that combines pending
+pair is different: DuckDB v1.5.0 has no undeprecated C API that combines pending
 execution with incremental chunk delivery. `ducknng` therefore uses
 `duckdb_pending_prepared_streaming` and `duckdb_stream_fetch_chunk` only through
 `src/ducknng_duckdb_streaming_compat.c`. There is no materialized-result fallback
@@ -463,7 +463,7 @@ end-to-end contract is covered by `test/sql/ducknng_parameter_binding.test`.
 | `unstable_new_table_function_functions` | NOT applicable | `duckdb_table_function_get_client_context` returns a DuckDB context, not `ducknng_sql_context`; `extra_info` pattern must remain |
 | `unstable_new_file_system_api` | **DONE** | Write path uses `duckdb_file_system_open` + `duckdb_file_handle_write`; path generation uses atomic counter (no mkstemp) |
 | `unstable_new_open_connect_functions` | NOT applicable | `duckdb_client_context_get_connection_id` would change the public wire session_id; counter is correct |
-| `unstable_new_logger_functions` | **DONE** | `ducknng_enable_log_capture()` scalar defers `duckdb_register_log_storage` to query time to avoid v1.5.2 load-time crash |
+| `unstable_new_logger_functions` | **DONE** | `ducknng_enable_log_capture()` scalar defers `duckdb_register_log_storage` to query time to avoid v1.5.0 load-time crash |
 | `unstable_new_config_options_functions` | **DONE** | `ducknng.csv_max_columns` registered at load time; read in CSV/TSV body-parse bind callback |
 | `unstable_new_prepared_statement_functions` | **DONE** | `query_prepare` RPC method; `ducknng_prepared_schema_to_ipc` in `ducknng_ipc_out.c` |
 | `unstable_new_query_execution_functions` | **DONE** | `duckdb_result_get_arrow_options` in result path; `duckdb_connection_get_arrow_options` in prepared-schema path |
@@ -530,7 +530,7 @@ DuckDB C entrypoints. Profiling showed the materialized pending-result path spen
 large share of query-session time in `MaterializedQueryResult::FetchInternal` and
 `ColumnDataCollection::Scan` for 10M-row RPC fetches. After switching session fetches to
 the compatibility wrapper, the sampled path moves through `StreamQueryResult::FetchInternal`
-and DuckDB buffered/scan work instead. DuckDB v1.5.2 does not expose an undeprecated C API
+and DuckDB buffered/scan work instead. DuckDB v1.5.0 does not expose an undeprecated C API
 that combines pending execution with incremental result chunks, so the compatibility
 wrapper centralizes this version-sensitive choice and keeps the rest of the session code
 independent of the deprecated symbol.
