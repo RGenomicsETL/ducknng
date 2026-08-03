@@ -37,6 +37,12 @@ FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[{"name":"Bad Header","value":
 ----
 0	1	1
 
+query III
+SELECT ok, status IS NULL, error = 'ducknng: control characters are not allowed in headers_json strings'
+FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', '[{"name":"X-Test","value":"bad\r\nX-Evil: y"}]', NULL, 1000, 0::UBIGINT)
+----
+0	1	1
+
 statement ok
 CREATE TEMP TABLE ncurl_bad_aio AS
 SELECT ducknng_ncurl_aio('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, 0::UBIGINT) AS aio

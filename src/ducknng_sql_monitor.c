@@ -3,6 +3,7 @@
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include "ducknng_runtime.h"
+#include "ducknng_nng_compat.h"
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
@@ -11,6 +12,8 @@ static int register_monitor_table(duckdb_connection con, ducknng_sql_context *ct
 static int register_monitor_status_table(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_pipes_table(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_log_entries_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_nng_stats_table(duckdb_connection con, ducknng_sql_context *ctx);
+static int register_socket_monitor(duckdb_connection con, ducknng_sql_context *ctx);
 static int register_enable_log_capture_scalar(duckdb_connection con, ducknng_sql_context *ctx);
 
 typedef struct {
@@ -544,6 +547,8 @@ int ducknng_register_sql_monitor(duckdb_connection con, ducknng_sql_context *ctx
     if (!register_monitor_status_table(con, ctx)) return 0;
     if (!register_pipes_table(con, ctx)) return 0;
     if (!register_log_entries_table(con, ctx)) return 0;
+    if (!register_nng_stats_table(con, ctx)) return 0;
+    if (!register_socket_monitor(con, ctx)) return 0;
     if (!register_enable_log_capture_scalar(con, ctx)) return 0;
     return 1;
 }
@@ -646,6 +651,251 @@ static int register_log_entries_table(duckdb_connection con, ducknng_sql_context
     if (!ctx || !ctx->rt) return 0;
     return DUCKNNG_REGISTER_TABLE(con, "ducknng_log_entries", ctx, 0, NULL,
         ducknng_log_entries_bind, ducknng_read_monitor_init, ducknng_log_entries_scan);
+}
+
+/* ---------------------------------------------------------------------------
+ * ducknng_nng_stats() — flattened snapshot of NNG's native statistics tree
+ * --------------------------------------------------------------------------- */
+
+typedef struct {
+    ducknng_nng_stat_row *rows;
+    size_t row_count;
+} ducknng_nng_stats_bind_data;
+
+static void destroy_nng_stats_bind_data(void *ptr) {
+    ducknng_nng_stats_bind_data *data = (ducknng_nng_stats_bind_data *)ptr;
+    if (!data) return;
+    ducknng_nng_stats_free(data->rows, data->row_count);
+    duckdb_free(data);
+}
+
+static void ducknng_nng_stats_bind(duckdb_bind_info info) {
+    ducknng_nng_stats_bind_data *bind = NULL;
+    ducknng_nng_stat_row *rows = NULL;
+    size_t count = 0;
+    char *errmsg = NULL;
+    duckdb_logical_type type;
+
+    if (ducknng_nng_stats_snapshot(&rows, &count, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to snapshot nng stats");
+        if (errmsg) duckdb_free(errmsg);
+        return;
+    }
+    bind = (ducknng_nng_stats_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        ducknng_nng_stats_free(rows, count);
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    bind->rows = rows;
+    bind->row_count = count;
+
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "scope", type);
+    duckdb_bind_add_result_column(info, "name", type);
+    duckdb_bind_add_result_column(info, "type", type);
+    duckdb_bind_add_result_column(info, "unit", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_bind_add_result_column(info, "value", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "svalue", type);
+    duckdb_bind_add_result_column(info, "description", type);
+    duckdb_destroy_logical_type(&type);
+
+    duckdb_bind_set_bind_data(info, bind, destroy_nng_stats_bind_data);
+    duckdb_bind_set_cardinality(info, (idx_t)bind->row_count, true);
+}
+
+static void ducknng_nng_stats_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_monitor_init_data *init = (ducknng_monitor_init_data *)duckdb_function_get_init_data(info);
+    ducknng_nng_stats_bind_data *bind = (ducknng_nng_stats_bind_data *)duckdb_function_get_bind_data(info);
+    idx_t remaining, chunk_size, i;
+    if (!init || !bind || init->offset >= (idx_t)bind->row_count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    remaining = (idx_t)bind->row_count - init->offset;
+    chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
+    for (i = 0; i < chunk_size; i++) {
+        ducknng_nng_stat_row *row = &bind->rows[init->offset + i];
+        duckdb_vector v;
+        v = duckdb_data_chunk_get_vector(output, 0);
+        if (row->scope) duckdb_unsafe_vector_assign_string_element_len(v, i, row->scope, (idx_t)strlen(row->scope)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 1);
+        if (row->name) duckdb_unsafe_vector_assign_string_element_len(v, i, row->name, (idx_t)strlen(row->name)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 2);
+        if (row->type) duckdb_unsafe_vector_assign_string_element_len(v, i, row->type, (idx_t)strlen(row->type)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 3);
+        if (row->unit) duckdb_unsafe_vector_assign_string_element_len(v, i, row->unit, (idx_t)strlen(row->unit)); else set_null(v, i);
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4)))[i] = row->value;
+        v = duckdb_data_chunk_get_vector(output, 5);
+        if (row->svalue) duckdb_unsafe_vector_assign_string_element_len(v, i, row->svalue, (idx_t)strlen(row->svalue)); else set_null(v, i);
+        v = duckdb_data_chunk_get_vector(output, 6);
+        if (row->desc) duckdb_unsafe_vector_assign_string_element_len(v, i, row->desc, (idx_t)strlen(row->desc)); else set_null(v, i);
+    }
+    init->offset += chunk_size;
+    duckdb_data_chunk_set_size(output, chunk_size);
+}
+
+static int register_nng_stats_table(duckdb_connection con, ducknng_sql_context *ctx) {
+    if (!ctx || !ctx->rt) return 0;
+    return DUCKNNG_REGISTER_TABLE(con, "ducknng_nng_stats", ctx, 0, NULL,
+        ducknng_nng_stats_bind, ducknng_read_monitor_init, ducknng_nng_stats_scan);
+}
+
+/* ---------------------------------------------------------------------------
+ * Client-socket pipe-event monitor
+ * --------------------------------------------------------------------------- */
+
+static void ducknng_monitor_socket_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    bool *out = (bool *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: runtime is not available");
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        uint64_t socket_id = arg_u64(duckdb_data_chunk_get_vector(input, 0), row, 0);
+        char *errmsg = NULL;
+        if (ducknng_runtime_socket_monitor_enable(ctx->rt, socket_id, &errmsg) != 0) {
+            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to enable socket monitor");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        out[row] = true;
+    }
+}
+
+typedef struct {
+    ducknng_socket_pipe_event *events;
+    size_t row_count;
+    uint64_t dropped;
+} ducknng_socket_monitor_bind_data;
+
+static void destroy_socket_monitor_bind_data(void *ptr) {
+    ducknng_socket_monitor_bind_data *data = (ducknng_socket_monitor_bind_data *)ptr;
+    if (!data) return;
+    if (data->events) duckdb_free(data->events);
+    duckdb_free(data);
+}
+
+static void ducknng_read_socket_monitor_bind(duckdb_bind_info info) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    ducknng_socket_monitor_bind_data *bind = NULL;
+    ducknng_socket_pipe_event *events = NULL;
+    size_t event_count = 0;
+    uint64_t dropped = 0;
+    uint64_t socket_id, after_seq, max_events;
+    char *errmsg = NULL;
+    duckdb_logical_type type;
+
+    if (!ctx || !ctx->rt) {
+        duckdb_bind_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    if (duckdb_bind_get_parameter_count(info) != 3) {
+        duckdb_bind_set_error(info, "ducknng: ducknng_read_socket_monitor(socket_id, after_seq, max_events) requires exactly three parameters");
+        return;
+    }
+    socket_id = ducknng_bind_u64_parameter(info, 0, 0);
+    after_seq = ducknng_bind_u64_parameter(info, 1, 0);
+    max_events = ducknng_bind_u64_parameter(info, 2, 0);
+    if (ducknng_runtime_socket_monitor_snapshot(ctx->rt, socket_id, after_seq, max_events,
+            &events, &event_count, &dropped, &errmsg) != 0) {
+        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to snapshot socket monitor");
+        if (errmsg) duckdb_free(errmsg);
+        return;
+    }
+    bind = (ducknng_socket_monitor_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (!bind) {
+        if (events) duckdb_free(events);
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bind, 0, sizeof(*bind));
+    bind->events = events;
+    bind->row_count = event_count;
+    bind->dropped = dropped;
+
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_bind_add_result_column(info, "seq", type);
+    duckdb_bind_add_result_column(info, "ts_ms", type);
+    duckdb_bind_add_result_column(info, "pipe_id", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "event", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
+    duckdb_bind_add_result_column(info, "dropped", type);
+    duckdb_destroy_logical_type(&type);
+
+    duckdb_bind_set_bind_data(info, bind, destroy_socket_monitor_bind_data);
+    duckdb_bind_set_cardinality(info, (idx_t)bind->row_count, true);
+}
+
+static void ducknng_read_socket_monitor_scan(duckdb_function_info info, duckdb_data_chunk output) {
+    ducknng_monitor_init_data *init = (ducknng_monitor_init_data *)duckdb_function_get_init_data(info);
+    ducknng_socket_monitor_bind_data *bind = (ducknng_socket_monitor_bind_data *)duckdb_function_get_bind_data(info);
+    idx_t remaining, chunk_size, i;
+    if (!init || !bind || init->offset >= (idx_t)bind->row_count) {
+        duckdb_data_chunk_set_size(output, 0);
+        return;
+    }
+    remaining = (idx_t)bind->row_count - init->offset;
+    chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
+    for (i = 0; i < chunk_size; i++) {
+        ducknng_socket_pipe_event *e = &bind->events[init->offset + i];
+        const char *ev = e->added ? "add" : "remove";
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0)))[i] = e->seq;
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1)))[i] = e->ts_ms;
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2)))[i] = e->pipe_id;
+        duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 3), i, ev, (idx_t)strlen(ev));
+        ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4)))[i] = bind->dropped;
+    }
+    init->offset += chunk_size;
+    duckdb_data_chunk_set_size(output, chunk_size);
+}
+
+static void ducknng_socket_monitor_wait_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    uint64_t *out = (uint64_t *)duckdb_vector_get_data(output);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: runtime is not available");
+        return;
+    }
+    for (row = 0; row < count; row++) {
+        uint64_t socket_id = arg_u64(duckdb_data_chunk_get_vector(input, 0), row, 0);
+        uint64_t after_seq = arg_u64(duckdb_data_chunk_get_vector(input, 1), row, 0);
+        uint64_t timeout_ms = arg_u64(duckdb_data_chunk_get_vector(input, 2), row, 0);
+        uint64_t seq = 0;
+        char *errmsg = NULL;
+        if (ducknng_runtime_socket_monitor_wait(ctx->rt, socket_id, after_seq, timeout_ms, &seq, &errmsg) != 0) {
+            duckdb_scalar_function_set_error(info, errmsg ? errmsg : "ducknng: failed to wait on socket monitor");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        out[row] = seq;
+    }
+}
+
+static int register_socket_monitor(duckdb_connection con, ducknng_sql_context *ctx) {
+    duckdb_type param_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
+    duckdb_type mon_types[1] = {DUCKDB_TYPE_UBIGINT};
+    duckdb_type wait_types[3] = {DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_UBIGINT};
+    if (!ctx || !ctx->rt) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_monitor_socket", 1, ducknng_monitor_socket_scalar, ctx, mon_types, DUCKDB_TYPE_BOOLEAN)) return 0;
+    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_read_socket_monitor", ctx, 3, param_types,
+            ducknng_read_socket_monitor_bind, ducknng_read_monitor_init, ducknng_read_socket_monitor_scan)) return 0;
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_socket_monitor_wait", 3, ducknng_socket_monitor_wait_scalar, ctx, wait_types, DUCKDB_TYPE_UBIGINT)) return 0;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------------

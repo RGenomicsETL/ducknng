@@ -95,7 +95,7 @@
       "kind": "table",
       "category": "Introspection",
       "signature": "ducknng_list_servers()",
-      "returns": "TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_principal UBIGINT, max_reply_bytes_per_principal UBIGINT, max_session_open_rate_per_principal UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)",
+      "returns": "TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_peer_identity UBIGINT, max_reply_bytes_per_peer_identity UBIGINT, max_session_open_rate_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List registered ducknng services.",
@@ -136,6 +136,26 @@
       "examples": [
         "SELECT ducknng_register_exec_method();",
         "SELECT ducknng_register_exec_method(true);"
+      ]
+    },
+    {
+      "name": "ducknng_register_upload_methods",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "ducknng_register_upload_methods([requires_auth])",
+      "returns": "BOOLEAN",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly.",
+      "notes": [
+        "The upload methods are not registered by default. Call this deliberately before exposing client-to-server table uploads over RPC.",
+        "An upload session opens a transaction on a pinned connection, appends quack batches into a target table via an appender, and commits or rolls back; abort, idle prune, and shutdown roll back so partially uploaded rows never persist.",
+        "requires_auth defaults to false. Pass true to require a verified transport-derived peer identity for upload dispatch.",
+        "Execution-subject admission, session owner tokens, and per-peer-identity limits are shared with the query-session path."
+      ],
+      "examples": [
+        "SELECT ducknng_register_upload_methods();",
+        "SELECT ducknng_register_upload_methods(true);"
       ]
     },
     {
@@ -201,7 +221,7 @@
       "implemented": true,
       "description": "List the currently registered RPC methods in the runtime registry.",
       "notes": [
-        "Use this to inspect the same auth, session, mutation, idempotence, flag, and size policy projected into the RPC manifest."
+        "Use this to verify whether exec has been explicitly enabled and to inspect the same auth, session, mutation, idempotence, flag, and size policy projected into the RPC manifest."
       ],
       "examples": [
         "SELECT * FROM ducknng_list_methods();"
@@ -262,6 +282,82 @@
       "examples": [
         "SELECT * FROM ducknng_list_pipes('svc');"
       ]
+    },
+    {
+      "name": "ducknng_nng_stats",
+      "kind": "table",
+      "category": "Introspection",
+      "signature": "ducknng_nng_stats()",
+      "returns": "TABLE(scope VARCHAR, name VARCHAR, type VARCHAR, unit VARCHAR, value UBIGINT, svalue VARCHAR, description VARCHAR)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Snapshot of NNG's native statistics tree, flattened into rows.",
+      "notes": [
+        "Each leaf statistic becomes a row: scope is the dotted path of enclosing scope names, type is one of scope/level/counter/string/boolean/id, and unit is one of none/bytes/messages/millis/events.",
+        "value carries the numeric value; booleans are represented as 0 or 1, and string statistics use svalue.",
+        "Returns an empty snapshot rather than erroring when NNG statistics are unavailable in the linked NNG build.",
+        "Process-wide: reflects all sockets in the runtime, not a single named service. Filter by scope or name in SQL to focus on one statistic family."
+      ],
+      "examples": [
+        "SELECT scope, name, value FROM ducknng_nng_stats() WHERE name = 'rx_bytes';"
+      ]
+    },
+    {
+      "name": "ducknng_monitor_socket",
+      "kind": "scalar",
+      "category": "Introspection",
+      "signature": "ducknng_monitor_socket(socket_id)",
+      "returns": "BOOLEAN",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Opt a client socket into pipe-event monitoring. Subsequent pipe add/remove events are captured into a per-socket ring readable with ducknng_read_socket_monitor().",
+      "notes": [
+        "Idempotent: enabling monitoring on an already monitored socket is a no-op success.",
+        "Enable monitoring before the pipe forms to capture its add event; events that occur before enabling are not recorded.",
+        "Captures NNG ADD_POST and REM_POST events for sockets opened with ducknng_open_socket(); service-side pipe monitoring remains available through ducknng_read_monitor()."
+      ],
+      "examples": [
+        "SELECT ducknng_monitor_socket((ducknng_open_socket('pair')).socket_id);"
+      ],
+      "parameters": "socket_id"
+    },
+    {
+      "name": "ducknng_read_socket_monitor",
+      "kind": "table",
+      "category": "Introspection",
+      "signature": "ducknng_read_socket_monitor(socket_id, after_seq, max_events)",
+      "returns": "TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, event VARCHAR, dropped UBIGINT)",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Read captured pipe events for a monitored client socket. event is 'add' or 'remove'; dropped is the running count of events evicted from the ring.",
+      "notes": [
+        "Pass after_seq to read only events newer than a previously seen seq; 0 reads from the start. Pass max_events to cap the batch; 0 returns all available.",
+        "The socket must first be enabled with ducknng_monitor_socket(); reading an unmonitored socket is an error.",
+        "Events are retained in a bounded per-socket ring; when it overflows, the oldest events are dropped and counted in the dropped column."
+      ],
+      "examples": [
+        "SELECT seq, pipe_id, event FROM ducknng_read_socket_monitor(1, 0, 0);"
+      ],
+      "parameters": "socket_id, after_seq, max_events"
+    },
+    {
+      "name": "ducknng_socket_monitor_wait",
+      "kind": "scalar",
+      "category": "Introspection",
+      "signature": "ducknng_socket_monitor_wait(socket_id, after_seq, timeout_ms)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Block until a monitored socket records a pipe event newer than after_seq, or until timeout_ms elapses; returns the current newest event seq.",
+      "notes": [
+        "Returns immediately when an event with seq > after_seq is already present; otherwise waits up to timeout_ms and returns the unchanged seq on timeout.",
+        "Compare the returned seq to after_seq to tell whether a new event arrived, then read it with ducknng_read_socket_monitor(socket_id, after_seq, ...).",
+        "The socket must first be enabled with ducknng_monitor_socket()."
+      ],
+      "examples": [
+        "SELECT ducknng_socket_monitor_wait(1, 0, 1000);"
+      ],
+      "parameters": "socket_id, after_seq, timeout_ms"
     },
     {
       "name": "ducknng_log_entries",
@@ -553,7 +649,7 @@
       "name": "ducknng_set_service_limits",
       "kind": "scalar",
       "category": "Transport Security",
-      "signature": "ducknng_set_service_limits(name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]])",
+      "signature": "ducknng_set_service_limits(name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]])",
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
@@ -567,10 +663,10 @@
         "The three-argument form preserves the current max_inflight_requests value.",
         "max_sessions_per_peer_identity limits concurrently open query sessions for each verified TLS peer identity; 0 means unlimited.",
         "The four-argument form preserves the current max_sessions_per_peer_identity value.",
-        "max_inflight_per_principal limits concurrent in-flight requests for each verified TLS peer identity; 0 means unlimited. Exceeded requests fail with ducknng: max inflight requests per principal exceeded.",
-        "max_reply_bytes_per_principal is a cumulative reply byte budget per principal since service start; 0 means unlimited. Exceeded requests fail with ducknng: reply byte quota for principal exceeded.",
-        "max_session_open_rate_per_principal is a cumulative session-open count cap per principal since service start; 0 means unlimited. Exceeded requests fail with ducknng: session open rate per principal exceeded.",
-        "Per-principal limits require a verified TLS peer identity; they have no effect when TLS authentication is not active."
+        "max_inflight_per_peer_identity limits concurrent in-flight requests for each verified TLS peer identity; 0 means unlimited. Exceeded requests fail with ducknng: max inflight requests per peer identity exceeded.",
+        "max_reply_bytes_per_peer_identity is a cumulative reply byte budget per peer identity since service start; 0 means unlimited. Exceeded requests fail with ducknng: reply byte quota for peer identity exceeded.",
+        "max_session_open_rate_per_peer_identity is a cumulative session-open count cap per peer identity since service start; 0 means unlimited. Exceeded requests fail with ducknng: session open rate per peer identity exceeded.",
+        "These limits are pre-authorizer peer-identity limits: they are keyed by the verified TLS peer identity and enforced before the SQL authorizer maps a principal, so they protect the service from pre-auth pressure. They require a verified TLS peer identity and have no effect when TLS authentication is not active. Post-auth per-subject quotas would be a separate layer."
       ],
       "examples": [
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT);",
@@ -581,7 +677,7 @@
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT, 4::UBIGINT, 1048576::UBIGINT);",
         "SELECT ducknng_set_service_limits('svc', 16::UBIGINT, 128::UBIGINT, 8::UBIGINT, 2::UBIGINT, 4::UBIGINT, 1048576::UBIGINT, 10::UBIGINT);"
       ],
-      "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]]"
+      "parameters": "name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]"
     },
     {
       "name": "ducknng_service_inflight",
@@ -623,6 +719,80 @@
         "SELECT ducknng_set_service_execution_model('svc', 'request_connection');"
       ],
       "parameters": "name, model"
+    },
+    {
+      "name": "ducknng_transport_capabilities",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_transport_capabilities()",
+      "returns": "VARCHAR",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Return the active net backend's capability descriptor as a JSON object.",
+      "notes": [
+        "The descriptor is the machine-readable support matrix for the build target: per-transport support level (supported, experimental, or unsupported) for http, https, http_response_stream, inproc, tcp, ipc, tls_tcp, and websocket, plus async semantics (async_is_real, honors_timeout, honors_cancel) and TLS ownership (native or browser_managed).",
+        "Targets are native, wasm_eh, and wasm_threads. native reports every transport supported with real async and native TLS. The wasm targets report http/https with browser-managed TLS and real unary async AIO through the fetch completion bridge: handles stay pending until the worker event loop settles them, and timeout and cancel abort the fetch. Their synchronous ncurl path still uses blocking XHR, http_response_stream is unsupported, and inproc is experimental only under wasm_threads.",
+        "Harnesses should gate assertions on this descriptor instead of maintaining per-target probe lists; claiming a capability that fails, or passing one that is claimed unsupported, is a bug in either the claim or the behavior."
+      ],
+      "examples": [
+        "SELECT json_extract_string(ducknng_transport_capabilities()::JSON, '$.backend');"
+      ],
+      "parameters": ""
+    },
+    {
+      "name": "ducknng_list_transport_capabilities",
+      "kind": "table",
+      "category": "Service Control",
+      "signature": "ducknng_list_transport_capabilities()",
+      "returns": "TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, http_response_stream VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "List the capability contract for every build target; exactly one row is active.",
+      "notes": [
+        "The contract is compiled data, identical in every build, so a native binary can render the full support matrix including the wasm targets; docs/wasm.md's transport matrix is generated from this table by make wasm_matrix.",
+        "active marks the build target of the loaded extension and always agrees with ducknng_transport_capabilities()."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_list_transport_capabilities();"
+      ],
+      "parameters": ""
+    },
+    {
+      "name": "ducknng_set_execution_pool_max",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_set_execution_pool_max(n)",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Set the runtime execution-connection pool grow ceiling and return the effective value.",
+      "notes": [
+        "The execution-connection pool opens a warm minimum at extension initialization, then grows on demand up to this ceiling, reusing and resetting connections between holders.",
+        "The requested value is clamped to [1, a compiled hard maximum]; the clamped value is returned.",
+        "Raising the ceiling lets more query sessions and nested query_rpc calls run concurrently; lowering it caps further growth without dropping connections already in use.",
+        "This is a runtime-wide setting, not per-service. Pool size is a deliberate, deterministic control rather than an environment variable."
+      ],
+      "examples": [
+        "SELECT ducknng_set_execution_pool_max(128);"
+      ],
+      "parameters": "n"
+    },
+    {
+      "name": "ducknng_execution_pool_max",
+      "kind": "scalar",
+      "category": "Service Control",
+      "signature": "ducknng_execution_pool_max()",
+      "returns": "UBIGINT",
+      "since": "0.1.0",
+      "implemented": true,
+      "description": "Return the current execution-connection pool grow ceiling.",
+      "notes": [
+        "Reflects the most recent ducknng_set_execution_pool_max value, or the compiled default if it has not been changed."
+      ],
+      "examples": [
+        "SELECT ducknng_execution_pool_max();"
+      ],
+      "parameters": ""
     },
     {
       "name": "ducknng_auth_context",
@@ -675,7 +845,7 @@
       "notes": [
         "Intended for development and local testing utilities rather than production PKI.",
         "Uses the openssl command-line tool available in the runtime environment.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_self_signed_tls_config('127.0.0.1', 365, 1);"
@@ -693,7 +863,7 @@
       "notes": [
         "Stores PEM material in the runtime and returns a reusable config id.",
         "Can be used with tls+tcp, wss, and https listeners and the one-shot raw request/RPC/session paths.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_tls_config_from_pem('-----BEGIN CERTIFICATE-----\n...','-----BEGIN PRIVATE KEY-----\n...', '-----BEGIN CERTIFICATE-----\n...', NULL, 1);"
@@ -711,7 +881,7 @@
       "notes": [
         "Stores TLS material references in the runtime and returns a reusable config id.",
         "Can be used with tls+tcp, wss, and https listeners and the one-shot raw request/RPC/session paths.",
-        "auth_mode 2 enables required peer verification/mTLS when the handle is used by a listener."
+        "Client use verifies the remote server certificate by default when auth_mode is 0; listener auth_mode 2 enables required peer verification/mTLS."
       ],
       "examples": [
         "SELECT ducknng_tls_config_from_files('/tmp/server.pem', '/tmp/ca.pem', NULL, 1);"
@@ -771,7 +941,7 @@
         "The helper uses a volatile execution path so constant-argument HTTP calls are not reused as one cached response across recursive CTE iterations or repeated row execution.",
         "Optional profile_id resolves a registered outbound HTTP profile and injects its authentication header after scope checks pass.",
         "Profile scope enforcement is fail-closed before sending: scheme, host, optional port, path prefix, method, and TLS requirement must match.",
-        "Caller-supplied Authorization or another profile-protected auth header is rejected rather than allowed to override the profile credential."
+        "Caller-supplied headers that collide with the profile auth header are rejected rather than allowed to override the profile credential."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl('http://127.0.0.1:8080/_ducknng', 'POST', '[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]', from_hex('01000000000000000000000000000000000000000000'), 2000, 0::UBIGINT);"
@@ -816,6 +986,99 @@
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl_aio_collect(list_value(1::UBIGINT), 1000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_open_aio",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_open_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
+      "returns": "UBIGINT",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Open an HTTP or HTTPS response stream asynchronously and return an aio handle for the response headers.",
+      "notes": [
+        "Collect the open aio with ducknng_ncurl_stream_open_aio_collect(); status and headers become available without waiting for the response body to finish.",
+        "The collected stream_id owns one HTTP connection until ducknng_ncurl_stream_close() is called.",
+        "Existing ducknng_ncurl_aio() remains the unary full-response operation; this is an additive split-phase primitive for SSE, NDJSON, and progressive bodies.",
+        "Optional profile_id uses the same fail-closed outbound HTTP profile resolution as ducknng_ncurl_aio().",
+        "Incremental client response streams are currently native-only; browser wasm builds return a terminal error aio rather than buffering and pretending to stream."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_open_aio('http://127.0.0.1:8080/events', 'GET', NULL, NULL, 5000, 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_open_aio_collect",
+      "kind": "table",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_open_aio_collect(aio_ids, wait_ms)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, status INTEGER, error VARCHAR, headers_json VARCHAR)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Wait for streaming HTTP open aios and return response status, headers, and a readable stream handle.",
+      "notes": [
+        "ok means the request was sent and response headers were received; HTTP 4xx and 5xx statuses are still successful transport opens.",
+        "Collection claims the stream handle. Dropping a successful open aio before collecting it closes the unclaimed stream.",
+        "Release the aio with ducknng_aio_drop() and release the stream separately with ducknng_ncurl_stream_close()."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_ncurl_stream_open_aio_collect(list_value(1::UBIGINT), 1000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_recv_aio",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_recv_aio(stream_id, max_bytes, timeout_ms)",
+      "returns": "UBIGINT",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Launch one cancellable asynchronous raw-body receive from an opened HTTP response stream.",
+      "notes": [
+        "Only one receive may be pending per stream.",
+        "max_bytes must be between 1 and 67108864 and bounds the returned body BLOB.",
+        "HTTP chunk framing is decoded internally; callers receive application body bytes, never transfer-encoding delimiters.",
+        "Collect with ducknng_ncurl_stream_recv_aio_collect() and cancel a pending receive with ducknng_aio_cancel(). Any receive error makes the stream unreadable; close it explicitly."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_recv_aio(1::UBIGINT, 65536::UBIGINT, 30000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_recv_aio_collect",
+      "kind": "table",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_recv_aio_collect(aio_ids, wait_ms)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, error VARCHAR, body BLOB, end_of_stream BOOLEAN)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Wait for streaming HTTP receive aios and return one raw body slice or explicit end-of-stream result per ready handle.",
+      "notes": [
+        "A successful data result has a non-empty body and end_of_stream = false.",
+        "Completion is a separate successful row with body NULL and end_of_stream = true, so callers never infer EOF from an empty or timed-out read.",
+        "SSE and NDJSON parsing remains the caller's responsibility above these raw, de-framed bytes."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_ncurl_stream_recv_aio_collect(list_value(2::UBIGINT), 30000);"
+      ]
+    },
+    {
+      "name": "ducknng_ncurl_stream_close",
+      "kind": "scalar",
+      "category": "HTTP Transport",
+      "signature": "ducknng_ncurl_stream_close(stream_id)",
+      "returns": "BOOLEAN",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Close and release an HTTP response stream handle.",
+      "notes": [
+        "Closing aborts an active receive before releasing the underlying HTTP connection.",
+        "Returns FALSE for unknown or already-closing stream handles.",
+        "A stream must be closed explicitly even after end_of_stream because SQL handles have no automatic finalizer."
+      ],
+      "examples": [
+        "SELECT ducknng_ncurl_stream_close(1::UBIGINT);"
       ]
     },
     {
@@ -910,7 +1173,7 @@
         "JSON parses in memory; CSV, TSV, and Parquet currently use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
         "This helper is transport-local and does not change the framed RPC method surface.",
         "Optional profile_id uses the same outbound HTTP profile resolution and fail-closed scope checks as ducknng_ncurl().",
-        "The request is sent only after profile scope checks pass and protected auth-header collisions are rejected."
+        "The request is sent only after profile scope checks pass and profile-auth-header collisions are rejected."
       ],
       "examples": [
         "SELECT * FROM ducknng_ncurl_table('http://127.0.0.1:8080/data.json', 'GET', NULL, NULL, 2000, 0::UBIGINT);"
@@ -920,7 +1183,7 @@
       "name": "ducknng_register_http_profile",
       "kind": "scalar",
       "category": "HTTP Transport",
-      "signature": "ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms])",
+      "signature": "ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]])",
       "returns": "BOOLEAN",
       "since": "0.1.0",
       "implemented": true,
@@ -932,10 +1195,13 @@
         "path_prefix must start with / and is segment-aware: /auth matches /auth and /auth/... but not /authz; use / or a trailing slash for deliberately broad scopes.",
         "method is an HTTP token or * for all methods.",
         "auth_header_name must be an HTTP token; the matching auth_header_value is stored in memory and never exposed by list/introspection.",
-        "expires_at_ms = 0 means no expiry check. Non-zero values are compared to Unix epoch milliseconds before each request."
+        "expires_at_ms = 0 means no expiry check. Non-zero values are compared to Unix epoch milliseconds before each request.",
+        "allow_subjects_json is an optional non-empty JSON array of execution subjects; NULL keeps the profile unrestricted. Restricted profiles resolve only while a matching current execution subject is installed, so they fail closed for ad-hoc SQL outside any request context.",
+        "The execution subject is installed by ducknng service dispatch and HTTP route handling from the verified peer identity and SQL authorizer principal, or by embedded hosts through the C API. It is never settable from SQL."
       ],
       "examples": [
-        "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');"
+        "SELECT ducknng_register_http_profile('local-api', 'http', '127.0.0.1', NULL::INTEGER, '/v1', 'GET', false, 'Authorization', 'Bearer dev-token');",
+        "SELECT ducknng_register_http_profile('alice-api', 'https', 'api.example.org', NULL::INTEGER, '/v1', '*', true, 'Authorization', 'Bearer alice-token', 0::UBIGINT, '[\"alice\"]');"
       ]
     },
     {
@@ -959,13 +1225,14 @@
       "kind": "table",
       "category": "HTTP Transport",
       "signature": "ducknng_list_http_profiles()",
-      "returns": "TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)",
+      "returns": "TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "List registered outbound HTTP profiles with redacted credential metadata.",
       "notes": [
-        "Introspection exposes profile id, scope, auth header names, version, timestamps, and expiry only.",
-        "Raw authentication header values are never returned."
+        "Introspection exposes profile id, scope, auth header names, version, timestamps, expiry, and subject allowlist only.",
+        "Raw authentication header values are never returned.",
+        "Inside service-handled SQL the listing is subject-scoped: only unrestricted profiles and profiles admitted to the current execution subject are returned, and allow_subjects_json is NULL. Host/local SQL outside any request context sees the full redacted listing including the allowlist."
       ],
       "examples": [
         "SELECT * FROM ducknng_list_http_profiles();"
@@ -1848,7 +2115,7 @@
       "description": "Execute one parameterized metadata-oriented exec RPC and return a structured result row.",
       "notes": [
         "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
-        "Values are Arrow encoded and bound with duckdb_bind_value on the server; they are not interpolated into SQL text.",
+        "The parameter tuple is encoded as Arrow and bound with duckdb_bind_value on the server; values are not interpolated into SQL text.",
         "Parameterized exec accepts exactly one SQL statement and sends the RPC during scan, not bind.",
         "The remote server must have explicitly registered the exec method."
       ],
@@ -1903,12 +2170,12 @@
       "returns": "table",
       "since": "0.1.2",
       "implemented": true,
-      "description": "Execute a parameterized row query through the session family and expose its Arrow rows as a DuckDB table.",
+      "description": "Execute a parameterized row-returning query through the session family and expose its Arrow rows as a DuckDB table.",
       "notes": [
         "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
-        "Values are Arrow encoded and bound with duckdb_bind_value on the server; they are not interpolated into SQL text.",
+        "The parameter tuple is encoded as Arrow and bound with duckdb_bind_value on the server; values are not interpolated into SQL text.",
         "Parameterized query_open accepts exactly one SQL statement.",
-        "Like ducknng_query_rpc(), this dynamic-schema wrapper performs remote schema discovery during bind and is for read-only or idempotent SQL."
+        "Like ducknng_query_rpc(), this dynamic-schema convenience wrapper may perform remote read work during bind and is not a mutation surface."
       ],
       "examples": [
         "SELECT * FROM ducknng_query_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::INTEGER AS answer', struct_pack(p1 := 42), 0::UBIGINT);"
@@ -1946,6 +2213,25 @@
       ],
       "examples": [
         "DESCRIBE SELECT * FROM ducknng_prepare_query_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::BIGINT AS answer', struct_pack(p1 := 42::BIGINT), 0::UBIGINT);"
+      ]
+    },
+    {
+      "name": "ducknng_upload_table",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_upload_table(url, source_query, target_table[, tls_config_id])",
+      "returns": "TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)",
+      "since": "0.1.2",
+      "implemented": true,
+      "description": "Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded.",
+      "notes": [
+        "Requires the remote server to have registered the upload methods with ducknng_register_upload_methods().",
+        "source_query runs on the runtime's pooled connection, so it sees committed/persistent data, not the caller's temp/uncommitted state (v1).",
+        "The batch column names, order, and types must match the target table exactly, since the server appends by ordinal; a mismatch is rejected before any row is appended.",
+        "The client drives upload_open then upload_append per chunk then upload_commit; on any error it sends upload_abort so the server rolls the transaction back and a partial upload never persists."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_upload_table('ipc:///tmp/ducknng_sql0.ipc', 'SELECT i::INTEGER AS i FROM range(1000) t(i)', 'dst');"
       ]
     },
     {

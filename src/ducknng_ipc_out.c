@@ -1,4 +1,5 @@
 #include "ducknng_ipc_out.h"
+#include "ducknng_duckdb_streaming_compat.h"
 #include "ducknng_util.h"
 #include "nanoarrow/nanoarrow.h"
 #include "nanoarrow/nanoarrow_ipc.h"
@@ -25,13 +26,17 @@ static int ducknng_build_exec_request_schema(struct ArrowSchema *schema, struct 
 
 static int ducknng_build_query_open_request_schema(struct ArrowSchema *schema, struct ArrowError *error) {
     ArrowSchemaInit(schema);
-    if (ArrowSchemaSetTypeStruct(schema, 3) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetTypeStruct(schema, 5) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[0], "sql") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[0], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[1], "batch_rows") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_UINT64) != NANOARROW_OK) return -1;
     if (ArrowSchemaSetName(schema->children[2], "batch_bytes") != NANOARROW_OK) return -1;
     if (ArrowSchemaSetType(schema->children[2], NANOARROW_TYPE_UINT64) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetName(schema->children[3], "correlation_id") != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetType(schema->children[3], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetName(schema->children[4], "serialization_mode") != NANOARROW_OK) return -1;
+    if (ArrowSchemaSetType(schema->children[4], NANOARROW_TYPE_STRING) != NANOARROW_OK) return -1;
     (void)error;
     return 0;
 }
@@ -47,6 +52,47 @@ static int ducknng_build_metadata_schema(struct ArrowSchema *schema, struct Arro
     if (ArrowSchemaSetType(schema->children[2], NANOARROW_TYPE_INT32) != NANOARROW_OK) return -1;
     (void)error;
     return 0;
+}
+
+static size_t ducknng_json_escaped_len(const char *s) {
+    size_t n = 0;
+    if (!s) return 0;
+    while (*s) {
+        unsigned char c = (unsigned char)*s++;
+        if (c == '\\' || c == '"') n += 2;
+        else if (c < 0x20) n += 6;
+        else n += 1;
+    }
+    return n;
+}
+
+static char *ducknng_json_escape_dup(const char *s) {
+    static const char hex[] = "0123456789abcdef";
+    char *out;
+    size_t out_len;
+    size_t i = 0;
+    if (!s) return ducknng_strdup("");
+    out_len = ducknng_json_escaped_len(s);
+    out = (char *)duckdb_malloc(out_len + 1);
+    if (!out) return NULL;
+    while (*s) {
+        unsigned char c = (unsigned char)*s++;
+        if (c == '\\' || c == '"') {
+            out[i++] = '\\';
+            out[i++] = (char)c;
+        } else if (c < 0x20) {
+            out[i++] = '\\';
+            out[i++] = 'u';
+            out[i++] = '0';
+            out[i++] = '0';
+            out[i++] = hex[(c >> 4) & 0x0f];
+            out[i++] = hex[c & 0x0f];
+        } else {
+            out[i++] = (char)c;
+        }
+    }
+    out[i] = '\0';
+    return out;
 }
 
 /* -------------------------------------------------------------------------
@@ -122,6 +168,64 @@ cleanup:
  * Build an Arrow schema from a DuckDB result using DuckDB's own conversion.
  * ---------------------------------------------------------------------- */
 
+/*
+ * Maximum nesting depth of a result column we will serialize to Arrow IPC.
+ *
+ * The Arrow IPC schema is a FlatBuffer whose Field tables nest once per
+ * LIST/STRUCT/MAP/ARRAY/UNION level. The vendored flatcc verifier the decoder
+ * runs is exponential in its remaining recursion budget on a deep chain, so an
+ * over-deep schema would stall the peer's decode-side verification. We cap the
+ * producer well under the flatcc budget (FLATCC_VERIFIER_MAX_LEVELS, see
+ * CMakeLists.txt) so legitimate nesting always round-trips and anything deeper
+ * fails fast with a clear error here rather than spinning on the consumer. */
+#define DUCKNNG_ARROW_PRODUCE_MAX_NESTING 16
+
+/* Nesting depth of a DuckDB logical type (a scalar is depth 0). Bounded by a
+ * cap so a pathologically deep type cannot itself overrun the C stack while we
+ * measure it; once the cap is exceeded we stop and report the cap + 1. */
+static int ducknng_logical_type_nesting_depth(duckdb_logical_type type, int cap) {
+    duckdb_type id;
+    if (!type || cap < 0) return 0;
+    id = duckdb_get_type_id(type);
+    switch (id) {
+    case DUCKDB_TYPE_LIST:
+    case DUCKDB_TYPE_ARRAY: {
+        duckdb_logical_type child = (id == DUCKDB_TYPE_LIST)
+            ? duckdb_list_type_child_type(type) : duckdb_array_type_child_type(type);
+        int d = 1 + ducknng_logical_type_nesting_depth(child, cap - 1);
+        if (child) duckdb_destroy_logical_type(&child);
+        return d;
+    }
+    case DUCKDB_TYPE_MAP: {
+        duckdb_logical_type key = duckdb_map_type_key_type(type);
+        duckdb_logical_type val = duckdb_map_type_value_type(type);
+        int dk = ducknng_logical_type_nesting_depth(key, cap - 1);
+        int dv = ducknng_logical_type_nesting_depth(val, cap - 1);
+        if (key) duckdb_destroy_logical_type(&key);
+        if (val) duckdb_destroy_logical_type(&val);
+        return 1 + (dk > dv ? dk : dv);
+    }
+    case DUCKDB_TYPE_STRUCT:
+    case DUCKDB_TYPE_UNION: {
+        idx_t n = (id == DUCKDB_TYPE_STRUCT)
+            ? duckdb_struct_type_child_count(type) : duckdb_union_type_member_count(type);
+        idx_t i;
+        int max_child = 0;
+        for (i = 0; i < n; i++) {
+            duckdb_logical_type child = (id == DUCKDB_TYPE_STRUCT)
+                ? duckdb_struct_type_child_type(type, i) : duckdb_union_type_member_type(type, i);
+            int d = ducknng_logical_type_nesting_depth(child, cap - 1);
+            if (child) duckdb_destroy_logical_type(&child);
+            if (d > max_child) max_child = d;
+            if (max_child >= cap) break;
+        }
+        return 1 + max_child;
+    }
+    default:
+        return 0;
+    }
+}
+
 static int ducknng_result_to_arrow_schema(duckdb_result *result,
     duckdb_arrow_options opts, struct ArrowSchema *out_schema, char **errmsg) {
     idx_t ncols = duckdb_column_count(result);
@@ -141,6 +245,16 @@ static int ducknng_result_to_arrow_schema(duckdb_result *result,
     for (col = 0; col < ncols; col++) {
         types[col] = duckdb_column_logical_type(result, col);
         names[col] = duckdb_column_name(result, col);
+    }
+    for (col = 0; col < ncols; col++) {
+        int depth = ducknng_logical_type_nesting_depth(types[col],
+            DUCKNNG_ARROW_PRODUCE_MAX_NESTING + 1);
+        if (depth > DUCKNNG_ARROW_PRODUCE_MAX_NESTING) {
+            if (errmsg) *errmsg = ducknng_strdup(
+                "ducknng: result column nesting is too deep to serialize to Arrow IPC "
+                "(exceeds the supported nesting limit)");
+            goto cleanup;
+        }
     }
     err = duckdb_to_arrow_schema(opts, types, names, ncols, out_schema);
     if (duckdb_error_data_has_error(err)) {
@@ -345,7 +459,10 @@ int ducknng_result_to_ipc_stream(duckdb_prepared_statement stmt, duckdb_result r
 
     /* Empty result: still need a 0-batch stream. */
     rc = ducknng_ipc_arrays_to_bytes(&schema, arrays, nchunks, out_bytes, out_len, errmsg);
-    arrays = NULL; /* consumed by stream on success path; released in cleanup loop otherwise */
+    if (rc == 0) {
+        free(arrays);
+        arrays = NULL; /* stream consumed array contents; caller frees the container */
+    }
     goto done;
 
 cleanup:
@@ -402,6 +519,16 @@ int ducknng_prepared_schema_to_ipc(duckdb_connection con, duckdb_prepared_statem
             types[col] = duckdb_prepared_statement_column_logical_type(stmt, col);
             names[col] = duckdb_prepared_statement_column_name(stmt, col);
         }
+        for (col = 0; col < ncols; col++) {
+            int depth = ducknng_logical_type_nesting_depth(types[col],
+                DUCKNNG_ARROW_PRODUCE_MAX_NESTING + 1);
+            if (depth > DUCKNNG_ARROW_PRODUCE_MAX_NESTING) {
+                if (errmsg) *errmsg = ducknng_strdup(
+                    "ducknng: result column nesting is too deep to serialize to Arrow IPC "
+                    "(exceeds the supported nesting limit)");
+                goto cleanup;
+            }
+        }
     }
 
     duckdb_connection_get_arrow_options(con, &opts);
@@ -437,28 +564,24 @@ done:
 }
 
 
-int ducknng_result_next_chunk_to_ipc(duckdb_result result,
+int ducknng_result_next_chunks_to_ipc(duckdb_result result, uint64_t max_chunks,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
     struct ArrowSchema schema;
-    struct ArrowArray arr;
+    struct ArrowArray *arrays = NULL;
+    int64_t nchunks = 0;
+    int64_t cap = 0;
     duckdb_data_chunk chunk = NULL;
     duckdb_arrow_options opts = NULL;
     duckdb_error_data err = NULL;
     int rc = -1;
 
     memset(&schema, 0, sizeof(schema));
-    memset(&arr, 0, sizeof(arr));
     if (has_chunk) *has_chunk = 0;
+    if (max_chunks == 0) max_chunks = 1;
 
     if (!out_bytes || !out_len) {
-        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid next chunk output pointers");
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: invalid next chunks output pointers");
         return -1;
-    }
-
-    chunk = duckdb_fetch_chunk(result);
-    if (!chunk) {
-        if (has_chunk) *has_chunk = 0;
-        return 0;
     }
 
     opts = duckdb_result_get_arrow_options(&result);
@@ -470,35 +593,70 @@ int ducknng_result_next_chunk_to_ipc(duckdb_result result,
     if (ducknng_result_to_arrow_schema(&result, opts, &schema, errmsg) != 0)
         goto cleanup;
 
-    err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
-    duckdb_destroy_data_chunk(&chunk);
-    chunk = NULL;
+    while ((uint64_t)nchunks < max_chunks) {
+        struct ArrowArray arr;
+        memset(&arr, 0, sizeof(arr));
+        chunk = ducknng_result_fetch_session_chunk(result);
+        if (!chunk) break;
 
-    if (duckdb_error_data_has_error(err)) {
-        if (errmsg) *errmsg = ducknng_strdup(duckdb_error_data_message(err));
+        err = duckdb_data_chunk_to_arrow(opts, chunk, &arr);
+        duckdb_destroy_data_chunk(&chunk);
+        chunk = NULL;
+
+        if (duckdb_error_data_has_error(err)) {
+            if (errmsg) *errmsg = ducknng_strdup(duckdb_error_data_message(err));
+            if (arr.release) ArrowArrayRelease(&arr);
+            goto cleanup;
+        }
+        duckdb_destroy_error_data(&err);
+        err = NULL;
+
+        if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0) {
+            if (arr.release) ArrowArrayRelease(&arr);
+            goto cleanup;
+        }
+        if (nchunks >= cap) {
+            int64_t newcap = cap == 0 ? 4 : cap * 2;
+            struct ArrowArray *tmp = (struct ArrowArray *)realloc(arrays,
+                (size_t)newcap * sizeof(*arrays));
+            if (!tmp) {
+                if (arr.release) ArrowArrayRelease(&arr);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory collecting Arrow chunks");
+                goto cleanup;
+            }
+            arrays = tmp;
+            cap = newcap;
+        }
+        arrays[nchunks++] = arr;
+    }
+    if (nchunks == 0) {
+        rc = 0;
         goto cleanup;
     }
-    duckdb_destroy_error_data(&err);
-    err = NULL;
-
-    if (ducknng_flatten_dict_columns(&schema, &arr, errmsg) != 0)
+    if (ducknng_ipc_arrays_to_bytes(&schema, arrays, nchunks, out_bytes, out_len, errmsg) != 0)
         goto cleanup;
-
-    /* ducknng_ipc_arrays_to_bytes takes ownership on success. */
-    if (ducknng_ipc_arrays_to_bytes(&schema, &arr, 1, out_bytes, out_len, errmsg) != 0) {
-        /* arr still needs releasing — schema was cleared inside, arr was cleared inside on success only */
-        goto cleanup;
-    }
+    free(arrays);
+    arrays = NULL; /* stream consumed array contents; caller frees the container */
     if (has_chunk) *has_chunk = 1;
-    return 0;
+    rc = 0;
+    goto cleanup;
 
 cleanup:
     if (chunk) duckdb_destroy_data_chunk(&chunk);
     if (err) duckdb_destroy_error_data(&err);
     if (opts) duckdb_destroy_arrow_options(&opts);
-    if (arr.release) ArrowArrayRelease(&arr);
+    if (arrays) {
+        int64_t i;
+        for (i = 0; i < nchunks; i++) if (arrays[i].release) ArrowArrayRelease(&arrays[i]);
+        free(arrays);
+    }
     if (schema.release) ArrowSchemaRelease(&schema);
     return rc;
+}
+
+int ducknng_result_next_chunk_to_ipc(duckdb_result result,
+    uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg) {
+    return ducknng_result_next_chunks_to_ipc(result, 1, out_bytes, out_len, has_chunk, errmsg);
 }
 
 /* -------------------------------------------------------------------------
@@ -673,8 +831,9 @@ cleanup:
  * Public API: query_open request → IPC
  * ---------------------------------------------------------------------- */
 
-int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
-    uint64_t batch_bytes, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+int ducknng_query_open_request_to_ipc_ex(const char *sql, uint64_t batch_rows,
+    uint64_t batch_bytes, const char *correlation_id, const char *serialization_mode,
+    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
     struct ArrowSchema schema;
     struct ArrowArray array;
     struct ArrowArrayStream stream;
@@ -683,6 +842,8 @@ int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
     struct ArrowBuffer output_buf;
     struct ArrowError error;
     struct ArrowStringView sql_view;
+    struct ArrowStringView correlation_view;
+    struct ArrowStringView mode_view;
     uint8_t *copy = NULL;
     int rc = -1;
     memset(&schema, 0, sizeof(schema));
@@ -710,9 +871,15 @@ int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
     }
     sql_view.data = sql;
     sql_view.size_bytes = (int64_t)strlen(sql);
+    correlation_view.data = correlation_id ? correlation_id : "";
+    correlation_view.size_bytes = correlation_id ? (int64_t)strlen(correlation_id) : 0;
+    mode_view.data = serialization_mode ? serialization_mode : "";
+    mode_view.size_bytes = serialization_mode ? (int64_t)strlen(serialization_mode) : 0;
     if (ArrowArrayAppendString(array.children[0], sql_view) != NANOARROW_OK ||
         (batch_rows > 0 ? ArrowArrayAppendUInt(array.children[1], batch_rows) : ArrowArrayAppendNull(array.children[1], 1)) != NANOARROW_OK ||
         (batch_bytes > 0 ? ArrowArrayAppendUInt(array.children[2], batch_bytes) : ArrowArrayAppendNull(array.children[2], 1)) != NANOARROW_OK ||
+        (correlation_id && correlation_id[0] ? ArrowArrayAppendString(array.children[3], correlation_view) : ArrowArrayAppendNull(array.children[3], 1)) != NANOARROW_OK ||
+        (serialization_mode && serialization_mode[0] ? ArrowArrayAppendString(array.children[4], mode_view) : ArrowArrayAppendNull(array.children[4], 1)) != NANOARROW_OK ||
         ArrowArrayFinishElement(&array) != NANOARROW_OK ||
         ArrowArrayFinishBuildingDefault(&array, &error) != NANOARROW_OK) {
         if (errmsg) *errmsg = ducknng_strdup(error.message[0] ? error.message :
@@ -755,15 +922,23 @@ cleanup:
     return rc;
 }
 
+int ducknng_query_open_request_to_ipc(const char *sql, uint64_t batch_rows,
+    uint64_t batch_bytes, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    return ducknng_query_open_request_to_ipc_ex(sql, batch_rows, batch_bytes,
+        NULL, NULL, out_bytes, out_len, errmsg);
+}
+
 int ducknng_query_open_request_with_params_to_ipc(duckdb_connection con,
     const char *sql, uint64_t batch_rows, uint64_t batch_bytes,
+    const char *correlation_id, const char *serialization_mode,
     duckdb_value params, uint8_t **out_bytes, size_t *out_len, char **errmsg) {
     static const char *request_sql =
         "SELECT ?::VARCHAR AS sql, ?::UBIGINT AS batch_rows, "
-        "?::UBIGINT AS batch_bytes, ? AS params";
+        "?::UBIGINT AS batch_bytes, ?::VARCHAR AS correlation_id, "
+        "?::VARCHAR AS serialization_mode, ? AS params";
     duckdb_prepared_statement stmt = NULL;
     duckdb_result result;
-    duckdb_value values[3];
+    duckdb_value values[5];
     duckdb_logical_type params_type = NULL;
     idx_t i;
     int rc = -1;
@@ -789,14 +964,18 @@ int ducknng_query_open_request_with_params_to_ipc(duckdb_connection con,
     values[0] = duckdb_create_varchar(sql);
     values[1] = batch_rows > 0 ? duckdb_create_uint64(batch_rows) : duckdb_create_null_value();
     values[2] = batch_bytes > 0 ? duckdb_create_uint64(batch_bytes) : duckdb_create_null_value();
-    for (i = 0; i < 3; i++) {
+    values[3] = correlation_id && correlation_id[0]
+        ? duckdb_create_varchar(correlation_id) : duckdb_create_null_value();
+    values[4] = serialization_mode && serialization_mode[0]
+        ? duckdb_create_varchar(serialization_mode) : duckdb_create_null_value();
+    for (i = 0; i < 5; i++) {
         if (!values[i] || duckdb_bind_value(stmt, i + 1, values[i]) == DuckDBError) {
             if (errmsg) *errmsg = ducknng_strdup(
                 "ducknng: failed to bind parameterized query_open control field");
             goto cleanup;
         }
     }
-    if (duckdb_bind_value(stmt, 4, params) == DuckDBError) {
+    if (duckdb_bind_value(stmt, 6, params) == DuckDBError) {
         if (errmsg) *errmsg = ducknng_strdup(
             "ducknng: failed to bind query parameter tuple for Arrow encoding");
         goto cleanup;
@@ -810,38 +989,67 @@ int ducknng_query_open_request_with_params_to_ipc(duckdb_connection con,
     rc = ducknng_result_to_ipc_stream(stmt, result, out_bytes, out_len, errmsg);
 cleanup:
     if (result.internal_data) duckdb_destroy_result(&result);
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 5; i++) {
         if (values[i]) duckdb_destroy_value(&values[i]);
     }
     if (stmt) duckdb_destroy_prepare(&stmt);
     /* duckdb_get_value_type() returns a borrowed type owned by params. */
     return rc;
 }
+
 /* -------------------------------------------------------------------------
  * Public API: session request JSON
  * ---------------------------------------------------------------------- */
 
-char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
-    uint64_t batch_rows, uint64_t batch_bytes) {
-    char buf[320];
+char *ducknng_session_request_json_ex(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes, const char *correlation_id) {
+    char buf[512];
+    char *escaped_token = NULL;
+    char *escaped_correlation = NULL;
     int n;
     if (session_id == 0 || !session_token || !session_token[0]) return NULL;
+    escaped_token = ducknng_json_escape_dup(session_token);
+    if (!escaped_token) return NULL;
+    if (correlation_id && correlation_id[0]) {
+        escaped_correlation = ducknng_json_escape_dup(correlation_id);
+        if (!escaped_correlation) {
+            duckdb_free(escaped_token);
+            return NULL;
+        }
+    }
     n = snprintf(buf, sizeof(buf), "{\"session_id\":%llu,\"session_token\":\"%s\"",
-        (unsigned long long)session_id, session_token);
-    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+        (unsigned long long)session_id, escaped_token);
+    if (n < 0 || (size_t)n >= sizeof(buf)) goto fail;
     if (batch_rows > 0) {
         n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_rows\":%llu",
             (unsigned long long)batch_rows);
-        if ((size_t)n >= sizeof(buf)) return NULL;
+        if ((size_t)n >= sizeof(buf)) goto fail;
     }
     if (batch_bytes > 0) {
         n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"batch_bytes\":%llu",
             (unsigned long long)batch_bytes);
-        if ((size_t)n >= sizeof(buf)) return NULL;
+        if ((size_t)n >= sizeof(buf)) goto fail;
+    }
+    if (escaped_correlation) {
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n, ",\"correlation_id\":\"%s\"",
+            escaped_correlation);
+        if ((size_t)n >= sizeof(buf)) goto fail;
     }
     n += snprintf(buf + n, sizeof(buf) - (size_t)n, "}");
-    if ((size_t)n >= sizeof(buf)) return NULL;
+    if ((size_t)n >= sizeof(buf)) goto fail;
+    duckdb_free(escaped_token);
+    if (escaped_correlation) duckdb_free(escaped_correlation);
     return ducknng_strdup(buf);
+fail:
+    duckdb_free(escaped_token);
+    if (escaped_correlation) duckdb_free(escaped_correlation);
+    return NULL;
+}
+
+char *ducknng_session_request_json(uint64_t session_id, const char *session_token,
+    uint64_t batch_rows, uint64_t batch_bytes) {
+    return ducknng_session_request_json_ex(session_id, session_token,
+        batch_rows, batch_bytes, NULL);
 }
 
 /* -------------------------------------------------------------------------

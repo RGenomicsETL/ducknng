@@ -196,6 +196,191 @@ SELECT CASE WHEN ducknng_add_stream_route(
 ----
 1
 
+# Streaming client open completes when status/headers arrive, while the slow
+# route is still producing its body.  The pending raw-body receive is a normal
+# cancellable aio, and the stream remains a separate explicitly closed handle.
+statement ok
+CREATE TEMP TABLE slow_client_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  getvariable('http_extras_base') || '/slow-events',
+  'GET', NULL, NULL, 5000, 0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE slow_client_open AS
+SELECT *
+FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list_value(aio_id) FROM slow_client_open_aio), 500
+)
+
+query IIII
+SELECT ok, status = 200, stream_id > 0,
+       position('Transfer-Encoding' IN headers_json) > 0
+FROM slow_client_open
+----
+1	1	1	1
+
+query I
+SELECT ducknng_service_inflight('http_extras_api')
+----
+1
+
+statement ok
+CREATE TEMP TABLE slow_client_recv_aio AS
+SELECT ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM slow_client_open), 65536::UBIGINT, 5000
+) AS aio_id
+
+query I
+SELECT ducknng_aio_cancel(aio_id)
+FROM slow_client_recv_aio
+----
+1
+
+query I
+SELECT ducknng_aio_wait(
+  (SELECT list_value(aio_id) FROM slow_client_recv_aio), 1000
+)
+----
+1
+
+query III
+SELECT NOT ok, body IS NULL, end_of_stream IS NULL
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM slow_client_recv_aio), 0
+)
+----
+1	1	1
+
+query I
+SELECT ducknng_ncurl_stream_close(stream_id)
+FROM slow_client_open
+----
+1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM slow_client_recv_aio
+----
+1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM slow_client_open_aio
+----
+1
+
+statement ok
+DROP TABLE slow_client_recv_aio
+
+statement ok
+DROP TABLE slow_client_open
+
+statement ok
+DROP TABLE slow_client_open_aio
+
+# Read the ordinary /events route one de-framed HTTP chunk at a time, then
+# observe completion as a separate EOF row.
+statement ok
+CREATE TEMP TABLE client_stream_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  getvariable('http_extras_base') || '/events',
+  'GET', NULL, NULL, 5000, 0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE client_stream_open AS
+SELECT *
+FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list_value(aio_id) FROM client_stream_open_aio), 5000
+)
+
+statement ok
+CREATE TEMP TABLE client_stream_receives(seq INTEGER, aio_id UBIGINT)
+
+statement ok
+INSERT INTO client_stream_receives
+SELECT 1, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM client_stream_open), 65536::UBIGINT, 5000
+)
+
+query II
+SELECT ok, body = ('data: row 1' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM client_stream_receives WHERE seq = 1), 5000
+)
+----
+1	1
+
+statement ok
+INSERT INTO client_stream_receives
+SELECT 2, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM client_stream_open), 65536::UBIGINT, 5000
+)
+
+query II
+SELECT ok, body = ('data: row 2' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM client_stream_receives WHERE seq = 2), 5000
+)
+----
+1	1
+
+statement ok
+INSERT INTO client_stream_receives
+SELECT 3, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM client_stream_open), 65536::UBIGINT, 5000
+)
+
+query II
+SELECT ok, body = ('data: row 3' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM client_stream_receives WHERE seq = 3), 5000
+)
+----
+1	1
+
+statement ok
+INSERT INTO client_stream_receives
+SELECT 4, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM client_stream_open), 65536::UBIGINT, 5000
+)
+
+query III
+SELECT ok, body IS NULL, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM client_stream_receives WHERE seq = 4), 5000
+)
+----
+1	1	1
+
+query I
+SELECT ducknng_ncurl_stream_close(stream_id)
+FROM client_stream_open
+----
+1
+
+query I
+SELECT bool_and(ducknng_aio_drop(aio_id))
+FROM client_stream_receives
+----
+1
+
+query I
+SELECT ducknng_aio_drop(aio_id)
+FROM client_stream_open_aio
+----
+1
+
+statement ok
+DROP TABLE client_stream_receives
+
+statement ok
+DROP TABLE client_stream_open
+
+statement ok
+DROP TABLE client_stream_open_aio
+
 statement ok
 CREATE TEMP TABLE slow_stream_aio AS
 SELECT ducknng_ncurl_aio(getvariable('http_extras_base') || '/slow-events', 'GET', NULL, NULL, 5000, 0::UBIGINT) AS aio_id

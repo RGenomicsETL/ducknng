@@ -4,7 +4,8 @@
 side-module loaded by `duckdb-wasm`. The second is a future `Rducknng` package
 built for webR/rwasm, where the package install process builds or bundles the
 extension payload. This repository now has initial infrastructure for the first
-path only.
+path only. The review checklist for the remaining browser transport matrix lives
+in `docs/wasm_browser_transport_checklist.md`.
 
 The nanonext wasm reference point is commit
 `4391bb31cf6aafe34f976feda1b03be0f9ca4acf`, which adds Emscripten link-time
@@ -98,11 +99,17 @@ The default Pages build uses `DUCKDB_WASM_PLATFORM=wasm_threads`,
 pair as the local script. Because ordinary GitHub Pages cannot set COOP/COEP
 headers from branch content, the static site also includes a same-origin COI
 service worker. On first load, the smoke page may register that worker and
-reload once before `crossOriginIsolated` becomes true. A passing Pages demo is
-still only a browser proof for the tested side-module path: extension load,
-codec and registry calls, raw URL-launched `inproc://` AIO bytes, and framed RPC
-manifest collection over `inproc://`. It is not a release promise for browser
-`ipc://`, raw `tcp://`, native `tls+tcp://`, HTTP, or WebSocket transports.
+reload once before `crossOriginIsolated` becomes true. The Pages demo proves the
+CI-built side module can load in `duckdb-wasm`, run scalar extension calls, and
+support the interactive SQL shell. The full `inproc://` transport proof remains
+attached to the local smoke page or another host that sends real COOP/COEP
+headers; on GitHub Pages the page skips that transport proof because
+service-worker-provided COI has proven insufficiently reliable for the current
+NNG pthread progress path. Before publication, a separate `wasm_eh` artifact
+passes the capability-driven Playwright gate, including browser HTTP and
+asynchronous WS/WSS frame carriers. A passing Pages demo is not a release promise
+for browser `ipc://`, raw `tcp://`, native `tls+tcp://`, generic socket handles,
+or listeners.
 
 The side-module wasm file on `gh-pages` is a same-origin mirror of the CI-built
 demo release asset, not a stable binary release channel. The mirror is deliberate:
@@ -125,8 +132,9 @@ blocking `ducknng_dial_socket(...)` path. With the EH runtime, the `inproc://`
 probes are allowed to report unavailable because NNG worker/task threads require
 a pthread-capable runtime. With the COI pthread runtime, an `inproc://` failure
 is treated as a smoke failure. Passing this page proves only the tested runtime
-path; it does not prove that browser TCP, IPC, HTTP, or WebSocket transports are
-usable.
+path; browser HTTP and WebSocket client claims come from the separate Playwright
+probes below, and the page alone does not prove those carriers or any browser
+TCP, IPC, native TLS socket, generic socket-handle, or listener support.
 
 When `DUCKNNG_WASM_TRACE=1` is set for the local build, the extension compiles
 extra Emscripten-only trace points around the NNG client launch boundary and the
@@ -139,14 +147,97 @@ and wasm inproc-only poller/resolver suppression. The trace switch is build-time
 only and is intended for the local wasm smoke page, not as part of the public
 protocol.
 
+## Browser smoke test (Playwright)
+
+`test/browser/run_smoke.mjs` drives a staged site in real headless Chromium via
+Playwright. It serves the site with the COOP/COEP headers the threaded runtime
+needs for `crossOriginIsolated` (a plain static server does not send these),
+asserts cross-origin isolation, loads the extension, runs an ad-hoc
+`SELECT ducknng_nng_version()` through the SQL shell, and then exercises selected
+browser transport probes against local test endpoints.
+
+```sh
+cd test/browser
+npm ci
+cd ../..
+DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=conformance
+```
+
+Exit code 0 on pass; `BROWSER_DEBUG=1` mirrors the page console. Conformance
+reads the active capability descriptor and runs every supported probe as a hard
+gate. The `wasm_eh` lane covers extension load, whole-response HTTP, real
+asynchronous Fetch with cancellation and timeout, body parsing, HTTPS/CORS,
+framed HTTP RPC/session helpers, and asynchronous WS/WSS framed RPC including
+persistent reuse, cancellation, timeout, abnormal close, synchronous-call
+rejection, and browser-managed WSS TLS. `inproc://` is reported unsupported on
+EH and skipped cleanly.
+
+The threaded runtime remains diagnostic rather than release-blocking:
+
+```sh
+DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load
+```
+
+Recent `wasm_threads` runs have shown the expected instability: the side module
+builds, and individual `load`, `http-sync`, and `http-aio` runs can pass, but
+repeated headless runs still expose extension-load timeouts and DuckDB-wasm JSON
+autoload failures such as `json_duckdb_cpp_init` mismatches during
+`ducknng_ncurl_table(...)`. Treat threaded `inproc://` and threaded HTTP table
+coverage as diagnostic evidence, not as a stable browser support promise. The
+harness skips capabilities declared unsupported, including browser `ipc://`, raw
+`tcp://`, native `tls+tcp://`, generic socket handles, and listeners.
+
+## Browser HTTP(S) adapters
+
+Raw `tcp://`, `ipc://`, and `tls+tcp://` sockets cannot exist in a browser
+sandbox, so the native NNG HTTP client path does not work there. Under
+`__EMSCRIPTEN__`, `ducknng_http_transact()` routes `http://` and `https://`
+requests through `src/ducknng_wasm_http_fetch.c`, which performs a synchronous
+`XMLHttpRequest` via `EM_ASM` — allowed inside the duckdb-wasm Web Worker, the
+same approach duckhts uses in `src/wasm_http_hfile.c`. The shim returns the
+status, the raw response-header block, and the body; the existing native code
+converts the header block to the canonical `headers_json`, so the
+`ok/status/error/headers_json/body/body_text` result shape is the same as the
+native client. The whole translation unit is gated on `__EMSCRIPTEN__` and
+compiles to nothing on native builds.
+
+The proven `wasm_eh` browser HTTP slice now includes same-origin
+`ducknng_ncurl(...)` GET and POST, request-header propagation, response-header
+exposure, non-2xx statuses returned as completed HTTP rows, invalid methods and
+invalid `headers_json` returning `ok = false` in-band, browser network/CORS
+failures returned as `ok = false`, real asynchronous
+`ducknng_ncurl_aio(...)` pending/collect/cancel/timeout behavior,
+`ducknng_ncurl_table(...)` JSON/text/CSV body parsing, raw local HTTPS CORS,
+explicit TLS-handle rejection because browser HTTPS trust is browser-managed,
+local HTTPS CORS table parsing, and framed raw/RPC/session helpers routed over
+browser HTTP. Browser constraints apply: same-origin URLs work directly;
+cross-origin requests need permissive CORS on the remote. TLS is
+browser-managed, so an explicit ducknng TLS configuration is rejected with an
+error rather than silently ignored. Synchronous whole-response calls retain the
+XHR implementation; asynchronous calls use Fetch plus `AbortController` and
+settle through the runtime's operation table. An optional
+`Module.ducknngWasmHttpConfig`, mirroring duckhts's
+`Module.duckhtsWasmHttpConfig`, can supply allowlist-gated extra request
+headers, a hard host allowlist (`enforceHostAllowlist`), and `withCredentials`.
+The same hard hostname allowlist applies to browser WS/WSS launches.
+
 ## Current `inproc://` status
 
-The pthread wasm `inproc://` smoke path now passes for the AIO-based transport
-contract tested by the page: extension load, scalar calls, raw URL-launched AIO
-request/reply bytes, `ducknng_start_server(...)`, and framed manifest collection
-through `ducknng_get_rpc_manifest_raw_aio(...)`. The wasm NNG build keeps only
-the `inproc://` SP transport registered, skips POSIX poller/resolver startup in
-that mode, and yields briefly around Emscripten `pthread_create(...)` while NNG
+The pthread wasm `inproc://` smoke path is a diagnostic path, not a stable
+browser support claim. Individual local/header-hosted proofs have passed the
+AIO-based contract tested by the page: extension load, scalar calls, raw
+URL-launched AIO request/reply bytes, `ducknng_start_server(...)`, and framed
+manifest collection through `ducknng_get_rpc_manifest_raw_aio(...)`. Repeated
+real-browser Playwright runs have also exposed extension-load timeouts and NNG
+progress timeouts, especially without tracing. The wasm NNG build keeps only the
+`inproc://` SP transport registered, skips POSIX poller/resolver startup in that
+mode, and yields briefly around Emscripten `pthread_create(...)` while NNG
 creates task/reap/expire workers. A native Linux run still covers the broader
 synchronous helper path.
 
@@ -203,15 +294,40 @@ operation and obscure the first blocking boundary.
 Browser wasm is not a POSIX host. `ipc://` and raw TCP listeners do not map to a
 normal browser runtime. NNG may be buildable through Emscripten, as nanonext
 shows for pthread wasm, but each transport still needs runtime-specific testing.
-The first useful compatibility matrix should distinguish:
 
-- pure SQL/parser/codecs that do not touch NNG I/O,
-- `inproc://` behavior inside one wasm worker,
-- websocket behavior where Emscripten/browser support is available,
-- unavailable or intentionally disabled transports such as `ipc://` and raw TCP
-  listeners in the browser,
-- HTTP client/server behavior, which may need a browser adapter rather than the
-  native NNG HTTP code path.
+The per-target transport capability contract is compiled into the extension and
+queryable as `SELECT * FROM ducknng_list_transport_capabilities()` (the active
+target's descriptor is `ducknng_transport_capabilities()`). The table below is
+rendered from that contract by `make wasm_matrix`; edit
+`src/ducknng_net_backend.c`, not this block.
+
+<!-- BEGIN GENERATED TRANSPORT MATRIX (make wasm_matrix) -->
+| target | http | https | response stream | inproc | tcp | ipc | tls+tcp | ws/wss | real async | timeout | cancel | TLS owner |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `native` | supported | supported | supported | supported | supported | supported | supported | supported | yes | yes | yes | native |
+| `wasm_eh` | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported | supported | yes | yes | yes | browser_managed |
+| `wasm_threads` | supported | supported | unsupported | experimental | unsupported | unsupported | unsupported | supported | yes | yes | yes | browser_managed |
+<!-- END GENERATED TRANSPORT MATRIX -->
+
+The evidence log below records what has been proven in real browsers, which is
+a stricter statement than the contract above:
+
+| Runtime / carrier | Current status |
+| --- | --- |
+| `duckdb-wasm` `wasm_eh`: load, scalar SQL, codecs | Proven locally in real Chromium. |
+| `duckdb-wasm` `wasm_eh`: same-origin `ducknng_ncurl(...)` GET/POST, request/response headers, non-2xx status rows, invalid input rows, and no-CORS network/CORS errors | Proven locally in real Chromium through the browser HTTP bridge. |
+| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_aio(...)` real-async handles: pending in flight, poll-style wait, cancel aborts the fetch, timeout_ms aborts via a JS timer, collect/drop for success and launch-error cases | Proven locally in real Chromium through the fetch completion bridge; completions settle when the DB worker event loop runs between queries, so a blocking wait inside one query cannot make progress and degrades to a poll. |
+| Browser incremental HTTP response streams | Unsupported and reported as `http_response_stream = unsupported`. Future work should follow `r-lib/nanonext#329`: return response headers with a session, receive chunks through ordinary AIO receives, and use a zero-length chunk for EOF; `ReadableStream.getReader()` supplies the browser transport. |
+| `duckdb-wasm` `wasm_eh`: `ducknng_ncurl_table(...)` JSON/text/CSV plus raw/parsed HTTPS CORS and explicit TLS-handle rejection | Proven locally in real Chromium. |
+| `duckdb-wasm` `wasm_eh`: framed raw/RPC/session helpers over `http://` | Proven locally against a Playwright local ducknng-frame responder. |
+| `duckdb-wasm` `wasm_eh`: `inproc://` | Not supported; the probe may report unavailable and still pass because this runtime has no pthread worker support for NNG progress. |
+| `duckdb-wasm` `wasm_threads`: load, scalar SQL, codecs | Proven in individual runs and on the Pages demo, but repeated headless local runs can time out during `LOAD`; treat as resource-sensitive. |
+| `duckdb-wasm` `wasm_threads`: `inproc://` AIO/raw/framed manifest | Diagnostic only. Individual local COOP/COEP proofs have passed; repeated real-browser runs still expose progress timeouts. |
+| `duckdb-wasm` `wasm_threads`: browser HTTP probes | Diagnostic only. Individual `load,http-sync,http-aio` runs can pass; repeated runs have exposed extension-load and DuckDB-wasm JSON autoload failures. |
+| Browser HTTPS remote-origin HTTP | Local HTTPS CORS is proven in Chromium; a durable public remote-origin target is not part of the release gate. |
+| Browser `ipc://`, raw `tcp://`, and native POSIX-style `tls+tcp://` | Unsupported by the browser sandbox. |
+| Browser `ws://` / `wss://` | Implemented and proven in headless Chromium as an async-only ducknng-frame-over-WebSocket carrier: persistent actor reuse, FIFO replies, cancel, timeout, abnormal close, synchronous-call rejection, WS/WSS replies, and browser-managed WSS TLS. The server endpoint shares frame authorization and dispatch with HTTP. `caps.websocket = supported`, so conformance is a release gate. |
+| webR / R package wasm | Separate future runtime; no support should be inferred from `duckdb-wasm`. |
 
 Do not infer webR support from duckdb-wasm support. They are different runtimes
 and artifacts.

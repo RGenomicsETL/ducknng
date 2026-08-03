@@ -50,6 +50,33 @@ FROM ducknng_decode_frame(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_rpc_c
 ----
 1	1	2	4	result	manifest	1
 
+query IIIIII
+SELECT position('"name":"handshake"' IN manifest) > 0,
+       json_extract(manifest::JSON, '$.capabilities.handshake')::BOOLEAN,
+       json_extract(manifest::JSON, '$.capabilities.fetch_metadata.correlation_id')::BOOLEAN,
+       json_extract(manifest::JSON, '$.capabilities.fetch_metadata.result_handle')::BOOLEAN,
+       json_extract_string(manifest::JSON, '$.capabilities.supported_serialization_modes[0]'),
+       json_extract_string(manifest::JSON, '$.capabilities.supported_serialization_modes[1]')
+FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 0::UBIGINT)
+----
+1	1	1	1	arrow_ipc_stream	ducknng_quack_batch
+
+query IIIIII
+SELECT ok, type_name, name,
+       position('"selected_serialization_mode":"arrow_ipc_stream"' IN payload_text) > 0,
+       position('"fetch_metadata":{"correlation_id":true,"result_handle":true,"batch_index":true}' IN payload_text) > 0,
+       position('"supported_serialization_modes":["arrow_ipc_stream","ducknng_quack_batch"]' IN payload_text) > 0
+FROM ducknng_decode_frame(
+  ducknng_request_raw(
+    'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+    from_hex('0101000000000900000000000000000000000000000068616e647368616b65'),
+    1000,
+    0::UBIGINT
+  )
+)
+----
+1	result	handshake	1	1	1
+
 query III
 SELECT ok, type_name, name
 FROM ducknng_decode_frame(ducknng_run_rpc_raw('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'DROP TABLE IF EXISTS remote_t', 0::UBIGINT))
@@ -79,6 +106,7 @@ SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELE
 ----
 7	false
 8	true
+
 
 query I
 SELECT sessions
@@ -276,11 +304,14 @@ CREATE TEMP TABLE rpc_open AS
 SELECT *
 FROM ducknng_open_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT i FROM remote_t ORDER BY i', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 
-query IIIITT
-SELECT ok, session_id > 0, length(session_token) = 32, idle_timeout_ms, state, next_method
+query IIIIITTI
+SELECT ok, session_id > 0, length(session_token) = 32,
+       length(json_extract_string(control_json::JSON, '$.result_handle')) = 32,
+       json_extract_string(control_json::JSON, '$.serialization_mode'),
+       idle_timeout_ms, state, next_method
 FROM rpc_open
 ----
-1	1	1	300000	open	fetch
+1	1	1	1	arrow_ipc_stream	300000	open	fetch
 
 statement ok
 SET VARIABLE rpc_session_id = (
@@ -354,17 +385,21 @@ FROM ducknng_parse_body(getvariable('rpc_fetch_payload_blob')::BLOB, 'applicatio
 statement ok
 DROP TABLE rpc_fetch_payload
 
-query IITII
-SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state, payload IS NULL, end_of_stream
+query IITIIII
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state, payload IS NULL, end_of_stream,
+       length(json_extract_string(control_json::JSON, '$.result_handle')) = 32,
+       json_extract(control_json::JSON, '$.batch_index')::UBIGINT = 1
 FROM ducknng_fetch_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT, 0::UBIGINT, 0::UBIGINT)
 ----
-1	1	exhausted	1	1
+1	1	exhausted	1	1	1	1
 
-query IIT
-SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state
+query IITII
+SELECT ok, session_id = getvariable('rpc_session_id')::UBIGINT, state,
+       length(json_extract_string(control_json::JSON, '$.result_handle')) = 32,
+       json_extract(control_json::JSON, '$.batch_index')::UBIGINT = 1
 FROM ducknng_close_query('ipc:///tmp/ducknng_rpc_client_smoke.ipc', getvariable('rpc_session_id')::UBIGINT, getvariable('rpc_session_token')::VARCHAR, 0::UBIGINT)
 ----
-1	1	closed
+1	1	closed	1	1
 
 query IT
 SELECT ok, error
@@ -545,12 +580,13 @@ SET VARIABLE raw_session_open_frame = ducknng_open_query_raw(
   0::UBIGINT
 )
 
-query III
+query IIII
 SELECT ducknng_frame_error_text(getvariable('raw_session_open_frame')::BLOB) IS NULL,
        position('"session_id":' IN ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)) > 0,
+       position('"result_handle":' IN ducknng_frame_payload_text(getvariable('raw_session_open_frame')::BLOB)) > 0,
        octet_length(ducknng_frame_payload(getvariable('raw_session_open_frame')::BLOB)) > 0
 ----
-1	1	1
+1	1	1	1
 
 statement ok
 SET VARIABLE raw_session_id = (
@@ -612,11 +648,12 @@ SET VARIABLE raw_session_exhausted_frame = ducknng_fetch_query_raw(
   0::UBIGINT
 )
 
-query II
+query III
 SELECT ducknng_frame_error_text(getvariable('raw_session_exhausted_frame')::BLOB) IS NULL,
-       position('"state":"exhausted"' IN ducknng_frame_payload_text(getvariable('raw_session_exhausted_frame')::BLOB)) > 0
+       position('"state":"exhausted"' IN ducknng_frame_payload_text(getvariable('raw_session_exhausted_frame')::BLOB)) > 0,
+       position('"batch_index":1' IN ducknng_frame_payload_text(getvariable('raw_session_exhausted_frame')::BLOB)) > 0
 ----
-1	1
+1	1	1
 
 statement ok
 SET VARIABLE raw_session_close_frame = ducknng_close_query_raw(

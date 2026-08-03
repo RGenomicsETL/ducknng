@@ -110,14 +110,23 @@ set(EXTENSION_SOURCES
     src/ducknng_runtime.c
     src/ducknng_service.c
     src/ducknng_session.c
+    src/ducknng_duckdb_streaming_compat.c
     src/ducknng_registry.c
     src/ducknng_methods.c
     src/ducknng_wire.c
     src/ducknng_ipc_in.c
     src/ducknng_ipc_out.c
+    src/ducknng_quack.c
     src/ducknng_transport.c
     src/ducknng_http_profile.c
     src/ducknng_http_compat.c
+    src/ducknng_http_client_stream.c
+    src/ducknng_ws_frame.c
+    src/ducknng_net_backend.c
+    src/ducknng_wasm_http_fetch.c
+    src/ducknng_wasm_builtins.c
+    src/ducknng_wasm_fetch_bridge.c
+    src/ducknng_wasm_ws_bridge.c
     src/ducknng_nng_compat.c
     src/ducknng_util.c
     third_party/nanoarrow/src/nanoarrow/common/array.c
@@ -176,6 +185,16 @@ target_include_directories(${EXTENSION_NAME} PRIVATE
 
 target_compile_definitions(${EXTENSION_NAME} PRIVATE
     NANOARROW_NAMESPACE=DucknngNanoarrow
+    # Bound the vendored flatcc flatbuffer verifier's recursion budget. The
+    # verifier's work on a maliciously/accidentally deep nested Arrow schema is
+    # exponential in the remaining ttl, so the upstream default of 100 lets a
+    # ~2KB depth-48 LIST<...> schema spin effectively forever during decode
+    # verification. Capping at 40 keeps legitimate nesting (depth up to ~16)
+    # verifying instantly while turning anything deeper into a bounded (~8 ms)
+    # clean "max nesting level reached" error instead of a hang. Producers also
+    # reject over-deep results early (ducknng_ipc_out.c); this is the decode-side
+    # backstop for untrusted peers. See docs/types.md.
+    FLATCC_VERIFIER_MAX_LEVELS=40
 )
 
 find_package(Threads REQUIRED)

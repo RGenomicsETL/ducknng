@@ -125,13 +125,22 @@
     <p>
       This page loads the ducknng DuckDB extension in duckdb-wasm, runs the browser
       smoke checks, and then exposes a small SQL shell against the same connection.
-      The current browser proof is intentionally narrow: extension load, codec and
-      registry calls, raw <code>inproc://</code> URL-launched AIO bytes, and framed RPC
-      manifest collection over <code>inproc://</code> under the pthread runtime.
+      The local/header-served browser page is intentionally narrow: extension load,
+      codec and registry calls, and a diagnostic raw <code>inproc://</code>
+      URL-launched AIO / framed manifest path for pthread-capable runtimes. The
+      Playwright harness around this page also proves browser HTTP client, AIO,
+      table, HTTPS/CORS, framed RPC/session helpers, and asynchronous WS/WSS
+      frame carriers against local test endpoints. On GitHub Pages, where
+      cross-origin isolation is supplied by a
+      service worker, the page loads the extension and enables the SQL shell but
+      skips the <code>inproc://</code> transport proof unless the host can provide
+      real COOP/COEP headers.
     </p>
     <div class="banner">
       Browser <code>ipc://</code>, raw <code>tcp://</code>, native POSIX-style
-      <code>tls+tcp://</code>, HTTP, and WebSocket transports are not proven by this page.
+      <code>tls+tcp://</code>, generic socket handles, and listeners are unsupported.
+      Browser HTTP(S) and asynchronous WS/WSS clients use browser-managed TLS;
+      synchronous WS/WSS RPC is intentionally rejected.
     </div>
 
     <div class="grid">
@@ -160,9 +169,9 @@
           Run ad hoc SQL after setup. Results are rendered as a table, while the left log
           keeps the full setup and query transcript.
         </p>
-        <textarea id="sql">SELECT codec_name, media_types
+        <textarea id="sql">SELECT provider, media_types, output
 FROM ducknng_list_codecs()
-ORDER BY codec_name
+ORDER BY provider
 LIMIT 8;</textarea>
         <div class="controls">
           <button id="run-sql" disabled>Run SQL</button>
@@ -220,9 +229,9 @@ LIMIT 8;</textarea>
     const duckdbExtensionRelativePath = "duckdb-wasm/ducknng.duckdb_extension.wasm";
 
     const examples = {
-      codecs: `SELECT codec_name, media_types
+      codecs: `SELECT provider, media_types, output
 FROM ducknng_list_codecs()
-ORDER BY codec_name
+ORDER BY provider
 LIMIT 8;`,
       versions: `SELECT version() AS duckdb_version,
        ducknng_nng_version() AS nng_version;`,
@@ -356,7 +365,9 @@ FROM ducknng_list_servers();`,
         coiServiceWorker: "ducknng-coi-service-worker.js",
       };
       try {
-        const response = await fetch(resourceUrl("ducknng-wasm-config.json"), { cache: "no-store" });
+        const configUrl = new URL("ducknng-wasm-config.json", siteBaseUrl);
+        configUrl.searchParams.set("v", String(Date.now()));
+        const response = await fetch(configUrl, { cache: "no-store" });
         if (!response.ok) return fallback;
         return { ...fallback, ...(await response.json()) };
       } catch (_e) {
@@ -375,9 +386,24 @@ FROM ducknng_list_servers();`,
         throw new Error("wasm_threads requires cross-origin isolation; the service worker reload completed but crossOriginIsolated is still false");
       }
       log("Installing COI service worker for static hosting and reloading once...");
-      await navigator.serviceWorker.register(resourceUrl(config.coiServiceWorker ?? "ducknng-coi-service-worker.js"), {
-        scope: resourceUrl(""),
-      });
+      const swScope = resourceUrl("");
+      for (const registration of await navigator.serviceWorker.getRegistrations()) {
+        if (registration.scope === swScope) {
+          await registration.unregister();
+        }
+      }
+      const swUrl = new URL(config.coiServiceWorker ?? "ducknng-coi-service-worker.js", siteBaseUrl);
+      swUrl.searchParams.set("v", config.sourceCommit ?? String(Date.now()));
+      const registration = await navigator.serviceWorker.register(swUrl, { scope: swScope });
+      await registration.update();
+      const installing = registration.installing || registration.waiting;
+      if (installing && installing.state !== "activated") {
+        await new Promise((resolve) => {
+          installing.addEventListener("statechange", () => {
+            if (installing.state === "activated") resolve();
+          });
+        });
+      }
       await navigator.serviceWorker.ready;
       sessionStorage.setItem(reloadKey, "1");
       sessionStorage.setItem("ducknng-auto-start-after-coi", "1");
@@ -433,6 +459,12 @@ FROM ducknng_list_servers();`,
       return String(errorOrMessage?.message ?? errorOrMessage ?? "").includes("query timed out after");
     }
 
+    function usesStaticPagesCoiServiceWorker() {
+      return runtimeConfig?.requiresCrossOriginIsolation &&
+        location.hostname.endsWith("github.io") &&
+        !!navigator.serviceWorker?.controller;
+    }
+
     function requireRows(rows, label) {
       if (!rows || rows.length === 0) {
         throw new Error(`${label} returned no rows`);
@@ -486,6 +518,13 @@ FROM ducknng_list_servers();`,
         if (rows[0].payload_hex !== "75726c".toUpperCase()) {
           throw new Error(`URL raw rep recv payload mismatch: ${rows[0].payload_hex}`);
         }
+
+        // Let the URL-launched REQ aio run its send-complete callback and post
+        // its receive before the REP socket launches the reply. Native NNG
+        // tolerates the immediate reply, but the wasm pthread runtime can race
+        // here and block inside nng_send_aio() before that client-side receive
+        // is posted.
+        await sleep(50);
 
         rows = requireRows(await runSQL(`SELECT ducknng_send_socket_raw_aio(
           ${repId}::UBIGINT, from_hex('6f6b'), 0) AS aio`, nngSetupTimeoutMs),
@@ -635,6 +674,10 @@ FROM ducknng_list_servers();`,
         'inproc://ducknng_wasm_missing_socket_probe',
         1048576,
         0::UBIGINT)).ok AS missing_socket_listen_ok`, nngSetupTimeoutMs);
+      if (usesStaticPagesCoiServiceWorker()) {
+        log("Skipping inproc:// transport proof on GitHub Pages service-worker COI; use the local smoke page or another host with real COOP/COEP headers for that proof.");
+        return true;
+      }
       const urlRawOk = await runInprocUrlRawAioSmoke();
       return urlRawOk ? await runInprocSmoke() : false;
     }
@@ -660,10 +703,23 @@ FROM ducknng_list_servers();`,
 
       const extUrl = resourceUrl(duckdbExtensionRelativePath);
       const extPath = new URL(duckdbExtensionRelativePath, siteBaseUrl).pathname;
-      await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
-      log("Loading extension:", extUrl);
+      if (typeof db.registerFileBuffer === "function") {
+        log("Fetching extension bytes:", extUrl);
+        const response = await withTimeout(fetch(extUrl, { cache: "no-store" }), "extension fetch", extensionLoadTimeoutMs);
+        if (!response.ok) {
+          throw new Error(`extension fetch failed with HTTP ${response.status}`);
+        }
+        const bytes = new Uint8Array(await withTimeout(response.arrayBuffer(), "extension byte read", extensionLoadTimeoutMs));
+        const byteLength = bytes.byteLength;
+        await db.registerFileBuffer(extPath, bytes);
+        log(`Registered extension buffer: ${extPath} (${byteLength} bytes)`);
+      } else {
+        await db.registerFileURL(extPath, extUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+        log("Registered extension URL:", extUrl);
+      }
+      log("Loading extension:", extPath);
       await withTimeout(conn.query(`LOAD '${extPath}'`), "extension load", extensionLoadTimeoutMs);
-      log("Loaded extension:", extUrl);
+      log("Loaded extension:", extPath);
       setupDone = true;
       setShellEnabled(true);
     }
@@ -687,6 +743,17 @@ FROM ducknng_list_servers();`,
         setShellEnabled(setupDone);
       }
     }
+
+    globalThis.ducknngWasmSmoke = {
+      setup: async () => {
+        if (!setupDone) await setupDucknng();
+        return true;
+      },
+      runSmokeTests: async () => await runSmokeTests(),
+      isSetupDone: () => setupDone,
+      runtimeConfig: () => runtimeConfig,
+      query: async (sql, timeoutMs = 0) => await runSQL(sql, timeoutMs),
+    };
 
     async function runShellSQL() {
       if (!conn) return;

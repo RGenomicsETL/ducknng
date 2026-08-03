@@ -159,10 +159,13 @@ selection vector. `duckdb_vector_reference_value` fills a vector with a single s
 value. `duckdb_vector_copy_sel` copies elements with per-element selection.
 
 **Update:** `duckdb_unsafe_vector_assign_string_element_len` is adopted — see the
-string functions entry above. The remaining vector manipulation functions
-(`duckdb_create_vector`, `duckdb_slice_vector`, `duckdb_vector_copy_sel`, etc.) are
-not needed today; `ducknng` does not implement custom pushdown operators or standalone
-vector allocation outside TVF scan callbacks.
+string functions entry above. The Quack-derived decoder also uses
+`duckdb_create_vector`, `duckdb_destroy_vector`,
+`duckdb_create_selection_vector`, `duckdb_selection_vector_get_data_ptr`,
+`duckdb_vector_copy_sel`, and `duckdb_destroy_selection_vector` to materialize
+constant and dictionary vectors into flat output while retaining DuckDB's
+recursive-value ownership semantics. Vector references and `duckdb_slice_vector`
+remain unused.
 
 ---
 
@@ -285,12 +288,22 @@ is set. Users can raise the limit for wide CSV inputs with
 ## `unstable_deprecated`
 
 **Functions:** `duckdb_query_arrow`, `duckdb_arrow_array_scan`,
-`duckdb_arrow_rows_changed`, etc.
+`duckdb_arrow_rows_changed`, `duckdb_pending_prepared_streaming`,
+`duckdb_stream_fetch_chunk`, etc.
 
-These are the original Arrow result-set APIs, deprecated in favour of
-`unstable_new_arrow_functions`.
+The original Arrow result-set APIs are deprecated in favour of
+`unstable_new_arrow_functions` and remain forbidden. The pending-result streaming
+pair is different: DuckDB v1.5.2 has no undeprecated C API that combines pending
+execution with incremental chunk delivery. `ducknng` therefore uses
+`duckdb_pending_prepared_streaming` and `duckdb_stream_fetch_chunk` only through
+`src/ducknng_duckdb_streaming_compat.c`. There is no materialized-result fallback
+inside query sessions because that would change the internal session contract and
+reintroduce the performance path this boundary exists to avoid.
 
-**Recommendation: DO NOT USE.** Avoid entirely.
+**Recommendation: EXCEPTION ONLY.** Keep the pending-result streaming exception
+isolated in the compatibility boundary and avoid all other deprecated entrypoints.
+When DuckDB provides a replacement, update the boundary rather than adding branches
+at query, session, or codec call sites.
 
 ---
 
@@ -431,11 +444,10 @@ without executing a query.
 Useful in TVF bind callbacks and scalar bind callbacks where values must be returned
 without executing a query.
 
-**Recommendation: NOT applicable.** MAP, UNION, and TIME_NS are not part of the current
-RPC payload surface. `ducknng` bind callbacks use `duckdb_get_varchar` / `duckdb_get_int64`
-/ `duckdb_get_double` for constant-folded values in HTTP lookup functions. Revisit if
-`ducknng` needs to return MAP or UNION typed results from bind-phase constant folding or
-from new RPC methods.
+**Status: ADOPTED.** Arrow parameter tuples are decoded into `duckdb_value` objects and
+bound to prepared statements. MAP, UNION, ARRAY, TIME_NS, nested containers, and the
+other supported Arrow types therefore use the value constructors in this group. The
+end-to-end contract is covered by `test/sql/ducknng_parameter_binding.test`.
 
 ---
 
@@ -443,7 +455,7 @@ from new RPC methods.
 
 | Group | Priority | Action |
 |---|---|---|
-| `unstable_new_arrow_functions` | **DONE** | Emit side adopted in `ducknng_ipc_out.c`; receive side deferred |
+| `unstable_new_arrow_functions` | **DONE** | Emit and receive paths are implemented in `ducknng_ipc_out.c` and `ducknng_sql_arrow.c` |
 | `unstable_new_error_data_functions` | **DONE** | Adopted in `ducknng_ipc_out.c` alongside Arrow rewrite |
 | `unstable_new_string_functions` / vector string | **DONE** | `duckdb_valid_utf8_check` in `ducknng_sql_bytes_look_text`; `duckdb_unsafe_vector_assign_string_element_len` at all vector string-assign sites |
 | `unstable_new_scalar_function_functions` | **DONE** | Bind phase adopted for the four HTTP lookup scalar functions; bind data pre-folds constant name argument |
@@ -456,30 +468,34 @@ from new RPC methods.
 | `unstable_new_prepared_statement_functions` | **DONE** | `query_prepare` RPC method; `ducknng_prepared_schema_to_ipc` in `ducknng_ipc_out.c` |
 | `unstable_new_query_execution_functions` | **DONE** | `duckdb_result_get_arrow_options` in result path; `duckdb_connection_get_arrow_options` in prepared-schema path |
 | `unstable_new_scalar_function_state_functions` | **DONE** | Per-thread scratch buffer for `ducknng_http_headers_build` in `ducknng_sql_http.c` |
-| `unstable_new_value_functions` | NOT applicable | MAP/UNION/TIME_NS not part of current payload surface |
-| `unstable_new_vector_functions` | PARTIAL | `duckdb_unsafe_vector_assign_string_element_len` adopted; remaining vector manipulation functions not needed |
+| `unstable_new_value_functions` | **DONE** | Arrow parameter decoding constructs MAP, UNION, ARRAY, TIME_NS, and other typed DuckDB values before prepared-statement binding |
+| `unstable_new_vector_functions` | PARTIAL | Length-aware string assignment, temporary vectors, and selection-copy materialization are adopted; reference/slice functions remain unused |
 | `unstable_new_geo_functions` | NOT applicable | GEOMETRY CRS metadata; `ducknng` does not handle geometry columns |
 | `unstable_new_table_description_functions` | NOT applicable | Named-table schema introspection not used |
 | `unstable_new_copy_functions_api` | NOT applicable | — |
 | `unstable_new_catalog_interface` | NOT applicable | — |
 | `unstable_instance_cache` | NOT applicable | — |
 | `unstable_new_append_functions` | NOT applicable | — |
-| `unstable_deprecated` | **DO NOT USE** | Avoid entirely |
+| `unstable_deprecated` | EXCEPTION | Pending-result streaming is isolated in `ducknng_duckdb_streaming_compat.c`; avoid all other deprecated entrypoints |
 
 ---
 
-## DuckDB async query surface (stable API)
+## DuckDB async query surface
 
-This section covers the DuckDB pending-query API, which is part of the stable v1.2.0 C
-API, not the unstable extension API. It is documented here because it intersects directly
-with `ducknng`'s session lifecycle and async dispatch model.
+This section covers DuckDB's pending-query API plus the single deprecated streaming
+exception that `ducknng` uses for incremental session fetches. It is documented here
+because it intersects directly with `ducknng`'s session lifecycle and async dispatch
+model.
 
 ### Pending query API
 
-**Functions (stable):** `duckdb_pending_prepared`, `duckdb_pending_prepared_streaming`,
-`duckdb_destroy_pending`, `duckdb_pending_error`, `duckdb_pending_execute_task`,
+**Functions (stable):** `duckdb_pending_prepared`, `duckdb_destroy_pending`,
+`duckdb_pending_error`, `duckdb_pending_execute_task`,
 `duckdb_pending_execute_check_state`, `duckdb_execute_pending`,
 `duckdb_pending_execution_is_finished`
+
+**Functions (deprecated streaming exception):** `duckdb_pending_prepared_streaming`,
+`duckdb_stream_fetch_chunk`
 
 **Task execution (stable):** `duckdb_execute_tasks`, `duckdb_create_task_state`,
 `duckdb_execute_tasks_state`, `duckdb_execute_n_tasks_state`, `duckdb_finish_execution`,
@@ -497,16 +513,27 @@ to a boolean.
 multi-threaded execution model where DuckDB task work is pumped by a thread pool that the
 caller controls.
 
-**Status: ADOPTED in session query lifecycle.**
+**Status: ADOPTED in session query lifecycle, with streaming isolated behind a compatibility boundary.**
 
 `ducknng_methods.c` uses this API in the `query_open` / `fetch` session flow:
 
-- `query_open` calls `duckdb_pending_prepared` on the final extracted statement,
-  creating a `duckdb_pending_result` that is stored on the `ducknng_session`.
+- `query_open` calls `ducknng_pending_prepared_for_session(...)`, implemented in
+  `src/ducknng_duckdb_streaming_compat.c`. The wrapper calls
+  `duckdb_pending_prepared_streaming` so fetches can read rows incrementally.
 - The first `fetch` call drives execution by looping `duckdb_pending_execute_task` until
-  `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain a
-  streaming `duckdb_result`. Subsequent `fetch` calls read chunks with
-  `duckdb_fetch_chunk`.
+  `DUCKDB_PENDING_RESULT_READY`, then calls `duckdb_execute_pending` to obtain the
+  `duckdb_result`. Subsequent `fetch` calls read chunks through
+  `ducknng_result_fetch_session_chunk(...)`, which calls `duckdb_stream_fetch_chunk`.
+
+This is the one deliberate exception to the repository's normal avoidance of deprecated
+DuckDB C entrypoints. Profiling showed the materialized pending-result path spending a
+large share of query-session time in `MaterializedQueryResult::FetchInternal` and
+`ColumnDataCollection::Scan` for 10M-row RPC fetches. After switching session fetches to
+the compatibility wrapper, the sampled path moves through `StreamQueryResult::FetchInternal`
+and DuckDB buffered/scan work instead. DuckDB v1.5.2 does not expose an undeprecated C API
+that combines pending execution with incremental result chunks, so the compatibility
+wrapper centralizes this version-sensitive choice and keeps the rest of the session code
+independent of the deprecated symbol.
 
 **Outstanding design question: cooperative vs. preemptive task dispatch.**
 

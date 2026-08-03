@@ -16,14 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXT_BIN = REPO_ROOT / "build" / "release" / "ducknng.duckdb_extension"
 COMMUNITY_DIR = REPO_ROOT / "community-extensions" / "extensions" / "ducknng"
 DOCS_DIR = REPO_ROOT / "docs"
-GIT_REF = subprocess.run(
-    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
-).stdout.strip()
-
 EXTENSION = {
     "name": "ducknng",
     "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC — with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-    "version": "0.1.2",
+    "version": "0.1.2.9000",
     "language": "C",
     "build": "cmake",
     "license": "MIT",
@@ -210,6 +206,14 @@ FUNCTIONS = [
         "prepare_query_params(url, sql, params, tls_config_id)",
         "table",
         "Bind a typed parameter tuple and expose the prepared remote result schema without execution.",
+    ),
+    af(
+        "ducknng_upload_table",
+        "table",
+        RPC,
+        "upload_table(url, source_query, target_table[, tls_config_id])",
+        "table",
+        "Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.",
     ),
     af(
         "ducknng_run_rpc",
@@ -470,7 +474,7 @@ FUNCTIONS = [
         TLS,
         "self_signed_tls_config(host, days, auth_mode)",
         "UBIGINT",
-        "Generate a self-signed TLS cert in memory. auth_mode: 0=none, 1=server, 2=mutual. Returns TLS config handle.",
+        "Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.",
     ),
     af(
         "ducknng_tls_config_from_files",
@@ -764,6 +768,14 @@ FUNCTIONS = [
         "register_exec_method(enable_default)",
         "BOOLEAN",
         "Register (or re-register) the default exec method. Pass TRUE to enable by default.",
+    ),
+    af(
+        "ducknng_register_upload_methods",
+        "scalar",
+        REG,
+        "register_upload_methods(require_auth)",
+        "BOOLEAN",
+        "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
     ),
     af(
         "ducknng_set_method_auth",
@@ -1109,7 +1121,10 @@ def dump_yaml(val, indent=0):
 def build_description_yml():
     desc = {
         "extension": EXTENSION,
-        "repo": {"github": f"{EXTENSION['maintainers'][0]}/ducknng", "ref": GIT_REF},
+        # Pin the community source to the advertised release tag, not a volatile
+        # dev HEAD: a committed file cannot contain its own commit SHA (committing
+        # changes HEAD), so a tag is the only stable, non-stale ref.
+        "repo": {"github": f"{EXTENSION['maintainers'][0]}/ducknng", "ref": f"v{EXTENSION['version']}"},
         "docs": {
             "hello_world": hello_world(),
             "extended_description": textwrap.dedent("""\
@@ -1264,9 +1279,11 @@ def main():
     for fn in FUNCTIONS:
         by_kind[fn["kind"]] = by_kind.get(fn["kind"], 0) + 1
 
-    # The repository root descriptor is the minimal build/version input parsed
-    # by function_catalog/generate_function_catalog.py. Community metadata is
-    # generated only in the submission directories below.
+    # Build the community-extensions descriptor (nested submission format). It is
+    # written only to the community-extensions + PR dirs below, NOT to repo-root
+    # description.yml: that root file is the minimal build/version descriptor
+    # parsed by function_catalog/generate_function_catalog.py (flat key: value),
+    # and overwriting it with this nested format breaks that parser.
     desc = build_description_yml()
     print(
         f"description.yml (community): {len(FUNCTIONS)} functions across {len(categories)} categories: "

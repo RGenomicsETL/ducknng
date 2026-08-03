@@ -1,4 +1,5 @@
 #include "ducknng_sql_shared.h"
+#include "ducknng_net_backend.h"
 #include "ducknng_http_compat.h"
 #include "ducknng_ipc_in.h"
 #include "ducknng_ipc_out.h"
@@ -356,7 +357,8 @@ static void ducknng_session_result_fill_from_response(ducknng_session_result_bin
         bind->ok = true;
         return;
     }
-    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) && (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
+    if ((frame.flags & DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) &&
+            (frame.flags & DUCKNNG_RPC_FLAG_RESULT_ROWS)) {
         bind->payload_len = (idx_t)frame.payload_len;
         bind->payload = (uint8_t *)duckdb_malloc((size_t)bind->payload_len);
         if (!bind->payload && bind->payload_len > 0) {
@@ -426,7 +428,7 @@ static nng_msg *ducknng_client_roundtrip_tls(const char *url, nng_msg *req, int 
         nng_msg_free(req);
         return NULL;
     }
-    if (ducknng_transport_url_is_http(&parsed)) {
+    if (ducknng_net_backend_carrier_scheme(parsed.scheme)) {
         if (ducknng_http_frame_transact(url, (const uint8_t *)nng_msg_body(req), nng_msg_len(req),
                 timeout_ms, tls_opts, &reply_frame, &reply_frame_len, errmsg) != 0) {
             nng_msg_free(req);

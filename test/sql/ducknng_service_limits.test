@@ -226,7 +226,7 @@ SELECT CASE WHEN ducknng_stop_server('inflight_rpc') THEN 1 ELSE 0 END
 ----
 1
 
-# max_inflight_per_principal: TLS service with slow authorizer, AIO + sync pattern
+# max_inflight_per_peer_identity: TLS service with slow authorizer, AIO + sync pattern
 
 query I
 SELECT CASE
@@ -253,7 +253,7 @@ SELECT CASE WHEN ducknng_set_service_limits('inflight_principal_rpc', 0::UBIGINT
 1
 
 query I
-SELECT max_inflight_per_principal FROM ducknng_list_servers() WHERE name = 'inflight_principal_rpc'
+SELECT max_inflight_per_peer_identity FROM ducknng_list_servers() WHERE name = 'inflight_principal_rpc'
 ----
 1
 
@@ -284,7 +284,7 @@ query IT
 SELECT ok, error
 FROM ducknng_get_rpc_manifest(getvariable('inflight_principal_url')::VARCHAR, getvariable('limit_peer_tls_config_id')::UBIGINT)
 ----
-0	ducknng: max inflight requests per principal exceeded
+0	ducknng: max inflight requests per peer identity exceeded
 
 query III
 SELECT aio_id = (SELECT aio FROM inflight_principal_aio), ok, octet_length(frame) > 0
@@ -300,7 +300,7 @@ SELECT CASE WHEN ducknng_stop_server('inflight_principal_rpc') THEN 1 ELSE 0 END
 ----
 1
 
-# max_reply_bytes_per_principal: cumulative byte budget
+# max_reply_bytes_per_peer_identity: cumulative byte budget
 # Start with no limit, make a first successful request, then set limit=1.
 # Since cumulative_reply_bytes after the first request >> 1, the second request fails.
 
@@ -335,7 +335,7 @@ SELECT CASE WHEN ducknng_set_service_limits('reply_bytes_rpc', 0::UBIGINT, 0::UB
 1
 
 query I
-SELECT max_reply_bytes_per_principal FROM ducknng_list_servers() WHERE name = 'reply_bytes_rpc'
+SELECT max_reply_bytes_per_peer_identity FROM ducknng_list_servers() WHERE name = 'reply_bytes_rpc'
 ----
 1
 
@@ -343,14 +343,14 @@ query IT
 SELECT ok, error
 FROM ducknng_get_rpc_manifest(getvariable('reply_bytes_url')::VARCHAR, getvariable('limit_peer_tls_config_id')::UBIGINT)
 ----
-0	ducknng: reply byte quota for principal exceeded
+0	ducknng: reply byte quota for peer identity exceeded
 
 query I
 SELECT CASE WHEN ducknng_stop_server('reply_bytes_rpc') THEN 1 ELSE 0 END
 ----
 1
 
-# max_session_open_rate_per_principal: cumulative session-open count; set to 1 so second open fails
+# max_session_open_rate_per_peer_identity: cumulative session-open count; set to 1 so second open fails
 
 query I
 SELECT CASE
@@ -377,7 +377,7 @@ SELECT CASE WHEN ducknng_set_service_limits('session_rate_rpc', 0::UBIGINT, 0::U
 1
 
 query I
-SELECT max_session_open_rate_per_principal FROM ducknng_list_servers() WHERE name = 'session_rate_rpc'
+SELECT max_session_open_rate_per_peer_identity FROM ducknng_list_servers() WHERE name = 'session_rate_rpc'
 ----
 1
 
@@ -408,7 +408,7 @@ FROM ducknng_open_query(
   getvariable('limit_peer_tls_config_id')::UBIGINT
 )
 ----
-0	ducknng: session open rate per principal exceeded
+0	ducknng: session open rate per peer identity exceeded
 
 statement ok
 SET VARIABLE session_rate_session_id = (SELECT session_id FROM session_rate_open)

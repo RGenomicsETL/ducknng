@@ -12,6 +12,7 @@ on:
       - 'scripts/docker/duckdb-wasm-local.Dockerfile'
       - 'scripts/duckdb-wasm-local-test.html'
       - 'scripts/start_duckdb_wasm_local_test.sh'
+      - 'test/browser/**'
       - 'src/**'
       - 'third_party/**'
       - 'patches/nng/**'
@@ -71,23 +72,70 @@ jobs:
           echo "extension_asset_name=ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
           echo "extension_release_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${DUCKNNG_WASM_RELEASE_TAG}/ducknng-${DUCKDB_WASM_PLATFORM}.duckdb_extension.wasm" >> "$GITHUB_OUTPUT"
 
+      - name: Build wasm_eh probe artifact
+        # A __multi3 dynamic-link mismatch once shipped a demo artifact that
+        # failed at LOAD with no CI signal. That failure class is
+        # target-independent (same sources, same emsdk), and wasm_eh is the
+        # release-supported browser lane, so the blocking load gate runs on a
+        # wasm_eh build; wasm_threads LOAD is documented as resource-sensitive
+        # in headless CI and stays report-only below.
+        env:
+          DUCKDB_WASM_PLATFORM: wasm_eh
+          DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          scripts/start_duckdb_wasm_local_test.sh
+          mv .duckdb-wasm-local-artifacts .duckdb-wasm-eh-probe-artifacts
+          # The container writes the work tree as root; reset it so the
+          # wasm_threads build below can recreate it as the runner user.
+          sudo rm -rf .duckdb_wasm_docker_work
+
+      - name: Browser conformance gate on wasm_eh artifact
+        # Capability-gated: reads ducknng_transport_capabilities() and runs
+        # every probe whose capability the wasm_eh backend claims supported,
+        # skipping unsupported ones. Replaces the hand-maintained per-target
+        # probe list; a broken artifact or a claim/behavior drift fails here
+        # before anything is packaged or published.
+        run: |
+          set -euo pipefail
+          cd test/browser
+          npm ci
+          npx playwright install --with-deps chromium
+          ok=0
+          for attempt in 1 2 3; do
+            if node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-eh-probe-artifacts/site" --probes=conformance; then
+              ok=1
+              break
+            fi
+            echo "conformance gate attempt ${attempt} failed; retrying"
+            sleep 5
+          done
+          [ "$ok" = "1" ]
+
       - name: Build static ducknng wasm demo site
         env:
           DUCKNNG_SOURCE_COMMIT: ${{ github.sha }}
           DUCKNNG_WASM_EXTENSION_RELEASE_URL: ${{ steps.names.outputs.extension_release_url }}
         run: scripts/start_duckdb_wasm_local_test.sh
 
+      - name: Browser load probe on wasm_threads artifact (report-only)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd test/browser
+          node run_smoke.mjs "$GITHUB_WORKSPACE/.duckdb-wasm-local-artifacts/site" --probes=load
+
       - name: Package release artifacts
         run: |
           set -euo pipefail
-          mkdir -p .duckdb-wasm-release
+          mkdir -p duckdb-wasm-release
           cp .duckdb-wasm-local-artifacts/site/duckdb-wasm/ducknng.duckdb_extension.wasm \
-            ".duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}"
+            "duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}"
           cp .duckdb-wasm-local-artifacts/site/ducknng-wasm-config.json \
-            .duckdb-wasm-release/ducknng-wasm-config.json
+            duckdb-wasm-release/ducknng-wasm-config.json
           tar -C .duckdb-wasm-local-artifacts/site -czf \
-            .duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz .
-          (cd .duckdb-wasm-release && sha256sum * > SHA256SUMS)
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz .
+          (cd duckdb-wasm-release && sha256sum * > SHA256SUMS)
 
       - name: Upload staged demo site artifact
         uses: actions/upload-artifact@v4
@@ -100,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ducknng-wasm-release-bundle
-          path: .duckdb-wasm-release
+          path: duckdb-wasm-release
           if-no-files-found: error
 
       - name: Move rolling demo release tag
@@ -126,10 +174,10 @@ jobs:
           make_latest: false
           overwrite_files: true
           files: |
-            .duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}
-            .duckdb-wasm-release/ducknng-wasm-config.json
-            .duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz
-            .duckdb-wasm-release/SHA256SUMS
+            duckdb-wasm-release/${{ steps.names.outputs.extension_asset_name }}
+            duckdb-wasm-release/ducknng-wasm-config.json
+            duckdb-wasm-release/ducknng-wasm-pages-site.tar.gz
+            duckdb-wasm-release/SHA256SUMS
 
   deploy-pages-branch:
     name: Publish gh-pages from CI artifact

@@ -1,7 +1,11 @@
 #include "ducknng_http_compat.h"
+#include "ducknng_net_backend.h"
+#include "ducknng_runtime.h"
 #include "ducknng_service.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
+#include "ducknng_wasm_http_fetch.h"
+#include "ducknng_ws_frame.h"
 #include <ctype.h>
 #include <nng/supplemental/http/http.h>
 #include "../third_party/nng/src/core/defs.h"
@@ -17,7 +21,7 @@ extern char *nni_http_res_headers(nng_http_res *res);
 extern int nni_http_conn_getopt(nng_http_conn *conn, const char *name, void *buf, size_t *szp, nni_type type);
 extern void nni_strfree(char *s);
 
-static int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
+int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
     return opts && (opts->enabled ||
         (opts->cert_key_file && opts->cert_key_file[0]) ||
         (opts->ca_file && opts->ca_file[0]) ||
@@ -28,10 +32,13 @@ static int ducknng_http_tls_requested(const ducknng_tls_opts *opts) {
         opts->auth_mode != 0);
 }
 
-static int ducknng_http_tls_auth_mode_map(int auth_mode, nng_tls_auth_mode *out) {
+static int ducknng_http_tls_auth_mode_map(nng_tls_mode mode, int auth_mode,
+    nng_tls_auth_mode *out) {
     if (!out) return NNG_EINVAL;
     switch (auth_mode) {
-    case 0: *out = NNG_TLS_AUTH_MODE_NONE; return 0;
+    case 0:
+        *out = (mode == NNG_TLS_MODE_CLIENT) ? NNG_TLS_AUTH_MODE_REQUIRED : NNG_TLS_AUTH_MODE_NONE;
+        return 0;
     case 1: *out = NNG_TLS_AUTH_MODE_OPTIONAL; return 0;
     case 2: *out = NNG_TLS_AUTH_MODE_REQUIRED; return 0;
     default: return NNG_EINVAL;
@@ -114,7 +121,7 @@ static int ducknng_http_tls_config_build(nng_tls_config **out, nng_tls_mode mode
     if (!opts || !ducknng_http_tls_requested(opts)) return 0;
     rv = nng_tls_config_alloc(&cfg, mode);
     if (rv != 0) return rv;
-    rv = ducknng_http_tls_auth_mode_map(opts->auth_mode, &auth_mode);
+    rv = ducknng_http_tls_auth_mode_map(mode, opts->auth_mode, &auth_mode);
     if (rv != 0) goto fail;
     rv = nng_tls_config_auth_mode(cfg, auth_mode);
     if (rv != 0) goto fail;
@@ -217,11 +224,14 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
             case '"': out = '"'; break;
             case '\\': out = '\\'; break;
             case '/': out = '/'; break;
-            case 'b': out = '\b'; break;
-            case 'f': out = '\f'; break;
-            case 'n': out = '\n'; break;
-            case 'r': out = '\r'; break;
-            case 't': out = '\t'; break;
+            case 'b':
+            case 'f':
+            case 'n':
+            case 'r':
+            case 't':
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                return NULL;
             case 'u': {
                 int i;
                 unsigned value = 0;
@@ -241,6 +251,11 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
                     if (errmsg) *errmsg = ducknng_strdup("ducknng: only ASCII JSON unicode escapes are supported in headers_json");
                     return NULL;
                 }
+                if (value < 0x20 || value == 0x7f) {
+                    if (buf) duckdb_free(buf);
+                    if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                    return NULL;
+                }
                 out = (char)value;
                 break;
             }
@@ -255,6 +270,12 @@ static char *ducknng_http_parse_json_string(const char **p, char **errmsg) {
                 return NULL;
             }
         } else {
+            unsigned char uc = (unsigned char)c;
+            if (uc < 0x20 || uc == 0x7f) {
+                if (buf) duckdb_free(buf);
+                if (errmsg) *errmsg = ducknng_strdup("ducknng: control characters are not allowed in headers_json strings");
+                return NULL;
+            }
             if (ducknng_http_buf_append(&buf, &len, &cap, &c, 1) != 0) {
                 if (buf) duckdb_free(buf);
                 if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory parsing headers_json");
@@ -370,6 +391,12 @@ static int ducknng_http_apply_headers_json_common(const char *headers_json,
             if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header name must be an HTTP token");
             return -1;
         }
+        if (!ducknng_http_header_value_is_valid(header_value)) {
+            duckdb_free(name);
+            duckdb_free(header_value);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
+            return -1;
+        }
         rv = add_header(target, name, header_value);
         duckdb_free(name);
         duckdb_free(header_value);
@@ -404,6 +431,18 @@ static int ducknng_http_res_add_header_adapter(void *target, const char *name, c
     return nng_http_res_add_header((nng_http_res *)target, name, value);
 }
 
+static int ducknng_http_validate_header_adapter(void *target, const char *name, const char *value) {
+    (void)target;
+    (void)name;
+    (void)value;
+    return 0;
+}
+
+int ducknng_http_validate_headers_json(const char *headers_json, char **errmsg) {
+    return ducknng_http_apply_headers_json_common(headers_json, NULL,
+        ducknng_http_validate_header_adapter, errmsg);
+}
+
 static int ducknng_http_apply_headers_json(nng_http_req *req, const char *headers_json, char **errmsg) {
     return ducknng_http_apply_headers_json_common(headers_json, req,
         ducknng_http_req_add_header_adapter, errmsg);
@@ -434,7 +473,7 @@ static int ducknng_http_bytes_look_text(const uint8_t *data, size_t len) {
     return 1;
 }
 
-static char *ducknng_http_headers_block_to_json(const char *headers_block, char **errmsg) {
+char *ducknng_http_headers_block_to_json(const char *headers_block, char **errmsg) {
     char *buf = NULL;
     size_t len = 0;
     size_t cap = 0;
@@ -665,6 +704,69 @@ int ducknng_http_transact(const char *url, const char *method, const char *heade
     const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
     uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
     char **errmsg) {
+    return ducknng_net_backend_get()->http_transact(url, method, headers_json,
+        body, body_len, timeout_ms, tls_opts, out_status, out_headers_json,
+        out_body, out_body_len, errmsg);
+}
+
+#ifdef __EMSCRIPTEN__
+/* In the browser there is no native socket layer for the NNG HTTP client.
+ * Route http:// and https:// through the synchronous XHR bridge.
+ * TLS is browser-managed, so an explicit TLS configuration is rejected. */
+int ducknng_http_transact_browser(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg) {
+    ducknng_transport_url parsed;
+    char *header_block = NULL;
+    int frc;
+    if (out_status) *out_status = 0;
+    if (out_headers_json) *out_headers_json = NULL;
+    if (out_body) *out_body = NULL;
+    if (out_body_len) *out_body_len = 0;
+    if (errmsg) *errmsg = NULL;
+    if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
+    if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
+    if (ducknng_http_tls_requested(tls_opts)) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
+        return -1;
+    }
+    if (method && method[0] && !ducknng_http_token_is_valid(method)) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP method must be an HTTP token");
+        return -1;
+    }
+    if (headers_json && headers_json[0] &&
+        ducknng_http_validate_headers_json(headers_json, errmsg) != 0) {
+        return -1;
+    }
+    frc = ducknng_wasm_http_fetch_perform(url, method, headers_json, body, body_len,
+        timeout_ms, out_status, &header_block, out_body, out_body_len, errmsg);
+    if (frc != 0) {
+        if (header_block) duckdb_free(header_block);
+        return -1;
+    }
+    if (out_headers_json) {
+        *out_headers_json = ducknng_http_headers_block_to_json(header_block, errmsg);
+        if (!*out_headers_json) {
+            if (header_block) duckdb_free(header_block);
+            if (out_body && *out_body) {
+                duckdb_free(*out_body);
+                *out_body = NULL;
+            }
+            if (out_body_len) *out_body_len = 0;
+            return -1;
+        }
+    }
+    if (header_block) duckdb_free(header_block);
+    return 0;
+}
+#endif
+
+int ducknng_http_transact_native(const char *url, const char *method, const char *headers_json,
+    const uint8_t *body, size_t body_len, int timeout_ms, const ducknng_tls_opts *tls_opts,
+    uint16_t *out_status, char **out_headers_json, uint8_t **out_body, size_t *out_body_len,
+    char **errmsg) {
     ducknng_transport_url parsed;
     nng_url *parsed_url = NULL;
     nng_http_client *client = NULL;
@@ -782,6 +884,10 @@ typedef struct ducknng_http_server_state {
     nng_http_handler *rpc_handler;
     nng_http_handler *route_handler;
     char *path;
+    /* Browser-facing ducknng-frame-over-WebSocket endpoint sharing this server
+     * (issue #11); NULL when the endpoint did not start. */
+    ducknng_ws_frame_endpoint *ws_endpoint;
+    char *ws_url;
     ducknng_mutex mu;
     ducknng_cond cv;
     int stopping;
@@ -802,6 +908,10 @@ typedef struct ducknng_http_handler_data {
 static const char *DUCKNNG_HTTP_FRAME_MEDIA_TYPE = "application/vnd.ducknng.frame";
 static const char *DUCKNNG_HTTP_FRAME_HEADERS_JSON =
     "[{\"name\":\"Content-Type\",\"value\":\"application/vnd.ducknng.frame\"}]";
+
+const char *ducknng_http_frame_headers_json(void) {
+    return DUCKNNG_HTTP_FRAME_HEADERS_JSON;
+}
 
 static void ducknng_http_server_state_handler_dtor(void *arg) {
     ducknng_http_handler_data *data = (ducknng_http_handler_data *)arg;
@@ -974,6 +1084,11 @@ static int ducknng_http_route_response_alloc(nng_http_res **out,
         goto fail;
     }
     if (reply->content_type && reply->content_type[0]) {
+        if (!ducknng_http_header_value_is_valid(reply->content_type)) {
+            rv = NNG_EINVAL;
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
+            goto fail;
+        }
         rv = nng_http_res_set_header(res, "Content-Type", reply->content_type);
         if (rv != 0) goto fail;
     }
@@ -1011,6 +1126,10 @@ static int ducknng_http_stream_write_headers(nng_http_conn *conn, nng_aio *write
     rv = nng_http_res_set_header(res, "Transfer-Encoding", "chunked");
     if (rv != 0) goto fail;
     if (content_type && content_type[0]) {
+        if (!ducknng_http_header_value_is_valid(content_type)) {
+            rv = NNG_EINVAL;
+            goto fail;
+        }
         rv = nng_http_res_set_header(res, "Content-Type", content_type);
         if (rv != 0) goto fail;
     }
@@ -1156,6 +1275,7 @@ static void ducknng_http_route_handler(nng_aio *aio) {
     int have_remote_addr = 0;
     nng_http_res *res = NULL;
     int rv = 0;
+    int handler_rc = 0;
     int stopping = 0;
     int service_stopping = 0;
     ducknng_http_route route;
@@ -1302,18 +1422,9 @@ static void ducknng_http_route_handler(nng_aio *aio) {
         }
         if (route.auth_allow_identities_json && route.auth_allow_identities_json[0] &&
             caller_identity && caller_identity[0]) {
-            /* simple substring check for "\"identity\"" in the JSON array */
-            size_t id_len = strlen(caller_identity);
-            char *needle = (char *)duckdb_malloc(id_len + 3);
-            int id_allowed = 0;
-            if (needle) {
-                needle[0] = '"';
-                memcpy(needle + 1, caller_identity, id_len);
-                needle[id_len + 1] = '"';
-                needle[id_len + 2] = '\0';
-                id_allowed = strstr(route.auth_allow_identities_json, needle) != NULL;
-                duckdb_free(needle);
-            }
+            /* exact-match membership; malformed allowlists fail closed */
+            int id_allowed = ducknng_json_string_array_contains(
+                route.auth_allow_identities_json, caller_identity, NULL, NULL) == 1;
             if (!id_allowed) {
                 ducknng_authorizer_decision_reset(&decision);
                 ducknng_service_end_request(state->svc, caller_identity, 0);
@@ -1329,9 +1440,15 @@ static void ducknng_http_route_handler(nng_aio *aio) {
                 rv = ducknng_http_alloc_text_response(&res, 503, "ducknng: HTTP server is stopping");
                 goto done;
             }
+            {
+                ducknng_execution_subject subject_ctx;
+                ducknng_service_execution_subject_begin(state->svc, &subject_ctx,
+                    caller_identity, &decision);
+                /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
+                ducknng_http_serve_stream_route(conn, aio, state, req, &request_ctx, caller_identity);
+                ducknng_service_execution_subject_end(state->svc);
+            }
             ducknng_authorizer_decision_reset(&decision);
-            /* serve_stream_route calls nng_http_hijack + nng_aio_finish(aio,0) internally */
-            ducknng_http_serve_stream_route(conn, aio, state, req, &request_ctx, caller_identity);
             ducknng_service_end_request(state->svc, caller_identity, 0);
             if (request_path) duckdb_free(request_path);
             if (headers_json) duckdb_free(headers_json);
@@ -1343,7 +1460,15 @@ static void ducknng_http_route_handler(nng_aio *aio) {
             ducknng_http_server_stream_end(state);
             return;
         }
-        if (ducknng_service_handle_http_route(state->svc, &request_ctx, &route_reply, &handler_err) != 0) {
+        {
+            ducknng_execution_subject subject_ctx;
+            ducknng_service_execution_subject_begin(state->svc, &subject_ctx,
+                caller_identity, &decision);
+            handler_rc = ducknng_service_handle_http_route(state->svc, &request_ctx,
+                &route_reply, &handler_err);
+            ducknng_service_execution_subject_end(state->svc);
+        }
+        if (handler_rc != 0) {
             rv = ducknng_http_alloc_text_response(&res, 500,
                 handler_err ? handler_err : "ducknng: HTTP route handler failed");
             if (handler_err) duckdb_free(handler_err);
@@ -1395,7 +1520,6 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
     char *caller_identity = NULL;
     nng_sockaddr remote_addr;
     int have_remote_addr = 0;
-    ducknng_frame frame;
     int rv = 0;
     int stopping = 0;
     int service_stopping = 0;
@@ -1434,72 +1558,26 @@ static void ducknng_http_rpc_handler(nng_aio *aio) {
         return;
     }
     nng_http_req_get_data(req, &body, &body_len);
-    if (ducknng_decode_frame_bytes((const uint8_t *)body, body_len, &frame) != 0) {
-        rv = ducknng_http_alloc_text_response(&res, 400, "ducknng: invalid frame envelope");
-        ducknng_http_finish_response(aio, res, rv);
-        return;
-    }
     caller_identity = ducknng_http_conn_verified_peer_identity(conn);
     have_remote_addr = ducknng_http_conn_remote_addr(conn, &remote_addr) == 0;
     {
-        ducknng_authorizer_context auth_ctx;
-        ducknng_authorizer_decision decision;
-        char *admission_err = NULL;
-        char *limit_err = NULL;
-        memset(&auth_ctx, 0, sizeof(auth_ctx));
-        auth_ctx.svc = state->svc;
-        auth_ctx.frame = &frame;
-        auth_ctx.phase = "rpc_request";
-        auth_ctx.transport_family = DUCKNNG_TRANSPORT_FAMILY_HTTP;
-        auth_ctx.scheme = state->svc && state->svc->tls_enabled ? DUCKNNG_TRANSPORT_SCHEME_HTTPS : DUCKNNG_TRANSPORT_SCHEME_HTTP;
-        auth_ctx.caller_identity = caller_identity;
-        auth_ctx.remote_addr = have_remote_addr ? &remote_addr : NULL;
-        auth_ctx.http_method = "POST";
-        auth_ctx.http_path = state->path;
-        auth_ctx.content_type = content_type;
-        auth_ctx.body_bytes = (uint64_t)body_len;
-        ducknng_authorizer_decision_init(&decision);
-        if (ducknng_service_network_admission_check(state->svc, caller_identity,
-                have_remote_addr ? &remote_addr : NULL, &admission_err) != 0) {
-            rv = ducknng_http_alloc_text_response(&res, 403,
-                admission_err ? admission_err : "ducknng: peer is not admitted");
-            if (admission_err) duckdb_free(admission_err);
-            ducknng_authorizer_decision_reset(&decision);
-            if (caller_identity) duckdb_free(caller_identity);
-            ducknng_http_finish_response(aio, res, rv);
-            return;
-        }
-        if (ducknng_service_begin_request(state->svc, caller_identity, &limit_err) != 0) {
-            rv = ducknng_http_alloc_text_response(&res, 503,
-                limit_err ? limit_err : "ducknng: max inflight requests exceeded");
-            if (limit_err) duckdb_free(limit_err);
-            ducknng_authorizer_decision_reset(&decision);
-            if (caller_identity) duckdb_free(caller_identity);
-            ducknng_http_finish_response(aio, res, rv);
-            return;
-        }
-        if (ducknng_service_authorize_request(state->svc, &auth_ctx, &decision, NULL) != 0) {
-            uint16_t status = (decision.http_status >= 100 && decision.http_status <= 599) ?
-                (uint16_t)decision.http_status : 403;
+        uint16_t status = 500;
+        char *err_text = NULL;
+        reply_msg = ducknng_service_authorize_and_dispatch_frame(state->svc,
+            (const uint8_t *)body, body_len, caller_identity,
+            have_remote_addr ? &remote_addr : NULL,
+            state->svc->tls_enabled ? DUCKNNG_TRANSPORT_SCHEME_HTTPS : DUCKNNG_TRANSPORT_SCHEME_HTTP,
+            "POST", state->path, content_type, &status, &err_text);
+        if (!reply_msg) {
             rv = ducknng_http_alloc_text_response(&res, status,
-                decision.reason ? decision.reason : "ducknng: request is not authorized");
-            ducknng_authorizer_decision_reset(&decision);
-            ducknng_service_end_request(state->svc, caller_identity, 0);
+                err_text ? err_text : "ducknng: failed to dispatch request");
+            if (err_text) duckdb_free(err_text);
             if (caller_identity) duckdb_free(caller_identity);
             ducknng_http_finish_response(aio, res, rv);
             return;
         }
-        reply_msg = ducknng_handle_decoded_request(state->svc, &frame, caller_identity, &decision);
-        ducknng_authorizer_decision_reset(&decision);
-        ducknng_service_end_request(state->svc, caller_identity,
-            reply_msg ? nng_msg_len(reply_msg) : 0);
     }
     if (caller_identity) duckdb_free(caller_identity);
-    if (!reply_msg) {
-        rv = ducknng_http_alloc_text_response(&res, 500, "ducknng: failed to dispatch request");
-        ducknng_http_finish_response(aio, res, rv);
-        return;
-    }
     rv = ducknng_http_alloc_frame_response(&res, nng_msg_body(reply_msg), nng_msg_len(reply_msg));
     nng_msg_free(reply_msg);
     ducknng_http_finish_response(aio, res, rv);
@@ -1581,6 +1659,329 @@ int ducknng_http_frame_transact(const char *url, const uint8_t *frame, size_t fr
     else if (body) duckdb_free(body);
     if (out_frame_len) *out_frame_len = body_len;
     return 0;
+}
+
+struct ducknng_http_frame_client {
+    nng_url *url;
+    nng_http_client *client;
+    char *url_text;
+};
+
+int ducknng_http_frame_client_open(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg) {
+    return ducknng_net_backend_get()->frame_client_open(url, tls_opts, out_client, errmsg);
+}
+
+#ifdef __EMSCRIPTEN__
+int ducknng_http_frame_client_open_browser(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg) {
+    ducknng_http_frame_client *fc = NULL;
+    ducknng_transport_url parsed;
+    if (out_client) *out_client = NULL;
+    if (!out_client) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client output");
+        return -1;
+    }
+    if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
+    if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
+    if (ducknng_http_tls_requested(tls_opts)) {
+        if (errmsg) *errmsg = ducknng_strdup(
+            "ducknng: explicit TLS configuration is unsupported in the browser; https uses browser-managed TLS");
+        return -1;
+    }
+    fc = (ducknng_http_frame_client *)duckdb_malloc(sizeof(*fc));
+    if (!fc) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating HTTP frame client");
+        return -1;
+    }
+    memset(fc, 0, sizeof(*fc));
+    fc->url_text = ducknng_strdup(url);
+    if (!fc->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying browser HTTP frame URL");
+        ducknng_http_frame_client_close(fc);
+        return -1;
+    }
+    *out_client = fc;
+    return 0;
+}
+#endif
+
+int ducknng_http_frame_client_open_native(const char *url, const ducknng_tls_opts *tls_opts,
+    ducknng_http_frame_client **out_client, char **errmsg) {
+    ducknng_http_frame_client *fc = NULL;
+    ducknng_transport_url parsed;
+    nng_tls_config *tls_cfg = NULL;
+    int rv;
+    if (out_client) *out_client = NULL;
+    if (!out_client) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client output");
+        return -1;
+    }
+    if (ducknng_validate_http_url(url, errmsg) != 0) return -1;
+    if (ducknng_transport_url_parse(url, &parsed, errmsg) != 0) return -1;
+    if (ducknng_http_tls_requested(tls_opts) && !parsed.uses_tls) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: TLS configuration requires an https:// URL");
+        return -1;
+    }
+    fc = (ducknng_http_frame_client *)duckdb_malloc(sizeof(*fc));
+    if (!fc) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating HTTP frame client");
+        return -1;
+    }
+    memset(fc, 0, sizeof(*fc));
+    rv = nng_url_parse(&fc->url, url);
+    if (rv != 0) goto fail;
+    rv = nng_http_client_alloc(&fc->client, fc->url);
+    if (rv != 0) goto fail;
+    if (parsed.uses_tls && ducknng_http_tls_requested(tls_opts)) {
+        rv = ducknng_http_tls_config_build(&tls_cfg, NNG_TLS_MODE_CLIENT, url, tls_opts);
+        if (rv != 0) goto fail;
+        if (tls_cfg) {
+            rv = nng_http_client_set_tls(fc->client, tls_cfg);
+            nng_tls_config_free(tls_cfg);
+            tls_cfg = NULL;
+            if (rv != 0) goto fail;
+        }
+    }
+    *out_client = fc;
+    return 0;
+fail:
+    if (tls_cfg) nng_tls_config_free(tls_cfg);
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    ducknng_http_frame_client_close(fc);
+    return -1;
+}
+
+int ducknng_http_frame_client_transact(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg) {
+    return ducknng_net_backend_get()->frame_client_transact(client, frame, frame_len,
+        timeout_ms, out_frame, out_frame_len, errmsg);
+}
+
+#ifdef __EMSCRIPTEN__
+int ducknng_http_frame_client_transact_browser(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg) {
+    if (out_frame) *out_frame = NULL;
+    if (out_frame_len) *out_frame_len = 0;
+    if (!client || !client->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    return ducknng_http_frame_transact(client->url_text, frame, frame_len, timeout_ms,
+        NULL, out_frame, out_frame_len, errmsg);
+}
+#endif
+
+int ducknng_http_frame_client_transact_native(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    uint8_t **out_frame, size_t *out_frame_len, char **errmsg) {
+    nng_http_req *req = NULL;
+    nng_http_res *res = NULL;
+    nng_aio *aio = NULL;
+    void *resp_body = NULL;
+    size_t resp_body_len = 0;
+    uint16_t status = 0;
+    int rv;
+    if (out_frame) *out_frame = NULL;
+    if (out_frame_len) *out_frame_len = 0;
+    if (!client || !client->client || !client->url) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    rv = nng_http_req_alloc(&req, client->url);
+    if (rv != 0) goto fail;
+    rv = nng_http_res_alloc(&res);
+    if (rv != 0) goto fail;
+    rv = nng_http_req_set_method(req, "POST");
+    if (rv != 0) goto fail;
+    if (ducknng_http_apply_headers_json(req, DUCKNNG_HTTP_FRAME_HEADERS_JSON, errmsg) != 0) {
+        rv = NNG_EINVAL;
+        goto fail;
+    }
+    if (frame && frame_len > 0) {
+        rv = nng_http_req_copy_data(req, frame, frame_len);
+        if (rv != 0) goto fail;
+    }
+    rv = ducknng_aio_alloc(&aio, NULL, NULL, timeout_ms);
+    if (rv != 0) goto fail;
+    nng_http_client_transact(client->client, req, res, aio);
+    ducknng_aio_wait(aio);
+    rv = ducknng_aio_result(aio);
+    if (rv != 0) goto fail;
+    status = nng_http_res_get_status(res);
+    nng_http_res_get_data(res, &resp_body, &resp_body_len);
+    if (status != 200) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_http_status_error_message(status,
+            (const uint8_t *)resp_body, resp_body_len);
+        rv = NNG_EPROTO;
+        goto fail;
+    }
+    if (out_frame_len) *out_frame_len = resp_body_len;
+    if (out_frame) {
+        *out_frame = (uint8_t *)duckdb_malloc(resp_body_len);
+        if (!*out_frame && resp_body_len > 0) {
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying HTTP frame response");
+            rv = NNG_ENOMEM;
+            goto fail;
+        }
+        if (resp_body_len) memcpy(*out_frame, resp_body, resp_body_len);
+    }
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return 0;
+fail:
+    if (out_frame && *out_frame) {
+        duckdb_free(*out_frame);
+        *out_frame = NULL;
+    }
+    if (out_frame_len) *out_frame_len = 0;
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return -1;
+}
+
+int ducknng_http_frame_client_transact_msg(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg) {
+    return ducknng_net_backend_get()->frame_client_transact_msg(client, frame, frame_len,
+        timeout_ms, out_msg, errmsg);
+}
+
+#ifdef __EMSCRIPTEN__
+int ducknng_http_frame_client_transact_msg_browser(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg) {
+    nng_msg *msg = NULL;
+    uint8_t *out_frame = NULL;
+    size_t out_frame_len = 0;
+    int rv;
+    if (out_msg) *out_msg = NULL;
+    if (!out_msg) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame message output");
+        return -1;
+    }
+    if (!client || !client->url_text) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    if (ducknng_http_frame_client_transact_browser(client, frame, frame_len, timeout_ms,
+            &out_frame, &out_frame_len, errmsg) != 0) {
+        return -1;
+    }
+    rv = nng_msg_alloc(&msg, out_frame_len);
+    if (rv != 0) {
+        if (out_frame) duckdb_free(out_frame);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+        return -1;
+    }
+    if (out_frame_len) memcpy(nng_msg_body(msg), out_frame, out_frame_len);
+    if (out_frame) duckdb_free(out_frame);
+    *out_msg = msg;
+    return 0;
+}
+#endif
+
+int ducknng_http_frame_client_transact_msg_native(ducknng_http_frame_client *client,
+    const uint8_t *frame, size_t frame_len, int timeout_ms,
+    nng_msg **out_msg, char **errmsg) {
+    nng_http_req *req = NULL;
+    nng_http_res *res = NULL;
+    nng_aio *aio = NULL;
+    nng_msg *msg = NULL;
+    void *resp_body = NULL;
+    size_t resp_body_len = 0;
+    uint16_t status = 0;
+    int rv;
+    if (out_msg) *out_msg = NULL;
+    if (!out_msg) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame message output");
+        return -1;
+    }
+    if (!client || !client->client || !client->url) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing HTTP frame client");
+        return -1;
+    }
+    rv = nng_http_req_alloc(&req, client->url);
+    if (rv != 0) goto fail;
+    rv = nng_http_res_alloc(&res);
+    if (rv != 0) goto fail;
+    rv = nng_http_req_set_method(req, "POST");
+    if (rv != 0) goto fail;
+    if (ducknng_http_apply_headers_json(req, DUCKNNG_HTTP_FRAME_HEADERS_JSON, errmsg) != 0) {
+        rv = NNG_EINVAL;
+        goto fail;
+    }
+    if (frame && frame_len > 0) {
+        rv = nng_http_req_copy_data(req, frame, frame_len);
+        if (rv != 0) goto fail;
+    }
+    rv = ducknng_aio_alloc(&aio, NULL, NULL, timeout_ms);
+    if (rv != 0) goto fail;
+    nng_http_client_transact(client->client, req, res, aio);
+    ducknng_aio_wait(aio);
+    rv = ducknng_aio_result(aio);
+    if (rv != 0) goto fail;
+    status = nng_http_res_get_status(res);
+    nng_http_res_get_data(res, &resp_body, &resp_body_len);
+    if (status != 200) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_http_status_error_message(status,
+            (const uint8_t *)resp_body, resp_body_len);
+        rv = NNG_EPROTO;
+        goto fail;
+    }
+    rv = nng_msg_alloc(&msg, resp_body_len);
+    if (rv != 0) goto fail;
+    if (resp_body_len) memcpy(nng_msg_body(msg), resp_body, resp_body_len);
+    *out_msg = msg;
+    msg = NULL;
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return 0;
+fail:
+    if (msg) nng_msg_free(msg);
+    if (errmsg && !*errmsg) *errmsg = ducknng_strdup(ducknng_nng_strerror(rv));
+    if (aio) ducknng_aio_free(aio);
+    if (res) nng_http_res_free(res);
+    if (req) nng_http_req_free(req);
+    return -1;
+}
+
+void ducknng_http_frame_client_close(ducknng_http_frame_client *client) {
+    if (!client) return;
+    if (client->client) nng_http_client_free(client->client);
+    if (client->url) nng_url_free(client->url);
+    if (client->url_text) duckdb_free(client->url_text);
+    duckdb_free(client);
+}
+
+/* Derive the WebSocket frame endpoint URL from the (resolved) HTTP mount URL:
+ * swap http->ws / https->wss and append a "/ws" path segment so it never
+ * collides with the RPC POST handler's exact path on the shared server. Caller
+ * frees. Returns NULL on parse/allocation failure. */
+static char *ducknng_http_frame_ws_url(const char *base_url, int tls) {
+    nng_url *up = NULL;
+    char *out = NULL;
+    const char *scheme = tls ? "wss" : "ws";
+    if (!base_url || nng_url_parse(&up, base_url) != 0 || !up) {
+        if (up) nng_url_free(up);
+        return NULL;
+    }
+    if (up->u_hostname && up->u_port && up->u_port[0]) {
+        const char *path = (up->u_path && up->u_path[0]) ? up->u_path : "/";
+        size_t plen = strlen(path);
+        const char *sep = (plen > 0 && path[plen - 1] == '/') ? "ws" : "/ws";
+        size_t need = strlen(scheme) + strlen(up->u_hostname) + strlen(up->u_port) + plen + 8;
+        out = (char *)duckdb_malloc(need);
+        if (out) snprintf(out, need, "%s://%s:%s%s%s", scheme, up->u_hostname, up->u_port, path, sep);
+    }
+    nng_url_free(up);
+    return out;
 }
 
 int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_state **out_state,
@@ -1692,7 +2093,34 @@ int ducknng_http_server_start(struct ducknng_service *svc, ducknng_http_server_s
     }
     rv = nng_http_server_start(state->server);
     if (rv != 0) goto fail;
-    if (out_resolved_url) *out_resolved_url = ducknng_http_server_resolve_url(state->server, svc->listen_url);
+    {
+        /* Bring up the browser-facing ducknng-frame-over-WebSocket endpoint on
+         * the same (now-bound) server, at a "/ws" sibling of the RPC path. */
+        char *resolved = ducknng_http_server_resolve_url(state->server, svc->listen_url);
+        const char *base = resolved ? resolved : svc->listen_url;
+        int tls = ducknng_http_tls_requested(&svc->tls_opts);
+        char *ws_url = ducknng_http_frame_ws_url(base, tls);
+        char *ws_err = NULL;
+        if (!ws_url) {
+            if (resolved) duckdb_free(resolved);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory building WebSocket endpoint URL");
+            rv = NNG_ENOMEM;
+            goto fail;
+        }
+        if (ducknng_ws_frame_endpoint_start(svc, ws_url,
+                tls ? DUCKNNG_TRANSPORT_SCHEME_WSS : DUCKNNG_TRANSPORT_SCHEME_WS,
+                svc->recv_max_bytes, &state->ws_endpoint, &state->ws_url, &ws_err) != 0) {
+            duckdb_free(ws_url);
+            if (resolved) duckdb_free(resolved);
+            if (errmsg) *errmsg = ws_err ? ws_err : ducknng_strdup("ducknng: failed to start WebSocket endpoint");
+            else if (ws_err) duckdb_free(ws_err);
+            rv = NNG_EINTERNAL;
+            goto fail;
+        }
+        duckdb_free(ws_url);
+        if (out_resolved_url) *out_resolved_url = resolved;
+        else if (resolved) duckdb_free(resolved);
+    }
     if (out_state) *out_state = state;
     nng_url_free(up);
     return 0;
@@ -1729,6 +2157,8 @@ fail:
             nng_http_server_stop(state->server);
             nng_http_server_release(state->server);
         }
+        if (state->ws_endpoint) ducknng_ws_frame_endpoint_stop(state->ws_endpoint);
+        if (state->ws_url) duckdb_free(state->ws_url);
         if (state->cv_initialized) ducknng_cond_destroy(&state->cv);
         if (state->mu_initialized) ducknng_mutex_destroy(&state->mu);
         if (state->path) duckdb_free(state->path);
@@ -1745,6 +2175,16 @@ void ducknng_http_server_stop(ducknng_http_server_state *state) {
         ducknng_mutex_lock(&state->mu);
         state->stopping = 1;
         ducknng_mutex_unlock(&state->mu);
+    }
+    /* Tear down the WebSocket endpoint (its own listener + connection threads)
+     * before the shared HTTP server is stopped and released. */
+    if (state->ws_endpoint) {
+        ducknng_ws_frame_endpoint_stop(state->ws_endpoint);
+        state->ws_endpoint = NULL;
+    }
+    if (state->ws_url) {
+        duckdb_free(state->ws_url);
+        state->ws_url = NULL;
     }
     if (state->server && state->rpc_handler) (void)nng_http_server_del_handler(state->server, state->rpc_handler);
     if (state->server && state->route_handler) (void)nng_http_server_del_handler(state->server, state->route_handler);

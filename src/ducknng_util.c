@@ -173,6 +173,16 @@ int ducknng_http_token_is_valid(const char *s) {
     return 1;
 }
 
+int ducknng_http_header_value_is_valid(const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    if (!s) return 0;
+    while (*p) {
+        unsigned char ch = *p++;
+        if (ch < 0x20 || ch == 0x7f) return 0;
+    }
+    return 1;
+}
+
 static char *ducknng_dup_bytes(const char *src, size_t len) {
     char *out = (char *)duckdb_malloc(len + 1);
     if (!out) return NULL;
@@ -192,13 +202,65 @@ static int ducknng_hex_value(int c) {
     return -1;
 }
 
+int ducknng_size_add(size_t a, size_t b, size_t *out) {
+    if (b > SIZE_MAX - a) return -1;
+    if (out) *out = a + b;
+    return 0;
+}
+
+int ducknng_size_mul(size_t a, size_t b, size_t *out) {
+    if (a != 0 && b > SIZE_MAX / a) return -1;
+    if (out) *out = a * b;
+    return 0;
+}
+
+int ducknng_grow_capacity(size_t need, size_t current_cap, size_t min_cap, size_t *out_cap) {
+    size_t cap;
+    if (!out_cap) return -1;
+    cap = current_cap ? current_cap : (min_cap ? min_cap : 1);
+    while (cap < need) {
+        if (cap > SIZE_MAX / 2) {
+            cap = need;
+            break;
+        }
+        cap *= 2;
+    }
+    *out_cap = cap;
+    return 0;
+}
+
+char *ducknng_join_dotted_path(const char *prefix, const char *name) {
+    size_t plen = prefix ? strlen(prefix) : 0;
+    size_t nlen = name ? strlen(name) : 0;
+    size_t need;
+    char *out;
+    if (plen == 0) {
+        out = (char *)duckdb_malloc(nlen + 1);
+        if (!out) return NULL;
+        if (nlen) memcpy(out, name, nlen);
+        out[nlen] = '\0';
+        return out;
+    }
+    if (ducknng_size_add(plen, nlen, &need) != 0 ||
+        ducknng_size_add(need, 2, &need) != 0) return NULL;
+    out = (char *)duckdb_malloc(need);
+    if (!out) return NULL;
+    memcpy(out, prefix, plen);
+    out[plen] = '.';
+    if (nlen) memcpy(out + plen + 1, name, nlen);
+    out[plen + 1 + nlen] = '\0';
+    return out;
+}
+
 static int ducknng_buf_append(char **buf, size_t *len, size_t *cap, const char *src, size_t src_len) {
     char *next;
+    size_t want;
     size_t new_cap;
     if (!buf || !len || !cap) return -1;
-    if (*cap < *len + src_len + 1) {
-        new_cap = *cap ? *cap * 2 : 32;
-        while (new_cap < *len + src_len + 1) new_cap *= 2;
+    if (ducknng_size_add(*len, src_len, &want) != 0 ||
+        ducknng_size_add(want, 1, &want) != 0) return -1;
+    if (*cap < want) {
+        if (ducknng_grow_capacity(want, *cap, 32, &new_cap) != 0) return -1;
         next = (char *)duckdb_malloc(new_cap);
         if (!next) return -1;
         if (*buf && *len) memcpy(next, *buf, *len);
@@ -383,6 +445,49 @@ fail:
     return -1;
 }
 
+int ducknng_json_string_array_contains(const char *json, const char *wanted,
+    size_t *out_count, char **errmsg) {
+    const char *p = json;
+    size_t count = 0;
+    int found = 0;
+    if (out_count) *out_count = 0;
+    if (errmsg) *errmsg = NULL;
+    if (!json) return 0;
+    ducknng_json_skip_ws(&p);
+    if (*p != '[') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: expected JSON array of strings");
+        return -1;
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p != ']') {
+        for (;;) {
+            char *entry = ducknng_json_parse_string_dup(&p, errmsg);
+            if (!entry) return -1;
+            count++;
+            if (wanted && strcmp(entry, wanted) == 0) found = 1;
+            duckdb_free(entry);
+            ducknng_json_skip_ws(&p);
+            if (*p == ',') {
+                p++;
+                ducknng_json_skip_ws(&p);
+                continue;
+            }
+            if (*p == ']') break;
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: expected ',' or ']' in JSON array");
+            return -1;
+        }
+    }
+    p++;
+    ducknng_json_skip_ws(&p);
+    if (*p != '\0') {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: trailing characters after JSON array");
+        return -1;
+    }
+    if (out_count) *out_count = count;
+    return found;
+}
+
 int ducknng_http_headers_json_get_header(const char *headers_json, const char *wanted_name,
     int reject_duplicates, char **out_value, char **errmsg) {
     const char *p = headers_json;
@@ -483,6 +588,10 @@ int ducknng_http_headers_json_get_header(const char *headers_json, const char *w
         }
         if (!name || !name[0] || !header_value) {
             if (errmsg) *errmsg = ducknng_strdup("ducknng: each headers_json object must contain non-empty name and a string value");
+            goto fail;
+        }
+        if (!ducknng_http_header_value_is_valid(header_value)) {
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: HTTP header value must not contain control characters");
             goto fail;
         }
         if (ducknng_ascii_ieq(name, wanted_name)) {

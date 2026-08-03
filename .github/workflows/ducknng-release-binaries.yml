@@ -160,6 +160,9 @@ jobs:
               DUCKNNG_WASM_SERVE=0 \
               scripts/start_duckdb_wasm_local_test.sh
           else
+            if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+              export EXTENSION_VERSION="${GITHUB_REF_NAME}"
+            fi
             make release -j2
           fi
 
@@ -215,9 +218,69 @@ jobs:
           }
           if arities['ducknng__ncurl_row'] != [6, 7]:
               raise SystemExit(f'ducknng__ncurl_row arities changed: {arities["ducknng__ncurl_row"]!r}')
-          if arities['ducknng_register_http_profile'] != [9, 10]:
+          if arities['ducknng_register_http_profile'] != [9, 10, 11]:
               raise SystemExit(f'ducknng_register_http_profile arities changed: {arities["ducknng_register_http_profile"]!r}')
           print('volatile scalar check:', sorted(expected))
+
+          header_row = con.execute("""
+              SELECT ok, status IS NULL, error
+              FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', ?, NULL, 100, 0::UBIGINT)
+          """, ['[{"name":"X-Test","value":"bad\\r\\nX-Evil: y"}]']).fetchone()
+          if header_row[0] is not False or header_row[1] is not True or 'control characters' not in (header_row[2] or ''):
+              raise SystemExit(f'HTTP header control-character check failed: {header_row!r}')
+          quack_hex = '01000164000effff0200010178040001012c016400808080808080808020660001640000660000ffffffffffffffff'
+          try:
+              con.execute("""
+                  SELECT *
+                  FROM ducknng_parse_body(from_hex(?), 'application/vnd.ducknng.quack-batch')
+              """, [quack_hex]).fetchall()
+          except duckdb.Error as exc:
+              if 'invalid fixed-size quack vector payload' not in str(exc):
+                  raise
+          else:
+              raise SystemExit('malformed quack batch was accepted')
+          huge_ncols_hex = '0100818004'
+          try:
+              con.execute("""
+                  SELECT *
+                  FROM ducknng_parse_body(from_hex(?), 'application/vnd.ducknng.quack-batch')
+              """, [huge_ncols_hex]).fetchall()
+          except duckdb.Error as exc:
+              if 'quack column count exceeds supported limit' not in str(exc):
+                  raise
+          else:
+              raise SystemExit('huge-column-count quack batch was accepted')
+          print('security regression smoke: header and quack checks ok')
+
+          tls_server_cfg = con.execute("""
+              SELECT ducknng_tls_config_from_files('test/certs/mtls/server-cert-key.pem', NULL, NULL, 0)
+          """).fetchone()[0]
+          tls_wrong_client_cfg = con.execute("""
+              SELECT ducknng_tls_config_from_files(NULL, 'test/certs/loopback-ca.pem', NULL, 0)
+          """).fetchone()[0]
+          tls_service = 'release_tls_verify'
+          try:
+              ok = con.execute(f"""
+                  SELECT ducknng_start_server('{tls_service}', 'tls+tcp://127.0.0.1:0',
+                                             1, 134217728, 300000, ?::UBIGINT)
+              """, [tls_server_cfg]).fetchone()[0]
+              if ok is not True:
+                  raise SystemExit('failed to start TLS verification smoke server')
+              tls_listen = con.execute(
+                  "SELECT listen FROM ducknng_list_servers() WHERE name = ?",
+                  [tls_service],
+              ).fetchone()[0]
+              tls_row = con.execute("""
+                  SELECT ok, error IS NOT NULL
+                  FROM ducknng_get_rpc_manifest(?, ?::UBIGINT)
+              """, [tls_listen, tls_wrong_client_cfg]).fetchone()
+              if tls_row != (False, True):
+                  raise SystemExit(f'TLS client verification smoke failed: {tls_row!r}')
+              print('security regression smoke: TLS client verification ok')
+          finally:
+              con.execute(f"SELECT ducknng_stop_server('{tls_service}')")
+              con.execute("SELECT ducknng_drop_tls_config(?::UBIGINT)", [tls_wrong_client_cfg])
+              con.execute("SELECT ducknng_drop_tls_config(?::UBIGINT)", [tls_server_cfg])
 
           service = 'release_http_profile'
           try:
@@ -358,7 +421,7 @@ jobs:
           if (length(ncurl_row_arities) != 2L || any(ncurl_row_arities != c(6, 7))) {
             stop("ducknng__ncurl_row arities changed: ", paste(ncurl_row_arities, collapse = ","))
           }
-          if (length(register_profile_arities) != 2L || any(register_profile_arities != c(9, 10))) {
+          if (length(register_profile_arities) != 3L || any(register_profile_arities != c(9, 10, 11))) {
             stop("ducknng_register_http_profile arities changed: ", paste(register_profile_arities, collapse = ","))
           }
           RSCRIPT

@@ -17,16 +17,37 @@ handles — servers, sockets, AIO futures, TLS configs, query sessions —
 are manually managed at the SQL surface.
 
 It also draws on [`mangoro`](https://github.com/sounkou-bioinfo/mangoro)
-for the thin versioned RPC envelope design.
+for the thin versioned RPC envelope design. The optional
+`ducknng_quack_batch` row serializer is informed by DuckDB’s
+experimental [`quack`](https://github.com/duckdb/duckdb-quack) extension
+and related Quack client work such as
+[`@quack-protocol/sdk`](https://github.com/tobilg/quack-protocol) and
+[`adbc-driver-quack`](https://github.com/gizmodata/adbc-driver-quack).
+In ducknng today, that Quack-derived encoding is a row-payload mode
+inside the ducknng RPC/session protocol; it is not yet a full Quack
+`POST /quack` / `application/vnd.duckdb` server or client.
 
 ## Layer map
 
-| Layer          | What it does                                                                                                                                                                                                             |
-|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Transport**  | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.                                                                                                                            |
-| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                  |
-| **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                              |
-| **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, and a text/raw fallback. User-registered codec hooks extend the set. |
+| Layer          | What it does                                                                                                                                                                                                                                                               |
+|----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Transport**  | NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.                                                                                                                                                                              |
+| **Framed RPC** | Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary `exec` is opt-in. `http://`/`https://` mount the same methods at the URL path.                                                                    |
+| **Policy**     | Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.                                                                                                |
+| **Codecs**     | `ducknng_parse_body(...)` and `ducknng_ncurl_table(...)` parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng `ducknng_quack_batch` batch media type, and text/raw fallback. User-registered codec hooks extend the set. |
+
+Raw protocol clients now also have a built-in `handshake` control method
+for capability negotiation. It advertises
+`supported_serialization_modes` plus `fetch_metadata` and
+`session_schema` capability objects covering control-plane
+`correlation_id` echo, stable query-session `result_handle` values,
+terminal `batch_index` metadata, negotiated protocol/schema versions,
+and effective fetch chunk counts. Today the advertised row payload modes
+are `arrow_ipc_stream` and `ducknng_quack_batch`: Arrow IPC remains the
+broad default, while `ducknng_quack_batch` is the Quack-derived DuckDB
+BinarySerializer batch path used for the new comparative benchmarks. The
+runnable wire-level example lives in `test/rpc_smoke.R`, and the
+contract is pinned in `docs/protocol.md`.
 
 ## Quick tour
 
@@ -49,7 +70,10 @@ SELECT ducknng_start_server(
 SET VARIABLE tour_url = (
   SELECT listen FROM ducknng_list_servers() WHERE name = 'tour'
 );
-SELECT getvariable('tour_url') AS listen_url;
+SELECT starts_with(
+  getvariable('tour_url'),
+  'tls+tcp://127.0.0.1:'
+) AS tls_listen_ready;
 -- Open a REQ socket and dial immediately.
 SET VARIABLE req_id = (ducknng_open_socket('req')).socket_id;
 SELECT (ducknng_dial_socket(
@@ -64,11 +88,11 @@ SELECT (ducknng_dial_socket(
 | true                                                                                                                    |
 +-------------------------------------------------------------------------------------------------------------------------+
 
-+---------------------------+
-|        listen_url         |
-+---------------------------+
-| tls+tcp://127.0.0.1:42515 |
-+---------------------------+
++------------------+
+| tls_listen_ready |
++------------------+
+| true             |
++------------------+
 
 +--------+
 | dialed |
@@ -94,7 +118,7 @@ FROM ducknng_decode_frame(
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
-| true | result    | manifest | 6            |
+| true | result    | manifest | 7            |
 +------+-----------+----------+--------------+
 ```
 
@@ -118,31 +142,31 @@ FROM ducknng_decode_frame(
 
 **AIO: launch two requests in parallel, collect both later.**
 `ducknng_request_raw_aio(...)` returns immediately with an integer AIO
-handle. `ducknng_aio_collect(...)` blocks until all handles are ready.
+handle. A list collect waits until any handle is ready and returns the
+terminal subset; this example collects each handle separately so both
+replies are shown.
 
 ``` sql
 CREATE TEMP TABLE tour_aios AS
-SELECT
-  ducknng_request_raw_aio(
-    getvariable('tour_url'),
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000, getvariable('tour_tls')::UBIGINT
-  ) AS aio1,
-  ducknng_request_raw_aio(
-    getvariable('tour_url'),
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000, getvariable('tour_tls')::UBIGINT
-  ) AS aio2;
--- aio_collect blocks until both frames are ready then returns one row per handle.
-SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
-FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM tour_aios), 1000)
-ORDER BY aio_id;
+SELECT ducknng_request_raw_aio(
+         getvariable('tour_url'),
+         from_hex('01000000000000000000000000000000000000000000'),
+         1000 + i::INTEGER * 0,
+         getvariable('tour_tls')::UBIGINT
+       ) AS aio_id
+FROM range(2) t(i);
+-- A one-element collect waits for that specific handle.
+SELECT count(*) AS replies,
+       bool_and(c.ok) AS all_ok,
+       bool_and(octet_length(c.frame) > 0) AS all_have_frames
+FROM tour_aios AS a,
+LATERAL ducknng_aio_collect(list_value(a.aio_id), 1000) AS c;
 
-+--------+------+-----------+
-| aio_id |  ok  | has_frame |
-+--------+------+-----------+
-| 1      | true | true      |
-+--------+------+-----------+
++---------+--------+-----------------+
+| replies | all_ok | all_have_frames |
++---------+--------+-----------------+
+| 2       | true   | true            |
++---------+--------+-----------------+
 ```
 
 **`ducknng_ncurl` — HTTP client primitive.** The framed RPC mount
@@ -175,14 +199,14 @@ FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
 +------+-----------+----------+--------------+
-| true | result    | manifest | 6            |
+| true | result    | manifest | 7            |
 +------+-----------+----------+--------------+
 ```
 
 **Outbound HTTP profile.** Caller SQL passes a profile id and ordinary
-request fields. `ducknng` checks the profile scope, injects the auth
-header inside the HTTP client path, and keeps profile introspection
-redacted.
+request fields. `ducknng` checks the profile scope, injects the profile
+auth header inside the HTTP client path, rejects caller attempts to
+override that header, and keeps profile introspection redacted.
 
 ``` sql
 SELECT CASE WHEN ducknng_register_http_route(
@@ -359,7 +383,8 @@ Explicit cleanup — everything that was opened must be explicitly
 stopped, closed, or dropped.
 
 ``` sql
-SELECT ducknng_aio_drop(aio1) AND ducknng_aio_drop(aio2) AS aios_dropped FROM tour_aios;
+SELECT bool_and(ducknng_aio_drop(aio_id)) AS aios_dropped
+FROM tour_aios;
 DROP TABLE tour_aios;
 DROP TABLE tour_session;
 DROP TABLE tour_session2;
@@ -413,6 +438,15 @@ make release
 # Run the SQL test suite against the release build.
 make test_release
 
+# Run the ducknng-only RPC microbench harness.
+make rpc_bench
+
+# Render the bulk benchmark report to bench/rpc_bulk_compare.md.
+# This compares ducknng RPC over http/tcp/ipc/ws in both arrow_ipc_stream
+# and ducknng_quack_batch modes, plus Quack over its public client path.
+# Requires network access to INSTALL quack FROM core_nightly.
+make rpc_bulk_compare
+
 # Render README.md and demo/subscriber_gateway.md from their Rmd sources.
 make docs
 ```
@@ -422,25 +456,42 @@ pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The
 extension targets `TARGET_DUCKDB_VERSION`. It builds with
 `USE_UNSTABLE_C_API=1` to access DuckDB’s native Arrow conversion API
 (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
-result-to-IPC emit path. Deprecated entrypoints are avoided. The
-unstable functions in use are tracked by
-`tools/used_duckdb_unstable_api.R`; the table below is generated fresh
-on every README render:
+result-to-IPC emit path. The only deprecated-entrypoint exception is the
+pending-result streaming pair, isolated in
+`src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.5.2 does not
+yet expose an undeprecated C API for pending execution with incremental
+chunk delivery. Query sessions do not silently fall back to materialized
+results; when DuckDB provides a replacement streaming API, that
+compatibility boundary is the single place to change. `make rpc_bench`
+keeps the existing raw-RPC microbench path. `make rpc_bulk_compare` now
+renders `bench/rpc_bulk_compare.md`, a benchmark report that records
+machine details, compares ducknng RPC over `http`, `tcp`, `ipc`, and
+`ws` in both `arrow_ipc_stream` and `ducknng_quack_batch` modes,
+compares Quack over its public client/server path, and includes
+concurrent reader, writer, and mixed reader/writer RPC slices. The
+writer slice is a set-oriented remote SQL write dispatch benchmark, not
+a client-side bulk append protocol. The report generates a local TPC-H
+dataset if needed and installs `quack` from `core_nightly`. The unstable
+functions in use are tracked by `tools/used_duckdb_unstable_api.R`; the
+table below is generated fresh on every README render:
 
 | ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
+| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_result_chunk_count`, `duckdb_result_get_chunk`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                |     4 |
+| `unstable_new_append_functions`                | `duckdb_appender_error_data`                                                                                                                                                                                                                                                                                                            |     1 |
 | `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
 | `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
 | `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
 | `unstable_new_logger_functions`                | `duckdb_create_log_storage`, `duckdb_destroy_log_storage`, `duckdb_log_storage_set_extra_data`, `duckdb_log_storage_set_name`, `duckdb_log_storage_set_write_log_entry`, `duckdb_register_log_storage`                                                                                                                                  |     6 |
-| `unstable_new_open_connect_functions`          | `duckdb_connection_get_arrow_options`, `duckdb_destroy_arrow_options`                                                                                                                                                                                                                                                                   |     2 |
+| `unstable_new_open_connect_functions`          | `duckdb_client_context_get_connection_id`, `duckdb_connection_get_arrow_options`, `duckdb_connection_get_client_context`, `duckdb_destroy_arrow_options`, `duckdb_destroy_client_context`                                                                                                                                               |     5 |
 | `unstable_new_prepared_statement_functions`    | `duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_logical_type`, `duckdb_prepared_statement_column_name`                                                                                                                                                                                                      |     3 |
 | `unstable_new_query_execution_functions`       | `duckdb_result_get_arrow_options`                                                                                                                                                                                                                                                                                                       |     1 |
-| `unstable_new_scalar_function_functions`       | `duckdb_scalar_function_set_bind`                                                                                                                                                                                                                                                                                                       |     1 |
+| `unstable_new_scalar_function_functions`       | `duckdb_scalar_function_bind_set_error`, `duckdb_scalar_function_get_bind_data`, `duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_set_bind`, `duckdb_scalar_function_set_bind_data`, `duckdb_scalar_function_set_bind_data_copy`                                                                                    |     6 |
 | `unstable_new_scalar_function_state_functions` | `duckdb_scalar_function_set_init`                                                                                                                                                                                                                                                                                                       |     1 |
 | `unstable_new_string_functions`                | `duckdb_valid_utf8_check`                                                                                                                                                                                                                                                                                                               |     1 |
+| `unstable_new_table_function_functions`        | `duckdb_table_function_get_client_context`                                                                                                                                                                                                                                                                                              |     1 |
 | `unstable_new_value_functions`                 | `duckdb_create_map_value`, `duckdb_create_time_ns`, `duckdb_create_union_value`                                                                                                                                                                                                                                                         |     3 |
-| `unstable_new_vector_functions`                | `duckdb_unsafe_vector_assign_string_element_len`                                                                                                                                                                                                                                                                                        |     1 |
+| `unstable_new_vector_functions`                | `duckdb_create_selection_vector`, `duckdb_create_vector`, `duckdb_destroy_selection_vector`, `duckdb_destroy_vector`, `duckdb_selection_vector_get_data_ptr`, `duckdb_unsafe_vector_assign_string_element_len`, `duckdb_vector_copy_sel`                                                                                                |     7 |
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
 All tests live under `test/sql/` as `.test` files. The public function
@@ -491,33 +542,42 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Service Control
 
-| name                                  | kind   | arguments                                                                                     | returns   | description                                                                                                                                        |
-|---------------------------------------|--------|-----------------------------------------------------------------------------------------------|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_start_server`                | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN` | Start a named ducknng service and choose the carrier from the listen URL scheme.                                                                   |
-| `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN` | Stop a named ducknng service.                                                                                                                      |
-| `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT` | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
-| `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN` | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
+| name                                  | kind   | arguments                                                                                     | returns                                                                                                                                                                                                                                                                   | description                                                                                                                                        |
+|---------------------------------------|--------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_start_server`                | scalar | `name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]` | `BOOLEAN`                                                                                                                                                                                                                                                                 | Start a named ducknng service and choose the carrier from the listen URL scheme.                                                                   |
+| `ducknng_stop_server`                 | scalar | `name`                                                                                        | `BOOLEAN`                                                                                                                                                                                                                                                                 | Stop a named ducknng service.                                                                                                                      |
+| `ducknng_service_inflight`            | scalar | `name`                                                                                        | `UBIGINT`                                                                                                                                                                                                                                                                 | Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs. |
+| `ducknng_set_service_execution_model` | scalar | `name, model`                                                                                 | `BOOLEAN`                                                                                                                                                                                                                                                                 | Set the DuckDB connection execution model used by service-side SQL.                                                                                |
+| `ducknng_transport_capabilities`      | scalar |                                                                                               | `VARCHAR`                                                                                                                                                                                                                                                                 | Return the active net backend’s capability descriptor as a JSON object.                                                                            |
+| `ducknng_list_transport_capabilities` | table  |                                                                                               | `TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, http_response_stream VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)` | List the capability contract for every build target; exactly one row is active.                                                                    |
+| `ducknng_set_execution_pool_max`      | scalar | `n`                                                                                           | `UBIGINT`                                                                                                                                                                                                                                                                 | Set the runtime execution-connection pool grow ceiling and return the effective value.                                                             |
+| `ducknng_execution_pool_max`          | scalar |                                                                                               | `UBIGINT`                                                                                                                                                                                                                                                                 | Return the current execution-connection pool grow ceiling.                                                                                         |
 
 ## Introspection
 
-| name                         | kind   | arguments                     | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | description                                                                                                                                                                                                                                             |
-|------------------------------|--------|-------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_list_servers`       | table  |                               | `TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_principal UBIGINT, max_reply_bytes_per_principal UBIGINT, max_session_open_rate_per_principal UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)` | List registered ducknng services.                                                                                                                                                                                                                       |
-| `ducknng_read_monitor`       | table  | `name, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                     | Read the bounded per-service NNG pipe monitor event stream.                                                                                                                                                                                             |
-| `ducknng_monitor_status`     | table  | `name`                        | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Return pipe monitor ring status and active-pipe counters for a running service.                                                                                                                                                                         |
-| `ducknng_list_pipes`         | table  | `name`                        | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                               | List currently active NNG pipes for a running service.                                                                                                                                                                                                  |
-| `ducknng_log_entries`        | table  |                               | `TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring.                                                                                                                                                               |
-| `ducknng_enable_log_capture` | scalar |                               | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Wire the ducknng log ring into DuckDB’s internal logger so that DuckDB log entries are captured and visible through ducknng_log_entries(). Returns TRUE if capture is active after the call, FALSE if registration failed. Safe to call multiple times. |
+| name                          | kind   | arguments                          | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | description                                                                                                                                                                                                                                             |
+|-------------------------------|--------|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_list_servers`        | table  |                                    | `TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_peer_identity UBIGINT, max_reply_bytes_per_peer_identity UBIGINT, max_session_open_rate_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)` | List registered ducknng services.                                                                                                                                                                                                                       |
+| `ducknng_read_monitor`        | table  | `name, after_seq, max_events`      | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                 | Read the bounded per-service NNG pipe monitor event stream.                                                                                                                                                                                             |
+| `ducknng_monitor_status`      | table  | `name`                             | `TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Return pipe monitor ring status and active-pipe counters for a running service.                                                                                                                                                                         |
+| `ducknng_list_pipes`          | table  | `name`                             | `TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | List currently active NNG pipes for a running service.                                                                                                                                                                                                  |
+| `ducknng_nng_stats`           | table  |                                    | `TABLE(scope VARCHAR, name VARCHAR, type VARCHAR, unit VARCHAR, value UBIGINT, svalue VARCHAR, description VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Snapshot of NNG’s native statistics tree, flattened into rows.                                                                                                                                                                                          |
+| `ducknng_monitor_socket`      | scalar | `socket_id`                        | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Opt a client socket into pipe-event monitoring. Subsequent pipe add/remove events are captured into a per-socket ring readable with ducknng_read_socket_monitor().                                                                                      |
+| `ducknng_read_socket_monitor` | table  | `socket_id, after_seq, max_events` | `TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, event VARCHAR, dropped UBIGINT)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Read captured pipe events for a monitored client socket. event is ‘add’ or ‘remove’; dropped is the running count of events evicted from the ring.                                                                                                      |
+| `ducknng_socket_monitor_wait` | scalar | `socket_id, after_seq, timeout_ms` | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Block until a monitored socket records a pipe event newer than after_seq, or until timeout_ms elapses; returns the current newest event seq.                                                                                                            |
+| `ducknng_log_entries`         | table  |                                    | `TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring.                                                                                                                                                               |
+| `ducknng_enable_log_capture`  | scalar |                                    | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Wire the ducknng log ring into DuckDB’s internal logger so that DuckDB log entries are captured and visible through ducknng_log_entries(). Returns TRUE if capture is active after the call, FALSE if registration failed. Safe to call multiple times. |
 
 ## Method Registry
 
-| name                           | kind   | arguments             | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | description                                                                            |
-|--------------------------------|--------|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| `ducknng_register_exec_method` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in exec RPC method explicitly.                                      |
-| `ducknng_set_method_auth`      | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Set descriptor-level verified-peer-identity authorization for a registered RPC method. |
-| `ducknng_unregister_method`    | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister a method from the runtime registry.                                         |
-| `ducknng_unregister_family`    | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister all methods in a family and return the number removed.                      |
-| `ducknng_list_methods`         | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry.                     |
+| name                              | kind   | arguments             | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | description                                                                                 |
+|-----------------------------------|--------|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `ducknng_register_exec_method`    | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in exec RPC method explicitly.                                           |
+| `ducknng_register_upload_methods` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
+| `ducknng_set_method_auth`         | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Set descriptor-level verified-peer-identity authorization for a registered RPC method.      |
+| `ducknng_unregister_method`       | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister a method from the runtime registry.                                              |
+| `ducknng_unregister_family`       | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister all methods in a family and return the number removed.                           |
+| `ducknng_list_methods`            | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry.                          |
 
 ## Primitive Transport
 
@@ -549,31 +609,36 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Transport Security
 
-| name                                 | kind   | arguments                                                                                                                                                                                                      | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                    | description                                                                                                                     |
-|--------------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_list_tls_configs`           | table  |                                                                                                                                                                                                                | `TABLE(tls_config_id UBIGINT, source VARCHAR, enabled BOOLEAN, has_cert_key_file BOOLEAN, has_ca_file BOOLEAN, has_cert_pem BOOLEAN, has_key_pem BOOLEAN, has_ca_pem BOOLEAN, has_password BOOLEAN, auth_mode INTEGER, peer_allowlist_active BOOLEAN, peer_allowlist_count UBIGINT, peer_allowlist_json VARCHAR)`                                                                                                                                          | List registered TLS config handles and the kinds of material they contain.                                                      |
-| `ducknng_drop_tls_config`            | scalar | `tls_config_id`                                                                                                                                                                                                | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Remove a registered TLS config handle from the runtime.                                                                         |
-| `ducknng_set_tls_peer_allowlist`     | scalar | `tls_config_id, identities_json`                                                                                                                                                                               | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Set the default exact peer-identity allowlist on a TLS config handle.                                                           |
-| `ducknng_set_service_peer_allowlist` | scalar | `name, identities_json`                                                                                                                                                                                        | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Dynamically set the exact peer-identity allowlist for a running service.                                                        |
-| `ducknng_set_service_ip_allowlist`   | scalar | `name, cidrs_json`                                                                                                                                                                                             | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Dynamically set the IP/CIDR remote-address allowlist for a running service.                                                     |
-| `ducknng_set_service_limits`         | scalar | `name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_principal[, max_reply_bytes_per_principal[, max_session_open_rate_per_principal]]]]]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Set service resource limits.                                                                                                    |
-| `ducknng_auth_context`               | table  |                                                                                                                                                                                                                | `TABLE(phase VARCHAR, service_name VARCHAR, transport_family VARCHAR, scheme VARCHAR, listen VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, tls_verified BOOLEAN, peer_identity VARCHAR, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, http_method VARCHAR, http_path VARCHAR, content_type VARCHAR, body_bytes UBIGINT, rpc_method VARCHAR, rpc_type VARCHAR, payload_bytes UBIGINT)` | Expose the current request context to a SQL authorization callback.                                                             |
-| `ducknng_set_service_authorizer`     | scalar | `name, authorizer_sql`                                                                                                                                                                                         | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Install or clear a service-level SQL authorization callback evaluated uniformly for framed RPC requests before method dispatch. |
-| `ducknng_self_signed_tls_config`     | scalar | `common_name, valid_days, auth_mode`                                                                                                                                                                           | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Generate a self-signed development certificate and register it as a TLS config handle.                                          |
-| `ducknng_tls_config_from_pem`        | scalar | `cert_pem, key_pem, ca_pem, password, auth_mode`                                                                                                                                                               | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Register a TLS config handle from in-memory PEM material.                                                                       |
-| `ducknng_tls_config_from_files`      | scalar | `cert_key_file, ca_file, password, auth_mode`                                                                                                                                                                  | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Register a TLS config handle from file-backed certificate material.                                                             |
+| name                                 | kind   | arguments                                                                                                                                                                                                                  | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                    | description                                                                                                                     |
+|--------------------------------------|--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_list_tls_configs`           | table  |                                                                                                                                                                                                                            | `TABLE(tls_config_id UBIGINT, source VARCHAR, enabled BOOLEAN, has_cert_key_file BOOLEAN, has_ca_file BOOLEAN, has_cert_pem BOOLEAN, has_key_pem BOOLEAN, has_ca_pem BOOLEAN, has_password BOOLEAN, auth_mode INTEGER, peer_allowlist_active BOOLEAN, peer_allowlist_count UBIGINT, peer_allowlist_json VARCHAR)`                                                                                                                                          | List registered TLS config handles and the kinds of material they contain.                                                      |
+| `ducknng_drop_tls_config`            | scalar | `tls_config_id`                                                                                                                                                                                                            | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Remove a registered TLS config handle from the runtime.                                                                         |
+| `ducknng_set_tls_peer_allowlist`     | scalar | `tls_config_id, identities_json`                                                                                                                                                                                           | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Set the default exact peer-identity allowlist on a TLS config handle.                                                           |
+| `ducknng_set_service_peer_allowlist` | scalar | `name, identities_json`                                                                                                                                                                                                    | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Dynamically set the exact peer-identity allowlist for a running service.                                                        |
+| `ducknng_set_service_ip_allowlist`   | scalar | `name, cidrs_json`                                                                                                                                                                                                         | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Dynamically set the IP/CIDR remote-address allowlist for a running service.                                                     |
+| `ducknng_set_service_limits`         | scalar | `name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Set service resource limits.                                                                                                    |
+| `ducknng_auth_context`               | table  |                                                                                                                                                                                                                            | `TABLE(phase VARCHAR, service_name VARCHAR, transport_family VARCHAR, scheme VARCHAR, listen VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, tls_verified BOOLEAN, peer_identity VARCHAR, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, http_method VARCHAR, http_path VARCHAR, content_type VARCHAR, body_bytes UBIGINT, rpc_method VARCHAR, rpc_type VARCHAR, payload_bytes UBIGINT)` | Expose the current request context to a SQL authorization callback.                                                             |
+| `ducknng_set_service_authorizer`     | scalar | `name, authorizer_sql`                                                                                                                                                                                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Install or clear a service-level SQL authorization callback evaluated uniformly for framed RPC requests before method dispatch. |
+| `ducknng_self_signed_tls_config`     | scalar | `common_name, valid_days, auth_mode`                                                                                                                                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Generate a self-signed development certificate and register it as a TLS config handle.                                          |
+| `ducknng_tls_config_from_pem`        | scalar | `cert_pem, key_pem, ca_pem, password, auth_mode`                                                                                                                                                                           | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Register a TLS config handle from in-memory PEM material.                                                                       |
+| `ducknng_tls_config_from_files`      | scalar | `cert_key_file, ca_file, password, auth_mode`                                                                                                                                                                              | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Register a TLS config handle from file-backed certificate material.                                                             |
 
 ## HTTP Transport
 
-| name                            | kind   | arguments                                                                                                                 | returns                                                                                                                                                                                                                                                              | description                                                                                                                         |
-|---------------------------------|--------|---------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_ncurl`                 | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                               | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
-| `ducknng_ncurl_aio`             | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `UBIGINT`                                                                                                                                                                                                                                                            | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
-| `ducknng_ncurl_aio_collect`     | table  | `aio_ids, wait_ms`                                                                                                        | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                               | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
-| `ducknng_ncurl_table`           | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                | `TABLE(dynamic by response Content-Type)`                                                                                                                                                                                                                            | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
-| `ducknng_register_http_profile` | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms]` | `BOOLEAN`                                                                                                                                                                                                                                                            | Register or replace an outbound HTTP credential profile with fail-closed request scope.                                             |
-| `ducknng_drop_http_profile`     | scalar | `profile_id`                                                                                                              | `BOOLEAN`                                                                                                                                                                                                                                                            | Drop a registered outbound HTTP credential profile.                                                                                 |
-| `ducknng_list_http_profiles`    | table  |                                                                                                                           | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT)` | List registered outbound HTTP profiles with redacted credential metadata.                                                           |
+| name                                    | kind   | arguments                                                                                                                                        | returns                                                                                                                                                                                                                                                                                           | description                                                                                                                         |
+|-----------------------------------------|--------|--------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_ncurl`                         | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                                            | Perform one HTTP or HTTPS request and return an in-band result row.                                                                 |
+| `ducknng_ncurl_aio`                     | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                         | Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.                                               |
+| `ducknng_ncurl_aio_collect`             | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)`                                                                                                                                                                            | Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.                      |
+| `ducknng_ncurl_stream_open_aio`         | scalar | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                         | Open an HTTP or HTTPS response stream asynchronously and return an aio handle for the response headers.                             |
+| `ducknng_ncurl_stream_open_aio_collect` | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, status INTEGER, error VARCHAR, headers_json VARCHAR)`                                                                                                                                                                                       | Wait for streaming HTTP open aios and return response status, headers, and a readable stream handle.                                |
+| `ducknng_ncurl_stream_recv_aio`         | scalar | `stream_id, max_bytes, timeout_ms`                                                                                                               | `UBIGINT`                                                                                                                                                                                                                                                                                         | Launch one cancellable asynchronous raw-body receive from an opened HTTP response stream.                                           |
+| `ducknng_ncurl_stream_recv_aio_collect` | table  | `aio_ids, wait_ms`                                                                                                                               | `TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, error VARCHAR, body BLOB, end_of_stream BOOLEAN)`                                                                                                                                                                                           | Wait for streaming HTTP receive aios and return one raw body slice or explicit end-of-stream result per ready handle.               |
+| `ducknng_ncurl_stream_close`            | scalar | `stream_id`                                                                                                                                      | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Close and release an HTTP response stream handle.                                                                                   |
+| `ducknng_ncurl_table`                   | table  | `url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]`                                                                       | `TABLE(dynamic by response Content-Type)`                                                                                                                                                                                                                                                         | Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers. |
+| `ducknng_register_http_profile`         | scalar | `profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Register or replace an outbound HTTP credential profile with fail-closed request scope.                                             |
+| `ducknng_drop_http_profile`             | scalar | `profile_id`                                                                                                                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                         | Drop a registered outbound HTTP credential profile.                                                                                 |
+| `ducknng_list_http_profiles`            | table  |                                                                                                                                                  | `TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)` | List registered outbound HTTP profiles with redacted credential metadata.                                                           |
 
 ## Body Codecs
 
@@ -640,17 +705,18 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## RPC Helper
 
-| name                           | kind   | arguments                         | returns                                                                                               | description                                                                                                                 |
-|--------------------------------|--------|-----------------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| `ducknng_get_rpc_manifest`     | table  | `url, tls_config_id`              | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)`                                                  | Request the RPC manifest and return a structured result row.                                                                |
-| `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id`              | `BLOB`                                                                                                | Request the RPC manifest and return the raw reply frame as BLOB.                                                            |
-| `ducknng_run_rpc`              | table  | `url, sql, tls_config_id`         | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row.                                                    |
-| `ducknng_run_rpc_params`       | table  | `url, sql, params, tls_config_id` | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute one parameterized metadata-oriented exec RPC and return a structured result row.                                    |
-| `ducknng_run_rpc_raw`          | scalar | `url, sql, tls_config_id`         | `BLOB`                                                                                                | Execute the exec RPC and return the raw reply frame as BLOB.                                                                |
-| `ducknng_query_rpc`            | table  | `url, sql, tls_config_id`         | `table`                                                                                               | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table. |
-| `ducknng_query_rpc_params`     | table  | `url, sql, params, tls_config_id` | `table`                                                                                               | Execute a parameterized row query through the session family and expose its Arrow rows as a DuckDB table.                   |
-| `ducknng_prepare_query`        | table  | `url, sql, tls_config_id`         | `table (zero rows with the prepared remote schema)`                                                   | Prepare exactly one remote SQL statement without executing it and expose its result schema.                                 |
-| `ducknng_prepare_query_params` | table  | `url, sql, params, tls_config_id` | `table (zero rows with the prepared remote schema)`                                                   | Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.  |
+| name                           | kind   | arguments                                          | returns                                                                                               | description                                                                                                                                                     |
+|--------------------------------|--------|----------------------------------------------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_get_rpc_manifest`     | table  | `url, tls_config_id`                               | `TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)`                                                  | Request the RPC manifest and return a structured result row.                                                                                                    |
+| `ducknng_get_rpc_manifest_raw` | scalar | `url, tls_config_id`                               | `BLOB`                                                                                                | Request the RPC manifest and return the raw reply frame as BLOB.                                                                                                |
+| `ducknng_run_rpc`              | table  | `url, sql, tls_config_id`                          | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute a metadata-oriented RPC call and return a structured result row.                                                                                        |
+| `ducknng_run_rpc_params`       | table  | `url, sql, params, tls_config_id`                  | `TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)` | Execute one parameterized metadata-oriented exec RPC and return a structured result row.                                                                        |
+| `ducknng_run_rpc_raw`          | scalar | `url, sql, tls_config_id`                          | `BLOB`                                                                                                | Execute the exec RPC and return the raw reply frame as BLOB.                                                                                                    |
+| `ducknng_query_rpc`            | table  | `url, sql, tls_config_id`                          | `table`                                                                                               | Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.                                     |
+| `ducknng_query_rpc_params`     | table  | `url, sql, params, tls_config_id`                  | `table`                                                                                               | Execute a parameterized row-returning query through the session family and expose its Arrow rows as a DuckDB table.                                             |
+| `ducknng_prepare_query`        | table  | `url, sql, tls_config_id`                          | `table (zero rows with the prepared remote schema)`                                                   | Prepare exactly one remote SQL statement without executing it and expose its result schema.                                                                     |
+| `ducknng_prepare_query_params` | table  | `url, sql, params, tls_config_id`                  | `table (zero rows with the prepared remote schema)`                                                   | Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.                                      |
+| `ducknng_upload_table`         | table  | `url, source_query, target_table[, tls_config_id]` | `TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)`                                                  | Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded. |
 
 ## RPC Session
 
@@ -792,10 +858,13 @@ SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 
 File-backed material uses
 `ducknng_tls_config_from_files(cert_key_file, ca_file, password, auth_mode)`.
-Set `auth_mode = 2` to require client certificates (mTLS). The
-dispatcher derives caller identity from the first verified SAN
-(`tls:san:<value>`) falling back to CN (`tls:cn:<name>`). Peer identity
-and IP/CIDR allowlists narrow admission before SQL dispatch.
+TLS client handles verify the remote server certificate by default when
+`auth_mode = 0`; on listeners, `auth_mode = 0` means ordinary server TLS
+without requiring client certificates. Set listener `auth_mode = 2` to
+require client certificates (mTLS). The dispatcher derives caller
+identity from the first verified SAN (`tls:san:<value>`) falling back to
+CN (`tls:cn:<name>`). Peer identity and IP/CIDR allowlists narrow
+admission before SQL dispatch.
 
 ``` sql
 SET VARIABLE tls_files = ducknng_tls_config_from_files(
@@ -883,20 +952,20 @@ SELECT ducknng_stop_server('ws_demo');
 
 ### Registry: manifest and exec
 
-Every server starts with discovery, schema preparation, and the
-query-session family. Unary `exec` is registered explicitly.
+Every server starts with a `manifest` method and nothing else. `exec` is
+registered explicitly.
 
 ``` sql
 SELECT ducknng_start_server(
   'rpc_demo', 'ipc:///tmp/ducknng_readme_rpc.ipc', 1, 134217728, 300000, 0
 );
--- Inspect the registry policy that also feeds the manifest.
-SELECT name, family, session_behavior, mutates_state, requires_auth, disabled
+-- Default registry: manifest only.
+SELECT name, family, response_mode, requires_auth, disabled
 FROM ducknng_list_methods()
 ORDER BY name;
 -- Register exec (false = no auth required).
 SELECT ducknng_register_exec_method(false) AS registered_exec;
--- The manifest now also reports the opt-in exec method.
+-- Manifest now reports two methods.
 WITH m AS (
   SELECT manifest
   FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_readme_rpc.ipc', 0::UBIGINT)
@@ -911,16 +980,17 @@ FROM m;
 +------------------------------------------------------------------------------------------------+
 | true                                                                                           |
 +------------------------------------------------------------------------------------------------+
-+---------------+---------+------------------+---------------+---------------+----------+
-|     name      | family  | session_behavior | mutates_state | requires_auth | disabled |
-+---------------+---------+------------------+---------------+---------------+----------+
-| cancel        | query   | cancels_session  | true          | false         | false    |
-| close         | query   | closes_session   | true          | false         | false    |
-| fetch         | query   | requires_session | false         | false         | false    |
-| manifest      | control | stateless        | false         | false         | false    |
-| query_open    | query   | opens_session    | true          | false         | false    |
-| query_prepare | query   | stateless        | false         | false         | false    |
-+---------------+---------+------------------+---------------+---------------+----------+
++---------------+---------+---------------+---------------+----------+
+|     name      | family  | response_mode | requires_auth | disabled |
++---------------+---------+---------------+---------------+----------+
+| cancel        | query   | metadata_only | false         | false    |
+| close         | query   | metadata_only | false         | false    |
+| fetch         | query   | rows          | false         | false    |
+| handshake     | control | metadata_only | false         | false    |
+| manifest      | control | metadata_only | false         | false    |
+| query_open    | query   | session_open  | false         | false    |
+| query_prepare | query   | rows          | false         | false    |
++---------------+---------+---------------+---------------+----------+
 +-----------------+
 | registered_exec |
 +-----------------+
@@ -929,9 +999,63 @@ FROM m;
 +-------------+--------------+----------+
 | server_name | method_count | has_exec |
 +-------------+--------------+----------+
-| ducknng     | 7            | true     |
+| ducknng     | 8            | true     |
 +-------------+--------------+----------+
 ```
+
+### Registry: the upload lane
+
+The upload lane is the client-to-server mirror of the query family:
+instead of fetching result batches, a client streams
+`ducknng_quack_batch` tuples *into* a server table. Like `exec`, it is
+opt-in and exposes no surface until the host registers it.
+`ducknng_register_upload_methods(false)` registers it without an auth
+requirement (the no-argument form defaults the same way); it reuses the
+query family’s execution-subject admission, session owner tokens, and
+per-peer-identity limits.
+
+``` sql
+-- Register the upload lane (false = no auth required), mirroring exec.
+SELECT ducknng_register_upload_methods(false) AS registered_upload;
+-- The four upload-family methods are now advertised.
+SELECT name, family, response_mode, requires_auth, disabled
+FROM ducknng_list_methods()
+WHERE family = 'upload'
+ORDER BY name;
++-------------------+
+| registered_upload |
++-------------------+
+| true              |
++-------------------+
++---------------+--------+---------------+---------------+----------+
+|     name      | family | response_mode | requires_auth | disabled |
++---------------+--------+---------------+---------------+----------+
+| upload_abort  | upload | metadata_only | false         | false    |
+| upload_append | upload | metadata_only | false         | false    |
+| upload_commit | upload | metadata_only | false         | false    |
+| upload_open   | upload | session_open  | false         | false    |
++---------------+--------+---------------+---------------+----------+
+```
+
+The flow is `upload_open` → `upload_append`\* → `upload_commit` (or
+`upload_abort`). `upload_open` takes JSON `{target_table, mode}` (v1
+appends to an existing table), acquires a session connection, begins a
+transaction, and opens a DuckDB appender. Each `upload_append` body is a
+counted control prefix (`[session_id u64 LE][token_len u16 LE][token]`)
+followed by a raw quack batch, which the server decodes straight into
+the session appender; the batch’s column names, order, and types must
+match the target table exactly, since the appender appends by ordinal.
+`upload_commit` flushes and commits; `upload_abort` — and any idle prune
+or shutdown — rolls the transaction back so partially uploaded rows
+never persist. The counted token is matched over its full length, and
+upload and query control methods reject each other’s sessions. The wire
+contract is pinned in `docs/protocol.md`. The ergonomic
+`ducknng_upload_table(url, source_query, target_table[, tls_config_id])`
+table function drives this end-to-end: it runs `source_query` locally
+and streams the result rows into `target_table` over the upload lane
+(the batch column names, order, and types must match the target),
+returning the uploaded row and client-sent byte counts. A runnable
+round-trip is in `test/sql/ducknng_upload_roundtrip.test`.
 
 ### Synchronous helpers
 
@@ -974,36 +1098,9 @@ FROM ducknng_query_rpc(
 +----+-------+
 ```
 
-Arrow IPC carries temporal, decimal, list, struct, union, large-string,
-large-binary, fixed-size-binary, and duration values through the same
-path. Supported mappings are documented in `docs/types.md`.
-
-``` sql
-SELECT d = DATE '2024-01-02' AS date_ok,
-       ts = TIMESTAMP '2024-01-02 03:04:05.123456' AS ts_ok,
-       dec = 123.45::DECIMAL(10,2) AS decimal_ok,
-       xs[2] IS NULL AND xs[3] = 3 AS list_ok,
-       st.a = 7 AND st.b = 'bee' AS struct_ok
-FROM ducknng_query_rpc(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT DATE ''2024-01-02'' AS d,
-          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
-          123.45::DECIMAL(10,2) AS dec,
-          [1, NULL, 3]::INTEGER[] AS xs,
-          {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
-  0::UBIGINT
-);
-+---------+-------+------------+---------+-----------+
-| date_ok | ts_ok | decimal_ok | list_ok | struct_ok |
-+---------+-------+------------+---------+-----------+
-| true    | true  | true       | true    | true      |
-+---------+-------+------------+---------+-----------+
-```
-
-The `_params` helpers carry a typed Arrow `STRUCT`. Child order binds
-SQL `?` parameters; child names are descriptive. Values are bound
-through DuckDB and are never interpolated into SQL text. A top-level
-null needs SQL type context, such as `?::BIGINT`.
+The `_params` helpers carry a typed Arrow `STRUCT`; child order binds
+SQL `?` parameters and values are never interpolated into SQL text. Use
+explicit SQL type context for a null parameter, such as `?::BIGINT`.
 
 ``` sql
 SELECT rows_changed
@@ -1048,13 +1145,110 @@ FROM ducknng_prepare_query_params(
 
 The query helpers discover the remote result schema during DuckDB bind,
 which may happen more than once; use them for read-only or idempotent
-SQL. The fixed-schema `run_rpc` helpers send during scan, so `EXPLAIN`
-does not perform the remote statement. This avoids bind-time mutation
-but does not make a network write exactly once; retry and deduplication
-policy belongs to the application.
+SQL. The fixed-schema `run_rpc` helpers send `exec` during scan, so
+`EXPLAIN` does not perform the remote statement. This avoids bind-time
+mutation but does not make a network write exactly once: after a lost
+reply, retry policy belongs to the application.
+
+You can also request the Quack-derived batch serializer over the same
+session contract. Unlike upstream
+[Quack](https://github.com/duckdb/duckdb-quack), ducknng keeps transport
+choice separate from row serialization, so the same
+`ducknng_quack_batch` mode can ride over `http`, `tcp`, `ipc`, or `ws`.
+Version and schema compatibility belong to the negotiated ducknng
+session contract rather than to a suffix on the serializer token; full
+Quack protocol traffic uses `application/vnd.duckdb` messages and
+negotiates `quackVersion` during the connection exchange, but this fetch
+payload is not wrapped in that Quack connection envelope.
+`ducknng.fetch_batch_chunks` controls the default number of DuckDB
+chunks requested per fetch; it defaults to 12 and applies to Arrow IPC
+and `ducknng_quack_batch` alike unless the client sends an explicit
+`batch_rows` hint.
+
+``` sql
+SELECT *
+FROM ducknng_query_rpc_mode(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT i, i > 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+);
++----+-------+
+| i  | gt_10 |
++----+-------+
+| 10 | false |
+| 11 | true  |
+| 12 | true  |
+| 13 | true  |
++----+-------+
+```
+
+The Quack-derived mode also carries nested DuckDB values through the
+same RPC/session lifecycle. Its decoder materializes DuckDB `CONSTANT`,
+`DICTIONARY`, and integer `SEQUENCE` vectors into flat C API output,
+including recursive dictionary values, while rejecting malformed
+selections, unbounded compressed expansion, and unsupported FSST
+vectors. Canonical chunks repeat and validate the `DataChunk`
+logical-type list. The pure-C encoder remains flat because DuckDB’s C
+API does not expose source compression state. A normal SQL query cannot
+reliably force a particular compressed source-vector shape through that
+API, so the executable compressed-vector fixtures are generated by
+`tools/quack_compressed_fixtures.R` and asserted in
+`test/sql/ducknng_body_codecs.test` rather than rendered as opaque
+hexadecimal output here.
+
+This is not a claim over every logical type in every DuckDB release.
+DuckDB v1.5.2 has `GEOMETRY` and `VARIANT`, but the current
+Quack-derived codec rejects both: geometry carries versioned format and
+optional CRS metadata, while that release’s C API has no
+`DUCKDB_TYPE_VARIANT` constructor or vector contract. They are not
+silently projected to `BLOB` or `STRUCT`.
+
+``` sql
+SELECT st.a = 7 AS struct_ok,
+       st.xs = [1, 2, 3]::INTEGER[] AS nested_list_ok
+FROM ducknng_query_rpc_mode(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT {''a'': 7::INTEGER, ''xs'': [1,2,3]::INTEGER[]} AS st',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+);
++-----------+----------------+
+| struct_ok | nested_list_ok |
++-----------+----------------+
+| true      | true           |
++-----------+----------------+
+```
+
+Arrow IPC carries temporal, decimal, list, struct, union, large-string,
+large-binary, fixed-size-binary, and duration values through the same
+path. Supported mappings are documented in `docs/types.md`.
+
+``` sql
+SELECT d = DATE '2024-01-02' AS date_ok,
+       ts = TIMESTAMP '2024-01-02 03:04:05.123456' AS ts_ok,
+       dec = 123.45::DECIMAL(10,2) AS decimal_ok,
+       xs[2] IS NULL AND xs[3] = 3 AS list_ok,
+       st.a = 7 AND st.b = 'bee' AS struct_ok
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_readme_rpc.ipc',
+  'SELECT DATE ''2024-01-02'' AS d,
+          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
+          123.45::DECIMAL(10,2) AS dec,
+          [1, NULL, 3]::INTEGER[] AS xs,
+          {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
+  0::UBIGINT
+);
++---------+-------+------------+---------+-----------+
+| date_ok | ts_ok | decimal_ok | list_ok | struct_ok |
++---------+-------+------------+---------+-----------+
+| true    | true  | true       | true    | true      |
++---------+-------+------------+---------+-----------+
+```
 
 `ducknng_parse_body(...)` decodes content-type-tagged BLOBs. The
-built-in providers cover Arrow IPC, JSON, ducknng frames, and a text/raw
+built-in providers cover Arrow IPC, JSON, ducknng frames, the ducknng
+`application/vnd.ducknng.quack-batch` batch media type, and a text/raw
 fallback.
 
 ``` sql
@@ -1065,20 +1259,21 @@ FROM ducknng_parse_body(
   'application/json; charset=utf-8'
 )
 ORDER BY a;
-+---------------+-----------------------------+
-|   provider    |           output            |
-+---------------+-----------------------------+
-| arrow_ipc     | dynamic table               |
-| csv           | dynamic table               |
-| ducknng_frame | decoded frame columns       |
-| form          | name VARCHAR, value VARCHAR |
-| json          | dynamic table               |
-| ndjson        | dynamic table               |
-| parquet       | dynamic table               |
-| raw           | body BLOB                   |
-| text          | body_text VARCHAR           |
-| tsv           | dynamic table               |
-+---------------+-----------------------------+
++---------------------+-----------------------------+
+|      provider       |           output            |
++---------------------+-----------------------------+
+| arrow_ipc           | dynamic table               |
+| csv                 | dynamic table               |
+| ducknng_frame       | decoded frame columns       |
+| ducknng_quack_batch | dynamic table               |
+| form                | name VARCHAR, value VARCHAR |
+| json                | dynamic table               |
+| ndjson              | dynamic table               |
+| parquet             | dynamic table               |
+| raw                 | body BLOB                   |
+| text                | body_text VARCHAR           |
+| tsv                 | dynamic table               |
++---------------------+-----------------------------+
 +---+---+
 | a | b |
 +---+---+
@@ -1472,10 +1667,12 @@ SELECT ducknng_stop_server('session_aio');
 ### `ducknng_ncurl` — HTTP client primitive
 
 `ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)`
-is the low-level HTTP/HTTPS transport primitive. A local `nanonext`
-HTTPS server is started during README rendering for the TLS example; the
-server definition is shown because it is part of the example rather than
-hidden setup.
+is the low-level HTTP/HTTPS transport primitive. Its `headers_json`
+argument uses `[{"name":"...","value":"..."}]` arrays; header names must
+be HTTP tokens and values must not contain CRLF or other control
+characters. A local `nanonext` HTTPS server is started during README
+rendering for the TLS example; the server definition is shown because it
+is part of the example rather than hidden setup.
 
 ``` r
 library(nanonext)
@@ -1505,9 +1702,10 @@ server <- http_server(
 
 ``` sql
 -- Register a client TLS handle that trusts the self-signed demo CA.
+-- In client mode auth_mode = 0 still verifies the HTTPS server certificate.
 SET VARIABLE tls_http = ducknng_tls_config_from_files(
   NULL, '/tmp/ducknng_readme_http_demo_ca.pem', NULL,
-  2  -- auth_mode = require certificate validation
+  0
 );
 -- GET request over HTTPS.
 SELECT ok, status, error, body_text
@@ -1548,9 +1746,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
 +---------------------------------------------------------------------+
 ```
 
-`ducknng_ncurl_aio(...)` is the async form; `ducknng_ncurl_table(...)`
-parses the response body through the codec layer and returns a table
-directly.
+`ducknng_ncurl_aio(...)` is the unary async form and still completes
+with the full response body. The `ducknng_ncurl_stream_open_aio(...)` /
+`ducknng_ncurl_stream_recv_aio(...)` family below is the incremental
+form; `ducknng_ncurl_table(...)` parses a complete response body through
+the codec layer.
 
 ### `ducknng_start_server` on `http://` and `https://`
 
@@ -1591,7 +1791,7 @@ SELECT ducknng_stop_server('http_rpc');
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
-| ducknng     | 7            |
+| ducknng     | 12           |
 +-------------+--------------+
 
 +------+-----------+----------+
@@ -1726,6 +1926,38 @@ before traffic arrives. The subscriber gateway walkthrough in
 shows all three services sharing one DuckDB runtime without deadlocking
 because each uses `service_serialized_connection`.
 
+The runtime execution-connection pool opens a warm minimum and grows on
+demand up to a deterministic ceiling. Use the SQL controls below when a
+workload intentionally holds many query sessions or nested `query_rpc`
+scans at once.
+
+``` sql
+SELECT ducknng_execution_pool_max() AS current_pool_max;
+SELECT ducknng_set_execution_pool_max(96) AS effective_pool_max;
+SELECT ducknng_execution_pool_max() AS updated_pool_max;
+SELECT ducknng_set_execution_pool_max(64) AS reset_pool_max;
++------------------+
+| current_pool_max |
++------------------+
+| 64               |
++------------------+
++--------------------+
+| effective_pool_max |
++--------------------+
+| 96                 |
++--------------------+
++------------------+
+| updated_pool_max |
++------------------+
+| 96               |
++------------------+
++----------------+
+| reset_pool_max |
++----------------+
+| 64             |
++----------------+
+```
+
 ### Chunked streaming routes (SSE)
 
 `ducknng_add_stream_route` registers a route that responds with HTTP
@@ -1770,7 +2002,6 @@ is the concatenation of all SSE events written by the server.
 ``` sql
 SELECT ok, status, headers_json, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-SELECT ducknng_stop_server('http_sse');
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
 |  ok  | status |                                                                          headers_json                                                                           | body_text |
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
@@ -1782,6 +2013,92 @@ data: row 3
 
           |
 +------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
+```
+
+For incremental consumption, the open aio completes as soon as the
+response status and headers arrive. Each receive aio then returns raw
+application body bytes with HTTP chunk framing removed. Completion is a
+separate `end_of_stream = true` row, and the claimed stream is closed
+independently of its aio handles.
+
+``` sql
+SET VARIABLE sse_open_aio = ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT
+);
+CREATE TEMP TABLE sse_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  list_value(getvariable('sse_open_aio')::UBIGINT), 2000
+);
+SET VARIABLE sse_stream = (SELECT stream_id FROM sse_open WHERE ok);
+SET VARIABLE sse_recv_1 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS event, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_1')::UBIGINT), 2000
+);
+-- Further receives return the remaining events and finally explicit EOF.
+SET VARIABLE sse_recv_2 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_2 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_2')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_3 = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SET VARIABLE sse_body_3 = (
+  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
+    list_value(getvariable('sse_recv_3')::UBIGINT), 2000
+  )
+);
+SET VARIABLE sse_recv_eof = ducknng_ncurl_stream_recv_aio(
+  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT body, end_of_stream
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('sse_recv_eof')::UBIGINT), 2000
+);
+SELECT ducknng_ncurl_stream_close(getvariable('sse_stream')::UBIGINT);
+SELECT ducknng_aio_drop(getvariable('sse_open_aio')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_1')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_2')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_3')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('sse_recv_eof')::UBIGINT) AS dropped;
+DROP TABLE sse_open;
+SELECT ducknng_stop_server('http_sse');
+
+
+
+
++-------------------+---------------+
+|       event       | end_of_stream |
++-------------------+---------------+
+| data: row 1\\n\\n | false         |
++-------------------+---------------+
+
+
+
+
+
++------+---------------+
+| body | end_of_stream |
++------+---------------+
+| NULL | true          |
++------+---------------+
++--------------------------------------------------------------------------+
+| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS "UBIGINT")) |
++--------------------------------------------------------------------------+
+| true                                                                     |
++--------------------------------------------------------------------------+
++---------+
+| dropped |
++---------+
+| true    |
++---------+
+
 +---------------------------------+
 | ducknng_stop_server('http_sse') |
 +---------------------------------+
@@ -1957,9 +2274,9 @@ Profiles by use case:
 - **Trusted service mesh**: `tls+tcp://`, `wss://`, or `https://` with
   mTLS, exact peer allowlists, IP/CIDR allowlists, and service limits.
 - **Shared or semi-trusted clients**: authorize both `query_open` and
-  `exec`; query sessions stream SQL results but are not a read-only
-  policy. Use deployment-level DuckDB/process controls for filesystem,
-  extension loading, outbound network, and attachments.
+  `exec`; query sessions are streaming, not a read-only policy. Use
+  deployment-level DuckDB/process controls for filesystem, extension
+  loading, outbound network, and attachments.
 - **Public/untrusted internet**: do not expose raw DuckDB SQL directly.
   Put `ducknng` behind a gateway that authenticates, rate-limits, and
   maps users to fixed application operations.
@@ -2029,6 +2346,29 @@ ORDER BY ts
 LIMIT 5;
 ```
 
+### NNG statistics
+
+`ducknng_nng_stats()` exposes NNG’s process-wide statistics tree as
+rows. It is a low-level observability primitive: filter by statistic
+name, unit, or scope to inspect socket counters without making NNG types
+part of the public RPC method surface.
+
+``` sql
+SELECT name, unit, count(*) AS rows
+FROM ducknng_nng_stats()
+WHERE name IN ('tx_bytes', 'rx_bytes', 'tx_msgs', 'rx_msgs')
+GROUP BY name, unit
+ORDER BY name, unit;
++----------+----------+------+
+|   name   |   unit   | rows |
++----------+----------+------+
+| rx_bytes | bytes    | 1    |
+| rx_msgs  | messages | 1    |
+| tx_bytes | bytes    | 1    |
+| tx_msgs  | messages | 1    |
++----------+----------+------+
+```
+
 ### Pipe-event monitor
 
 Each running service maintains a bounded ring of NNG pipe events
@@ -2073,13 +2413,15 @@ FROM ducknng_monitor_status('monitor_demo');
 `ducknng_list_pipes(name)` lists currently open NNG pipes for a service.
 
 ``` sql
-SELECT pipe_id, opened_ms, remote_addr, peer_identity
+SELECT count(*) AS active_pipes,
+       bool_and(remote_addr IS NOT NULL) AS addresses_present,
+       bool_and(peer_identity IS NULL) AS anonymous
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1109793899 | 1783659803865 | 127.0.0.1:38384 | NULL          |
-+------------+---------------+-----------------+---------------+
++--------------+-------------------+-----------+
+| active_pipes | addresses_present | anonymous |
++--------------+-------------------+-----------+
+| 1            | true              | true      |
++--------------+-------------------+-----------+
 ```
 
 ``` sql
@@ -2097,11 +2439,103 @@ SELECT ducknng_stop_server('monitor_demo');
 +-------------------------------------+
 ```
 
+Client sockets can also opt into their own pipe-event ring. Enable
+monitoring before the socket listens or dials if you need to capture the
+first add event.
+
+``` sql
+SELECT ducknng_monitor_socket(getvariable('socket_mon_a')::UBIGINT) AS monitoring_enabled;
++--------------------+
+| monitoring_enabled |
++--------------------+
+| true               |
++--------------------+
+```
+
+``` sql
+SELECT event, count(*) AS events
+FROM ducknng_read_socket_monitor(getvariable('socket_mon_a')::UBIGINT,
+                                 0::UBIGINT,
+                                 0::UBIGINT)
+GROUP BY event
+ORDER BY event;
+SELECT ducknng_socket_monitor_wait(getvariable('socket_mon_a')::UBIGINT,
+                                   0::UBIGINT,
+                                   1000::UBIGINT) >= 1 AS saw_event;
++-------+--------+
+| event | events |
++-------+--------+
+| add   | 1      |
++-------+--------+
++-----------+
+| saw_event |
++-----------+
+| true      |
++-----------+
+```
+
+## Browser and WebAssembly
+
+ducknng builds as a duckdb-wasm side module, but a browser sandbox
+cannot offer raw sockets, so support follows the compiled capability
+contract rather than native assumptions. The release-supported `wasm_eh`
+lane covers extension load and scalar SQL, synchronous browser HTTP(S),
+real asynchronous unary Fetch with timeout and cancellation, body
+parsing, HTTPS/CORS, framed HTTP RPC/session routing, and the async
+ducknng-frame-over-WebSocket carrier. Incremental HTTP response streams,
+raw `tcp://`, `ipc://`, and native POSIX-style `tls+tcp://` remain
+unsupported in the browser.
+
+The browser checks are not run during README rendering because they
+require Docker, a staged duckdb-wasm site, and real Chromium. They are
+still literate, executable chunks; run them from the repository root
+when validating a wasm/browser change.
+
+``` bash
+DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+```
+
+``` bash
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=conformance
+```
+
+The threaded runtime remains diagnostic rather than release-blocking. It
+can build and individual HTTP probes can pass, but repeated headless
+runs still expose extension-load, `inproc://` progress, and DuckDB-wasm
+JSON-autoload instability.
+
+``` bash
+DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load
+```
+
+Self-published unsigned release assets are built by the dedicated
+release workflow. Push release tags one at a time using
+`v<ducknng-version>-duckdb<duckdb-version>` so GitHub runs the binary
+matrix for each pinned DuckDB runtime.
+
+``` bash
+gh workflow run ducknng-release-binaries.yml --ref main
+gh run list --workflow "ducknng release binaries" --limit 5
+```
+
+The browser transport matrix, the COOP/COEP requirements for the
+threaded runtime, and the smoke harness are tracked in `docs/wasm.md`,
+`docs/wasm_browser_transport_checklist.md`, and
+`test/browser/README.md`.
+
 ## Status
 
-Version 0.1.0. All features shown in this README are implemented,
-tested, and runnable. The extension builds against DuckDB v1.5.2 using
-the C API only.
+Version 0.1.2.9000. Every DuckDB chunk shown as runnable in this README
+is implemented, tested, and runs at render time. Browser/WebAssembly and
+release-matrix checks require external runtimes, so their exact commands
+are shown above and covered by the Playwright and GitHub Actions
+harnesses. The extension builds against DuckDB v1.5.2 using the C API
+only.
 
 ## References
 
@@ -2111,6 +2545,12 @@ the C API only.
   ergonomics reference.
 - [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) —
   thin-envelope + Arrow IPC RPC client.
+- [`quack`](https://github.com/duckdb/duckdb-quack) — DuckDB’s
+  experimental Quack HTTP protocol extension.
+- [`@quack-protocol/sdk`](https://github.com/tobilg/quack-protocol) and
+  [`adbc-driver-quack`](https://github.com/gizmodata/adbc-driver-quack)
+  — related Quack client/codec implementations used as protocol
+  references.
 - [DuckDB C API](https://duckdb.org/docs/stable/clients/c/api) —
   extension and SQL integration boundary.
 - [Apache Arrow

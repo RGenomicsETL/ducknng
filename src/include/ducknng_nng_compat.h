@@ -15,6 +15,16 @@
 #include <nng/protocol/survey0/survey.h>
 #include <nng/supplemental/tls/tls.h>
 
+typedef struct ducknng_nng_stat_row {
+    char *scope;
+    char *name;
+    char *type;
+    char *unit;
+    uint64_t value;
+    char *svalue;
+    char *desc;
+} ducknng_nng_stat_row;
+
 typedef struct ducknng_tls_opts {
     int enabled;
     char *cert_key_file;
@@ -41,6 +51,7 @@ int ducknng_req_socket_open(nng_socket *out);
 int ducknng_socket_open_protocol(const char *protocol, nng_socket *out, char **errmsg);
 int ducknng_validate_nng_url(const char *url, char **errmsg);
 int ducknng_socket_validate_client_url(const char *url, const ducknng_tls_opts *opts, char **errmsg);
+int ducknng_socket_monitor_notify(nng_socket sock, void (*cb)(nng_pipe, nng_pipe_ev, void *), void *arg);
 int ducknng_socket_set_timeout_ms(nng_socket sock, int send_timeout_ms, int recv_timeout_ms);
 int ducknng_socket_dial(nng_socket sock, const char *url);
 int ducknng_socket_dial_nonblocking(nng_socket sock, const char *url);
@@ -77,3 +88,6 @@ void ducknng_aio_wait(nng_aio *aio);
 void ducknng_aio_set_msg(nng_aio *aio, nng_msg *msg);
 nng_msg *ducknng_aio_get_msg(nng_aio *aio);
 const char *ducknng_nng_strerror(int err);
+
+int ducknng_nng_stats_snapshot(ducknng_nng_stat_row **out_rows, size_t *out_count, char **errmsg);
+void ducknng_nng_stats_free(ducknng_nng_stat_row *rows, size_t count);

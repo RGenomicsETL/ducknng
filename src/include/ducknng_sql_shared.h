@@ -32,6 +32,22 @@ int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, co
 int ducknng_sql_register_volatile_scalar_with_bind(duckdb_connection con, const char *name, idx_t nparams,
     duckdb_scalar_function_t fn, duckdb_scalar_function_bind_t bind_fn, ducknng_sql_context *ctx,
     duckdb_type *param_types, duckdb_type return_type_id);
+int ducknng_sql_register_volatile_scalar_logical_types_with_bind(duckdb_connection con,
+    const char *name, idx_t nparams, duckdb_scalar_function_t fn,
+    duckdb_scalar_function_bind_t bind_fn, ducknng_sql_context *ctx,
+    duckdb_logical_type *param_types, duckdb_logical_type return_type);
+
+/* Bind-time capture of the planning connection id for scalars that resolve
+ * outbound HTTP profiles at execution time. The connection id is stable for
+ * the connection that owns the plan, so cached plans stay correct; the
+ * per-request execution subject is looked up by connection id at run time. */
+typedef struct ducknng_sql_connection_bind_data {
+    int has_connection_id;
+    uint64_t connection_id;
+} ducknng_sql_connection_bind_data;
+void ducknng_sql_connection_bind_cb(duckdb_bind_info info);
+/* Returns 1 and writes the captured connection id, or returns 0. */
+int ducknng_sql_scalar_connection_id(duckdb_function_info info, uint64_t *out_connection_id);
 int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,
     idx_t nparams, duckdb_type *param_types, duckdb_table_function_bind_t bind_fn,
     duckdb_table_function_init_t init_fn, duckdb_table_function_t scan_fn);

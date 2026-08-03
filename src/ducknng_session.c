@@ -31,7 +31,7 @@ static void ducknng_service_publish_session_count(ducknng_service *svc) {
     atomic_store_explicit(&svc->session_count_visible, svc->session_count, memory_order_release);
 }
 
-static void ducknng_session_generate_owner_token(char out[33]) {
+static void ducknng_session_generate_hex_token(char out[33]) {
     static const char hex[] = "0123456789abcdef";
     size_t pos = 0;
     int word;
@@ -44,6 +44,14 @@ static void ducknng_session_generate_owner_token(char out[33]) {
         }
     }
     out[pos] = '\0';
+}
+
+static void ducknng_session_generate_owner_token(char out[33]) {
+    ducknng_session_generate_hex_token(out);
+}
+
+static void ducknng_session_generate_result_handle(char out[33]) {
+    ducknng_session_generate_hex_token(out);
 }
 
 static int ducknng_session_token_equal(const char *a, const char *b) {
@@ -126,6 +134,7 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
         memset(result, 0, sizeof(*result));
         session->result_open = 1;
     }
+    session->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     session->last_touch_ms = ducknng_now_ms();
     if (ducknng_mutex_init(&session->mu) != 0) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session mutex");
@@ -152,7 +161,8 @@ ducknng_session *ducknng_session_create(duckdb_result *result, uint64_t session_
 ducknng_session *ducknng_session_create_streaming(
     ducknng_service *svc, duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    uint64_t session_id, const char *owner_token, const char *owner_identity, char **errmsg) {
+    uint64_t session_id, const char *owner_token, const char *owner_identity,
+    char **errmsg) {
     ducknng_session *session = (ducknng_session *)duckdb_malloc(sizeof(*session));
     if (!session) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory allocating session");
@@ -188,6 +198,7 @@ ducknng_session *ducknng_session_create_streaming(
     session->stmt_open = (stmt != NULL) ? 1 : 0;
     session->pending_open = (pending != NULL) ? 1 : 0;
     session->pending_ready = 0;
+    session->fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
     session->last_touch_ms = ducknng_now_ms();
     if (ducknng_mutex_init(&session->mu) != 0) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: failed to initialize session mutex");
@@ -231,6 +242,37 @@ void ducknng_session_destroy(ducknng_session *session) {
         duckdb_destroy_prepare(&session->session_stmt);
         session->stmt_open = 0;
     }
+    /* Upload session: destroying an appender flushes its buffered rows into the
+     * open transaction, so we destroy it first, then roll the transaction back
+     * on the session connection. An upload that reached commit already cleared
+     * both flags, so this only fires for abort/prune/shutdown and guarantees
+     * partially uploaded rows never persist. */
+    if (session->upload_appender_open) {
+        duckdb_appender_destroy(&session->upload_appender);
+        session->upload_appender_open = 0;
+    }
+    if (session->upload_txn_open && session->session_con) {
+        duckdb_result rollback_res;
+        memset(&rollback_res, 0, sizeof(rollback_res));
+        /* duckdb_query populates the result (including the error state) on both
+         * success and failure, so it must be destroyed unconditionally. */
+        (void)duckdb_query(session->session_con, "ROLLBACK", &rollback_res);
+        duckdb_destroy_result(&rollback_res);
+        session->upload_txn_open = 0;
+    }
+    if (session->upload_target) {
+        duckdb_free(session->upload_target);
+        session->upload_target = NULL;
+    }
+    if (session->upload_col_names) {
+        idx_t ci;
+        for (ci = 0; ci < session->upload_col_count; ci++) {
+            if (session->upload_col_names[ci]) duckdb_free(session->upload_col_names[ci]);
+        }
+        duckdb_free(session->upload_col_names);
+        session->upload_col_names = NULL;
+        session->upload_col_count = 0;
+    }
     if (session->session_svc && session->session_pool_index != (size_t)-1) {
         ducknng_service_release_session_connection(session->session_svc, session->session_pool_index);
         session->session_pool_index = (size_t)-1;
@@ -243,6 +285,10 @@ void ducknng_session_destroy(ducknng_session *session) {
     if (session->owner_identity) {
         duckdb_free(session->owner_identity);
         session->owner_identity = NULL;
+    }
+    if (session->result_handle) {
+        duckdb_free(session->result_handle);
+        session->result_handle = NULL;
     }
     if (session->cv_initialized) {
         ducknng_cond_destroy(&session->cv);
@@ -266,17 +312,21 @@ void ducknng_session_release(ducknng_session *session) {
 }
 
 int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
-    const char *owner_identity, uint64_t *out_session_id, char **out_owner_token, char **errmsg) {
+    const char *owner_identity, int row_payload_format,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
     size_t new_cap;
     ducknng_session *session;
     uint64_t session_id;
     char owner_token[33];
+    char result_handle[33];
     char *owner_token_copy = NULL;
+    char *result_handle_copy = NULL;
     size_t i;
     size_t owner_session_count = 0;
     if (out_session_id) *out_session_id = 0;
     if (out_owner_token) *out_owner_token = NULL;
+    if (out_result_handle) *out_result_handle = NULL;
     if (!svc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing service for session add");
         if (result) duckdb_destroy_result(result);
@@ -339,11 +389,20 @@ int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
     }
     session_id = svc->next_session_id;
     ducknng_session_generate_owner_token(owner_token);
+    ducknng_session_generate_result_handle(result_handle);
     session = ducknng_session_create(result, session_id, owner_token, owner_identity, errmsg);
     if (!session) {
         ducknng_mutex_unlock(&svc->mu);
         return -1;
     }
+    session->result_handle = ducknng_strdup(result_handle);
+    if (!session->result_handle) {
+        ducknng_mutex_unlock(&svc->mu);
+        ducknng_session_destroy(session);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying result handle");
+        return -1;
+    }
+    session->row_payload_format = row_payload_format;
     if (out_owner_token) {
         owner_token_copy = ducknng_strdup(owner_token);
         if (!owner_token_copy) {
@@ -353,12 +412,23 @@ int ducknng_service_add_session(ducknng_service *svc, duckdb_result *result,
             return -1;
         }
     }
+    if (out_result_handle) {
+        result_handle_copy = ducknng_strdup(result_handle);
+        if (!result_handle_copy) {
+            ducknng_mutex_unlock(&svc->mu);
+            ducknng_session_destroy(session);
+            if (owner_token_copy) duckdb_free(owner_token_copy);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying result handle");
+            return -1;
+        }
+    }
     svc->next_session_id++;
     svc->sessions[svc->session_count++] = session;
     ducknng_service_publish_session_count(svc);
     ducknng_mutex_unlock(&svc->mu);
     if (out_session_id) *out_session_id = session_id;
     if (out_owner_token) *out_owner_token = owner_token_copy;
+    if (out_result_handle) *out_result_handle = result_handle_copy;
     return 0;
 }
 
@@ -465,20 +535,32 @@ size_t ducknng_service_prune_idle_sessions(ducknng_service *svc, uint64_t now_ms
     return removed;
 }
 
-int ducknng_service_add_session_streaming(ducknng_service *svc,
+/* Shared session registrar for both query (streaming) and upload sessions.
+ * For upload sessions (is_upload) the appender/target/transaction ownership is
+ * installed on the session while svc->mu is still held and before the session
+ * is inserted into svc->sessions, so a concurrent stop/detach can never see a
+ * bare session and release its pinned connection without destroying the
+ * appender and rolling the transaction back. */
+static int ducknng_service_add_session_full(ducknng_service *svc,
     duckdb_connection session_con, size_t pool_index,
     duckdb_prepared_statement stmt, duckdb_pending_result pending,
-    const char *owner_identity, uint64_t *out_session_id, char **out_owner_token, char **errmsg) {
+    duckdb_appender appender, int is_upload, const char *target,
+    char **col_names, idx_t col_count,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
     ducknng_session **new_sessions;
     size_t new_cap;
     ducknng_session *session;
     uint64_t session_id;
     char owner_token[33];
+    char result_handle[33];
     char *owner_token_copy = NULL;
+    char *result_handle_copy = NULL;
     size_t i;
     size_t owner_session_count = 0;
     if (out_session_id) *out_session_id = 0;
     if (out_owner_token) *out_owner_token = NULL;
+    if (out_result_handle) *out_result_handle = NULL;
     if (!svc) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing service for session add");
         return -1;
@@ -535,12 +617,29 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
     }
     session_id = svc->next_session_id;
     ducknng_session_generate_owner_token(owner_token);
+    ducknng_session_generate_result_handle(result_handle);
     session = ducknng_session_create_streaming(svc, session_con, pool_index, stmt, pending,
         session_id, owner_token, owner_identity, errmsg);
     if (!session) {
         ducknng_mutex_unlock(&svc->mu);
         return -1;
     }
+    session->result_handle = ducknng_strdup(result_handle);
+    if (!session->result_handle) {
+        ducknng_mutex_unlock(&svc->mu);
+        /* detach streaming resources before destroy to avoid double-release */
+        session->session_svc = NULL;
+        session->session_pool_index = (size_t)-1;
+        session->stmt_open = 0;
+        session->pending_open = 0;
+        ducknng_session_destroy(session);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying result handle");
+        return -1;
+    }
+    session->row_payload_format = row_payload_format;
+    if (fetch_batch_chunks == 0) fetch_batch_chunks = DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS;
+    if (fetch_batch_chunks > DUCKNNG_MAX_FETCH_BATCH_CHUNKS) fetch_batch_chunks = DUCKNNG_MAX_FETCH_BATCH_CHUNKS;
+    session->fetch_batch_chunks = fetch_batch_chunks;
     if (out_owner_token) {
         owner_token_copy = ducknng_strdup(owner_token);
         if (!owner_token_copy) {
@@ -555,11 +654,66 @@ int ducknng_service_add_session_streaming(ducknng_service *svc,
             return -1;
         }
     }
+    if (out_result_handle) {
+        result_handle_copy = ducknng_strdup(result_handle);
+        if (!result_handle_copy) {
+            ducknng_mutex_unlock(&svc->mu);
+            if (owner_token_copy) duckdb_free(owner_token_copy);
+            /* detach streaming resources before destroy to avoid double-release */
+            session->session_svc = NULL;
+            session->session_pool_index = (size_t)-1;
+            session->stmt_open = 0;
+            session->pending_open = 0;
+            ducknng_session_destroy(session);
+            if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying result handle");
+            return -1;
+        }
+    }
+    /* Install upload ownership under the lock and before insertion: past all
+     * pre-insert error paths (so a failure never destroys the caller's
+     * appender/transaction) and before the session is visible to any concurrent
+     * stop/detach (so teardown always sees a full upload session). */
+    if (is_upload) {
+        session->is_upload = 1;
+        session->upload_appender = appender;
+        session->upload_appender_open = 1;
+        session->upload_txn_open = 1;
+        session->upload_target = (target && target[0]) ? ducknng_strdup(target) : NULL;
+        session->upload_col_names = col_names;
+        session->upload_col_count = col_count;
+    }
     svc->next_session_id++;
     svc->sessions[svc->session_count++] = session;
     ducknng_service_publish_session_count(svc);
     ducknng_mutex_unlock(&svc->mu);
     if (out_session_id) *out_session_id = session_id;
     if (out_owner_token) *out_owner_token = owner_token_copy;
+    if (out_result_handle) *out_result_handle = result_handle_copy;
     return 0;
+}
+
+int ducknng_service_add_session_streaming(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index,
+    duckdb_prepared_statement stmt, duckdb_pending_result pending,
+    const char *owner_identity, int row_payload_format, uint64_t fetch_batch_chunks,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
+    return ducknng_service_add_session_full(svc, session_con, pool_index, stmt, pending,
+        NULL, 0, NULL, NULL, 0, owner_identity, row_payload_format, fetch_batch_chunks,
+        out_session_id, out_owner_token, out_result_handle, errmsg);
+}
+
+int ducknng_service_add_upload_session(ducknng_service *svc,
+    duckdb_connection session_con, size_t pool_index, duckdb_appender appender,
+    const char *target, char **col_names, idx_t col_count, const char *owner_identity,
+    uint64_t *out_session_id, char **out_owner_token, char **out_result_handle, char **errmsg) {
+    if (out_session_id) *out_session_id = 0;
+    if (out_owner_token) *out_owner_token = NULL;
+    if (out_result_handle) *out_result_handle = NULL;
+    if (!appender) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing upload session appender");
+        return -1;
+    }
+    return ducknng_service_add_session_full(svc, session_con, pool_index, NULL, NULL,
+        appender, 1, target, col_names, col_count, owner_identity, 0, 0,
+        out_session_id, out_owner_token, out_result_handle, errmsg);
 }

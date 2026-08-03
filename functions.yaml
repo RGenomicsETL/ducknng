@@ -4,7 +4,7 @@
     "extension": {
       "name": "ducknng",
       "description": "Pure C DuckDB extension exposing a DuckDB-backed SQL and RPC server over NNG using Arrow IPC \u2014 with framed RPC, custom HTTP routes, TLS support, body codec layer, and admission controls",
-      "version": "0.1.2",
+      "version": "0.1.2.9000",
       "language": "C",
       "build": "cmake",
       "license": "MIT",
@@ -201,6 +201,15 @@
       "signature": "prepare_query_params(url, sql, params, tls_config_id)",
       "returns": "table",
       "description": "Bind a typed parameter tuple and expose the prepared remote result schema without execution.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_upload_table",
+      "kind": "table",
+      "category": "Framed RPC",
+      "signature": "upload_table(url, source_query, target_table[, tls_config_id])",
+      "returns": "table",
+      "description": "Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.",
       "examples": []
     },
     {
@@ -488,7 +497,7 @@
       "category": "TLS",
       "signature": "self_signed_tls_config(host, days, auth_mode)",
       "returns": "UBIGINT",
-      "description": "Generate a self-signed TLS cert in memory. auth_mode: 0=none, 1=server, 2=mutual. Returns TLS config handle.",
+      "description": "Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.",
       "examples": []
     },
     {
@@ -813,6 +822,15 @@
       "signature": "register_exec_method(enable_default)",
       "returns": "BOOLEAN",
       "description": "Register (or re-register) the default exec method. Pass TRUE to enable by default.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_register_upload_methods",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "register_upload_methods(require_auth)",
+      "returns": "BOOLEAN",
+      "description": "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
       "examples": []
     },
     {

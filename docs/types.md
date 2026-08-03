@@ -1,12 +1,20 @@
-# ducknng type support and schema policy
+# ducknng type contract
 
-This document defines the Arrow IPC and DuckDB type contract used by framed RPC. DuckDB logical types are the execution types; Arrow IPC is the portable request and row encoding. Unsupported or malformed encodings fail before row materialization.
+`ducknng` moves tables through two negotiated row codecs. Arrow IPC is the
+portable default. `ducknng_quack_batch` preserves DuckDB chunks for DuckDB-aware
+peers. The codec is independent of the NNG, HTTP, or WebSocket carrier.
 
-## Arrow IPC mappings
+The executable contract is the end-to-end matrix in
+`test/sql/ducknng_type_roundtrip.test`. It sends values through a running server
+and compares the decoded values on the client over both codecs. Parameter
+binding is covered separately by `test/sql/ducknng_parameter_binding.test`.
 
-The receive path constructs these DuckDB types:
+## Arrow IPC
 
-| Arrow storage | DuckDB |
+The receive path accepts these Arrow storage types and constructs the listed
+DuckDB logical types:
+
+| Arrow | DuckDB |
 | --- | --- |
 | `null` | `SQLNULL` |
 | `bool` | `BOOLEAN` |
@@ -26,36 +34,73 @@ The receive path constructs these DuckDB types:
 | map | `MAP` |
 | dense and sparse union | `UNION` |
 
-List, array, struct, map, and union values may be nested recursively. Parent and child nulls are preserved. The decoder validates offsets, lengths, type ids, and child bounds before assigning DuckDB vectors.
+Nested combinations of list, array, struct, map, and union are decoded
+recursively. Null parent values and null children are preserved.
 
-DuckDB's Arrow producer supplies response schemas and batches. Some DuckDB values therefore have canonical wire projections rather than identical round trips:
+The DuckDB-to-Arrow producer uses DuckDB's Arrow conversion, so a few DuckDB
+types have canonical wire projections rather than identical logical types:
 
-- `HUGEINT` and `UHUGEINT` use `decimal128(38,0)` and return as `DECIMAL(38,0)`.
-- `UUID` and `ENUM` use UTF-8 and return as `VARCHAR`.
+- `HUGEINT` and `UHUGEINT` are emitted as `decimal128(38,0)` and return as
+  `DECIMAL(38,0)`. Values outside that decimal domain are not representable.
+- `UUID` and `ENUM` are emitted as UTF-8 and return as `VARCHAR`.
 - `TIME WITH TIME ZONE` returns as `TIME`; its offset is not preserved.
-- `TIMESTAMP WITH TIME ZONE` uses an Arrow timezone timestamp and returns as DuckDB `TIMESTAMP WITH TIME ZONE`; the instant is preserved, not an original named-zone identity.
-- DuckDB strings and blobs are emitted as ordinary `utf8` and `binary`, although the receiver also accepts large and fixed-size variants.
+- `TIMESTAMP WITH TIME ZONE` uses an Arrow timezone timestamp and returns as
+  DuckDB `TIMESTAMP WITH TIME ZONE`; the instant is preserved, not an original
+  named-zone identity.
+- Ordinary DuckDB strings and blobs are emitted as `utf8` and `binary` even
+  though the receiver also accepts large and fixed-size variants.
 
-These normalizations are part of the contract and are covered by `test/sql/ducknng_rpc_client_smoke.test`.
+These are declared normalizations, not silent claims of identity.
+
+## Quack-derived batches
+
+`ducknng_quack_batch` is not Arrow. It carries DuckDB logical types and data
+chunks through the ducknng session protocol. The round-trip matrix covers the
+scalar numeric, string/blob, temporal, decimal, interval, huge integer, UUID,
+list, array, struct, map, and union families, including recursive nesting and
+nested nulls. Flat vectors are canonical output. On input, constant and
+dictionary vectors are materialized through DuckDB's selection-copy C API, so
+the same scalar and recursive type families remain available; sequence vectors
+are accepted for the signed and unsigned integer logical types that DuckDB emits
+as sequences. FSST vectors remain unsupported and fail closed. A client
+selecting this codec must implement the ducknng Quack batch format; selecting it
+does not change session ownership, fetch, cancel, or end-of-stream semantics.
+
+DuckDB v1.5.2 also defines `GEOMETRY` (logical id 60) and `VARIANT`
+(logical id 109), but neither is part of this codec contract. `GEOMETRY` adds a
+versioned vector-format field and optional CRS type metadata that this codec does
+not yet preserve. `VARIANT` is a struct-like internal logical type, but v1.5.2's
+C API does not expose a `DUCKDB_TYPE_VARIANT` constructor or vector contract.
+Both fail closed rather than being silently normalized to `BLOB` or `STRUCT`.
+Support must be gated and tested against each pinned DuckDB serializer/C API
+version; the presence of an internal logical id alone is not a public C contract.
 
 ## SQL parameter tuples
 
-`exec`, `query_open`, and `query_prepare` accept an optional one-row Arrow `STRUCT` field named `params`. Its children form a positional tuple: child order binds SQL `?` parameters, while child names are descriptive only. The protocol limit is 65,535 parameters. A missing or null `params` row means no parameters.
+`exec`, `query_open`, and `query_prepare` may receive an optional one-row Arrow
+`STRUCT` named `params`. Its children form a positional tuple: child order binds
+the SQL `?` parameters, while child names are descriptive only. The protocol
+limit is 65,535 parameters. A missing or null `params` row means no parameters.
 
-Parameters use the same Arrow-to-DuckDB mappings, including nested list, array, struct, map, and union values. The server passes each value to `duckdb_bind_value`; values are never interpolated into SQL text. DuckDB's C value API represents a top-level null as untyped `SQLNULL`, so the SQL must provide type context, for example `?::BIGINT`. Nulls inside typed containers retain their container type.
+Parameters use the same Arrow-to-DuckDB value mappings above, including nested
+list, array, struct, map, and union values. They are bound with
+`duckdb_bind_value`; values are never interpolated into SQL text. DuckDB's C
+value API represents a top-level null as untyped `SQLNULL`, so null parameters
+need type context in the SQL, for example `?::BIGINT`. Nulls inside a typed
+list, struct, map, array, or union retain their container type.
 
-Parameterized `exec` and `query_open` accept exactly one SQL statement. `query_prepare` also accepts exactly one statement and returns its schema without executing it. These contracts are exercised by `test/sql/ducknng_parameter_binding.test`.
-
-## Method schemas
-
-`exec` declares non-null `sql: utf8`, non-null `want_result: bool`, and nullable `params: struct`. Its metadata reply contains `rows_changed: uint64`, `statement_type: int32`, and `result_type: int32`.
-
-`query_open` and `query_prepare` declare non-null `sql: utf8`, nullable `batch_rows: uint64`, nullable `batch_bytes: uint64`, and nullable `params: struct`. `query_open` returns JSON session control metadata. `query_prepare` returns a zero-row Arrow stream carrying only the prepared result schema.
-
-The dynamic row schema returned by `fetch` is fixed for the session. End-of-stream and cancellation are control metadata, not sentinel row schemas.
+Parameterized `exec` and parameterized `query_open` accept exactly one SQL
+statement. `query_prepare` also accepts exactly one statement and returns its
+schema without executing it.
 
 ## Bounds and unsupported encodings
 
-The Arrow vector decoder caps recursive conversion at 64 levels and validates IPC through nanoarrow. Unknown or malformed layouts fail with a DuckDB-visible error.
+The Arrow producer rejects logical nesting deeper than 16. The receiver caps
+recursive schema and value conversion at 64, in addition to nanoarrow IPC
+validation. The Quack decoder has its own checked length arithmetic and nesting
+bound. Unknown or malformed types fail with a DuckDB-visible error before row
+materialization.
 
-Dictionary-preserving round trips, Arrow extension-type semantics, and run-end encoded arrays are not supported. `ENUM` is deliberately normalized to UTF-8; extension metadata is not treated as an executable type registry.
+Dictionary-preserving round trips, Arrow extension-type semantics, and run-end
+encoded arrays are not supported. `ENUM` is deliberately normalized to UTF-8;
+arbitrary extension metadata is not treated as an executable type registry.

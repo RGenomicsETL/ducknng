@@ -215,6 +215,20 @@ SELECT ducknng_http_headers_build(list_value('Bad Header'), list_value('x'))
 ----
 ducknng: headers_build requires header names to be HTTP tokens
 
+statement error
+SELECT ducknng_http_headers_build(list_value('X-Test'), list_value('bad' || chr(10) || 'x'))
+----
+ducknng: headers_build requires header values without control characters
+
+statement error
+SELECT ducknng_add_stream_route(
+  'http_route_api', 'GET', '/bad-stream-content-type',
+  'SELECT 1',
+  'text/plain' || chr(10) || 'x'
+)
+----
+ducknng: stream content_type must not contain control characters
+
 query T
 SELECT ducknng_http_path_params_get('{"tenant_id":"al' || chr(92) || '"ice"}', 'tenant_id')
 ----

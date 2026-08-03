@@ -1,5 +1,6 @@
 #include "ducknng_sql_api.h"
 #include "ducknng_runtime.h"
+#include "ducknng_session.h"
 #include "ducknng_sql_shared.h"
 #include "ducknng_util.h"
 #include <stdio.h>
@@ -225,6 +226,56 @@ int ducknng_sql_register_volatile_scalar_logical_types(duckdb_connection con, co
         param_types, return_type, 1);
 }
 
+int ducknng_sql_register_volatile_scalar_logical_types_with_bind(duckdb_connection con,
+    const char *name, idx_t nparams, duckdb_scalar_function_t fn,
+    duckdb_scalar_function_bind_t bind_fn, ducknng_sql_context *ctx,
+    duckdb_logical_type *param_types, duckdb_logical_type return_type) {
+    return ducknng_sql_register_scalar_logical_types_ex(con, name, nparams, fn, bind_fn, ctx,
+        param_types, return_type, 1);
+}
+
+static void ducknng_sql_connection_bind_data_destroy(void *data) {
+    if (data) duckdb_free(data);
+}
+
+static void *ducknng_sql_connection_bind_data_copy(void *data) {
+    ducknng_sql_connection_bind_data *src = (ducknng_sql_connection_bind_data *)data;
+    ducknng_sql_connection_bind_data *dst;
+    if (!src) return NULL;
+    dst = (ducknng_sql_connection_bind_data *)duckdb_malloc(sizeof(*dst));
+    if (!dst) return NULL;
+    *dst = *src;
+    return dst;
+}
+
+void ducknng_sql_connection_bind_cb(duckdb_bind_info info) {
+    ducknng_sql_connection_bind_data *bd;
+    duckdb_client_context client_ctx = NULL;
+    bd = (ducknng_sql_connection_bind_data *)duckdb_malloc(sizeof(*bd));
+    if (!bd) {
+        duckdb_scalar_function_bind_set_error(info, "ducknng: out of memory in bind");
+        return;
+    }
+    memset(bd, 0, sizeof(*bd));
+    duckdb_scalar_function_get_client_context(info, &client_ctx);
+    if (client_ctx) {
+        bd->connection_id = (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+        bd->has_connection_id = 1;
+        duckdb_destroy_client_context(&client_ctx);
+    }
+    duckdb_scalar_function_set_bind_data(info, bd, ducknng_sql_connection_bind_data_destroy);
+    duckdb_scalar_function_set_bind_data_copy(info, ducknng_sql_connection_bind_data_copy);
+}
+
+int ducknng_sql_scalar_connection_id(duckdb_function_info info, uint64_t *out_connection_id) {
+    ducknng_sql_connection_bind_data *bd =
+        (ducknng_sql_connection_bind_data *)duckdb_scalar_function_get_bind_data(info);
+    if (out_connection_id) *out_connection_id = 0;
+    if (!bd || !bd->has_connection_id) return 0;
+    if (out_connection_id) *out_connection_id = bd->connection_id;
+    return 1;
+}
+
 int ducknng_sql_register_volatile_scalar_with_bind(duckdb_connection con, const char *name,
     idx_t nparams, duckdb_scalar_function_t fn, duckdb_scalar_function_bind_t bind_fn,
     ducknng_sql_context *ctx, duckdb_type *param_types, duckdb_type return_type_id) {
@@ -339,6 +390,11 @@ static int ducknng_register_config_options(duckdb_connection con) {
     if (!ducknng_register_one_config_option(con, "ducknng.csv_max_columns",
             "Maximum number of columns allowed when parsing CSV or TSV body payloads "
             "via ducknng_parse_body. Increase for wide CSV inputs.", 1024))
+        return 0;
+    if (!ducknng_register_one_config_option(con, "ducknng.fetch_batch_chunks",
+            "Default number of DuckDB data chunks requested per query-session fetch. "
+            "Applies to all row serializers and transports unless a client sends an explicit batch_rows hint.",
+            DUCKNNG_DEFAULT_FETCH_BATCH_CHUNKS))
         return 0;
     return 1;
 }

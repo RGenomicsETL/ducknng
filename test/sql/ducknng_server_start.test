@@ -128,6 +128,7 @@ ORDER BY name
 cancel	false
 close	false
 fetch	false
+handshake	false
 manifest	false
 query_open	false
 query_prepare	false
@@ -232,6 +233,7 @@ ORDER BY name
 cancel
 close
 fetch
+handshake
 manifest
 query_open
 query_prepare
