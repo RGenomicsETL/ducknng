@@ -38,7 +38,7 @@ SELECT
     '$.capabilities.parameter_binding.max_parameters')::INTEGER = 65535)::INTEGER,
   contains(manifest,
     '"methods":["exec","query_open","query_prepare"]')::INTEGER,
-  (json_extract_string(manifest, '$.server.version') = '0.1.2')::INTEGER
+  (json_extract_string(manifest, '$.server.version') = '0.1.2.9000')::INTEGER
 FROM ducknng_get_rpc_manifest(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   0::UBIGINT

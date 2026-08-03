@@ -9,3 +9,4 @@ duckdb_unittest_tempdir
 venv
 community-extensions
 /.sync/
+/.pi/

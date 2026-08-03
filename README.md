@@ -70,7 +70,10 @@ SELECT ducknng_start_server(
 SET VARIABLE tour_url = (
   SELECT listen FROM ducknng_list_servers() WHERE name = 'tour'
 );
-SELECT getvariable('tour_url') AS listen_url;
+SELECT starts_with(
+  getvariable('tour_url'),
+  'tls+tcp://127.0.0.1:'
+) AS tls_listen_ready;
 -- Open a REQ socket and dial immediately.
 SET VARIABLE req_id = (ducknng_open_socket('req')).socket_id;
 SELECT (ducknng_dial_socket(
@@ -85,11 +88,11 @@ SELECT (ducknng_dial_socket(
 | true                                                                                                                    |
 +-------------------------------------------------------------------------------------------------------------------------+
 
-+---------------------------+
-|        listen_url         |
-+---------------------------+
-| tls+tcp://127.0.0.1:45825 |
-+---------------------------+
++------------------+
+| tls_listen_ready |
++------------------+
+| true             |
++------------------+
 
 +--------+
 | dialed |
@@ -139,31 +142,31 @@ FROM ducknng_decode_frame(
 
 **AIO: launch two requests in parallel, collect both later.**
 `ducknng_request_raw_aio(...)` returns immediately with an integer AIO
-handle. `ducknng_aio_collect(...)` blocks until all handles are ready.
+handle. A list collect waits until any handle is ready and returns the
+terminal subset; this example collects each handle separately so both
+replies are shown.
 
 ``` sql
 CREATE TEMP TABLE tour_aios AS
-SELECT
-  ducknng_request_raw_aio(
-    getvariable('tour_url'),
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000, getvariable('tour_tls')::UBIGINT
-  ) AS aio1,
-  ducknng_request_raw_aio(
-    getvariable('tour_url'),
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000, getvariable('tour_tls')::UBIGINT
-  ) AS aio2;
--- aio_collect blocks until both frames are ready then returns one row per handle.
-SELECT aio_id, ok, octet_length(frame) > 0 AS has_frame
-FROM ducknng_aio_collect((SELECT list_value(aio1, aio2) FROM tour_aios), 1000)
-ORDER BY aio_id;
+SELECT ducknng_request_raw_aio(
+         getvariable('tour_url'),
+         from_hex('01000000000000000000000000000000000000000000'),
+         1000 + i::INTEGER * 0,
+         getvariable('tour_tls')::UBIGINT
+       ) AS aio_id
+FROM range(2) t(i);
+-- A one-element collect waits for that specific handle.
+SELECT count(*) AS replies,
+       bool_and(c.ok) AS all_ok,
+       bool_and(octet_length(c.frame) > 0) AS all_have_frames
+FROM tour_aios AS a,
+LATERAL ducknng_aio_collect(list_value(a.aio_id), 1000) AS c;
 
-+--------+------+-----------+
-| aio_id |  ok  | has_frame |
-+--------+------+-----------+
-| 1      | true | true      |
-+--------+------+-----------+
++---------+--------+-----------------+
+| replies | all_ok | all_have_frames |
++---------+--------+-----------------+
+| 2       | true   | true            |
++---------+--------+-----------------+
 ```
 
 **`ducknng_ncurl` — HTTP client primitive.** The framed RPC mount
@@ -380,7 +383,8 @@ Explicit cleanup — everything that was opened must be explicitly
 stopped, closed, or dropped.
 
 ``` sql
-SELECT ducknng_aio_drop(aio1) AND ducknng_aio_drop(aio2) AS aios_dropped FROM tour_aios;
+SELECT bool_and(ducknng_aio_drop(aio_id)) AS aios_dropped
+FROM tour_aios;
 DROP TABLE tour_aios;
 DROP TABLE tour_session;
 DROP TABLE tour_session2;
@@ -2391,13 +2395,15 @@ FROM ducknng_monitor_status('monitor_demo');
 `ducknng_list_pipes(name)` lists currently open NNG pipes for a service.
 
 ``` sql
-SELECT pipe_id, opened_ms, remote_addr, peer_identity
+SELECT count(*) AS active_pipes,
+       bool_and(remote_addr IS NOT NULL) AS addresses_present,
+       bool_and(peer_identity IS NULL) AS anonymous
 FROM ducknng_list_pipes('monitor_demo');
-+------------+---------------+-----------------+---------------+
-|  pipe_id   |   opened_ms   |   remote_addr   | peer_identity |
-+------------+---------------+-----------------+---------------+
-| 1644454022 | 1784202846088 | 127.0.0.1:39948 | NULL          |
-+------------+---------------+-----------------+---------------+
++--------------+-------------------+-----------+
+| active_pipes | addresses_present | anonymous |
++--------------+-------------------+-----------+
+| 1            | true              | true      |
++--------------+-------------------+-----------+
 ```
 
 ``` sql
@@ -2453,14 +2459,14 @@ SELECT ducknng_socket_monitor_wait(getvariable('socket_mon_a')::UBIGINT,
 ## Browser and WebAssembly
 
 ducknng builds as a duckdb-wasm side module, but a browser sandbox
-cannot offer raw sockets, so the transport story is bounded by what the
-platform allows rather than by the extension. The release-supported
-browser lane is the `wasm_eh` duckdb-wasm runtime: extension load and
-scalar SQL, browser HTTP(S) client calls through the Emscripten-only
-synchronous-XHR bridge, terminal HTTP AIO handles, table parsing,
-HTTPS/CORS, and framed HTTP RPC/session helper routing. Raw `tcp://`,
-`ipc://`, native POSIX-style `tls+tcp://`, and browser WebSocket
-adapters are not supported.
+cannot offer raw sockets, so support follows the compiled capability
+contract rather than native assumptions. The release-supported `wasm_eh`
+lane covers extension load and scalar SQL, synchronous browser HTTP(S),
+real asynchronous unary Fetch with timeout and cancellation, body
+parsing, HTTPS/CORS, framed HTTP RPC/session routing, and the async
+ducknng-frame-over-WebSocket carrier. Incremental HTTP response streams,
+raw `tcp://`, `ipc://`, and native POSIX-style `tls+tcp://` remain
+unsupported in the browser.
 
 The browser checks are not run during README rendering because they
 require Docker, a staged duckdb-wasm site, and real Chromium. They are
@@ -2506,8 +2512,8 @@ threaded runtime, and the smoke harness are tracked in `docs/wasm.md`,
 
 ## Status
 
-Version 0.1.2. Every DuckDB chunk shown as runnable in this README is
-implemented, tested, and runs at render time. Browser/WebAssembly and
+Version 0.1.2.9000. Every DuckDB chunk shown as runnable in this README
+is implemented, tested, and runs at render time. Browser/WebAssembly and
 release-matrix checks require external runtimes, so their exact commands
 are shown above and covered by the Playwright and GitHub Actions
 harnesses. The extension builds against DuckDB v1.5.2 using the C API

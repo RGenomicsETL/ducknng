@@ -1,5 +1,10 @@
 # News
 
+## ducknng 0.1.2.9000 — development version
+
+- Adopted concept-controlled AI-assisted engineering: one coherent mental model, explicit structures and state transitions, focused source review for ownership and security mechanics, and more review time spent on executable QA. Replaced the obsolete subagent-choreography guide with `docs/concept_control.md`.
+- Bumped the development version to 0.1.2.9000.
+
 ## ducknng 0.1.2 — TLS and codec hardening release
 
 - Added native incremental asynchronous HTTP response streams without changing unary `ducknng_ncurl_aio()` semantics. `ducknng_ncurl_stream_open_aio()` exposes status and duplicate-preserving headers before body completion; `ducknng_ncurl_stream_recv_aio()` provides one cancellable bounded raw-body receive at a time; dedicated collectors report body slices and explicit EOF; and `ducknng_ncurl_stream_close()` owns final connection cleanup. The native adapter handles Content-Length, close-delimited bodies, and chunked transfer decoding below callers, leaving SSE/NDJSON parsing above the transport. Browser builds fail closed for this new surface until a `ReadableStream` backend exists. SQL lifecycle coverage and the external Python HTTP smoke test exercise early headers, cancellation, dechunked incremental reads, EOF, and explicit cleanup.
