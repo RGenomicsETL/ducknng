@@ -658,6 +658,11 @@ static ducknng_client_aio *ducknng_client_aio_alloc_slot(ducknng_runtime *rt, in
     return slot;
 }
 
+#ifdef __EMSCRIPTEN__
+static ducknng_client_aio *ducknng_client_aio_alloc_terminal_slot(ducknng_runtime *rt,
+    int timeout_ms, char **errmsg);
+#endif
+
 static int ducknng_client_add_terminal_error_aio(ducknng_sql_context *ctx, int kind, int phase,
     int timeout_ms, const char *message, uint64_t *out_aio_id, char **errmsg) {
     ducknng_client_aio *slot;
@@ -666,7 +671,15 @@ static int ducknng_client_add_terminal_error_aio(ducknng_sql_context *ctx, int k
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing aio runtime");
         return -1;
     }
+#ifdef __EMSCRIPTEN__
+    /* Browser carrier AIOs do not need an nng_aio. Expected setup failures
+     * must use the same lightweight slot; trying to allocate an NNG aio on the
+     * single-threaded EH runtime can turn an ordinary terminal launch error
+     * into a DuckDB exception. */
+    slot = ducknng_client_aio_alloc_terminal_slot(ctx->rt, timeout_ms, errmsg);
+#else
     slot = ducknng_client_aio_alloc_slot(ctx->rt, timeout_ms, errmsg);
+#endif
     if (!slot) return -1;
     slot->kind = kind;
     slot->phase = phase;

@@ -20,6 +20,7 @@
 #include "ducknng_wasm_fetch_bridge.h"
 #include "ducknng_util.h"
 #include <emscripten.h>
+#include <limits.h>
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
@@ -64,6 +65,38 @@ EM_JS(int, ducknng_js_ws_launch, (const char *url_ptr, const uint8_t *frame_ptr,
     var op = { state: 0, status: 0, headers: "", body: null, error: "",
         ws: true, actorUrl: url, timer: 0, timedOut: false };
     Module.ducknngFetchOps.set(id, op);
+
+    // Apply the same hard host allowlist as the browser Fetch/XHR paths. A
+    // WebSocket frame carries the same RPC authority and must not become an
+    // alternate route around an embedding host's outbound policy. Custom HTTP
+    // headers are intentionally irrelevant here: browser WebSocket does not
+    // expose handshake-header control.
+    var cfg = Module.ducknngWasmHttpConfig || null;
+    function hostMatchesAllowlist(targetUrl, allowHosts) {
+        var host = "";
+        var allow = allowHosts;
+        if (!allow) return false;
+        if (typeof allow === "string") allow = allow.split(",");
+        try { host = new URL(targetUrl).hostname.toLowerCase(); } catch (e) { return false; }
+        if (!Array.isArray(allow)) return false;
+        for (var i = 0; i < allow.length; i++) {
+            var raw = allow[i];
+            if (raw === null || raw === undefined) continue;
+            var rule = String(raw).trim().toLowerCase();
+            if (!rule) continue;
+            if (rule.charAt(0) === ".") {
+                if (host.length > rule.length && host.endsWith(rule)) return true;
+            } else if (host === rule) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (cfg && cfg.enforceHostAllowlist === true && !hostMatchesAllowlist(url, cfg.allowHosts)) {
+        op.state = 2;
+        op.error = "ducknng: browser WebSocket host allowlist denied the request";
+        return id;
+    }
 
     // Copy the frame out of the wasm heap now; it is not stable after return.
     var payload = HEAPU8.slice(frame_ptr, frame_ptr + frame_len);
@@ -140,6 +173,10 @@ uint64_t ducknng_wasm_ws_launch(const char *url, const uint8_t *frame,
     if (errmsg) *errmsg = NULL;
     if (!url || !url[0]) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing WebSocket URL");
+        return 0;
+    }
+    if (frame_len > (size_t)INT_MAX) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: WebSocket frame exceeds browser bridge size limit");
         return 0;
     }
     op_id = ducknng_js_ws_launch(url, frame, (int)frame_len, timeout_ms);

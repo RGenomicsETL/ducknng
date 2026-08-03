@@ -1525,7 +1525,7 @@ DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
 
 ```{bash wasm-eh-smoke, eval=FALSE}
 node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
+  --probes=conformance
 ```
 
 The threaded runtime remains diagnostic rather than release-blocking. It can build and individual HTTP probes can pass, but repeated headless runs still expose extension-load, `inproc://` progress, and DuckDB-wasm JSON-autoload instability.
@@ -1534,7 +1534,7 @@ The threaded runtime remains diagnostic rather than release-blocking. It can bui
 DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
   scripts/start_duckdb_wasm_local_test.sh
 node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,http-sync,http-aio,http-table,https-cors,http-rpc
+  --probes=load
 ```
 
 Self-published unsigned release assets are built by the dedicated release workflow. Push release tags one at a time using `v<ducknng-version>-duckdb<duckdb-version>` so GitHub runs the binary matrix for each pinned DuckDB runtime.

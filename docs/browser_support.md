@@ -1,261 +1,57 @@
-# Browser support: a capability-driven design
+# Browser support contract
 
-This document is a design proposal, not a support claim. It complements the
-running notes in [`docs/wasm.md`](wasm.md) and the review matrix in
-[`docs/wasm_browser_transport_checklist.md`](wasm_browser_transport_checklist.md).
-Those two files record *what has been proven, slice by slice*. This file argues
-that the slice-by-slice method is itself the thing to fix, and sketches a more
-generic structure that lets browser support grow by flipping capability flags
-instead of threading a new `#ifdef __EMSCRIPTEN__` branch and a new hand-written
-probe through every layer.
+`ducknng` supports browser clients through the `duckdb-wasm` `wasm_eh` side-module target. Support is capability-driven: the active network backend reports one compiled descriptor through `ducknng_transport_capabilities()` and `ducknng_list_transport_capabilities()`, and the Chromium conformance runner executes every capability reported as `supported`. A capability reported as `unsupported` is skipped rather than simulated. `experimental` capabilities run as non-gating diagnostics.
 
-## The incrementalism we have today
+The release-supported browser client scope is extension loading, scalar SQL, whole-response HTTP and HTTPS, real asynchronous unary Fetch with timeout and cancellation, body-codec table helpers, framed RPC and query sessions over HTTP, and asynchronous ducknng-frame-over-WebSocket RPC over `ws://` and `wss://`. Browser HTTPS and WSS use the browser trust store. Supplying a ducknng TLS handle is rejected rather than silently ignored.
 
-Browser support has been built as a matrix of `runtime × transport × operation`
-cells, each proven individually in a real browser and then written down. That
-was the right way to *discover* what a browser runtime can do. It is a poor way
-to *carry* the result, for four concrete reasons visible in the tree:
+Incremental HTTP response bodies, browser listeners, generic browser socket handles, `ipc://`, raw `tcp://`, and native POSIX-style `tls+tcp://` are unsupported. The pthread `wasm_threads` `inproc://` path is experimental and does not gate a release. webR is a separate runtime and artifact contract; duckdb-wasm evidence does not establish webR support.
 
-1. **`#ifdef __EMSCRIPTEN__` has leaked above the transport line.** The checklist
-   asks to "keep the browser HTTP implementation behind the HTTP transport
-   adapter boundary, not in the RPC method layer." In practice the browser fork
-   now appears in `src/ducknng_http_compat.c` (`ducknng_http_transact`, the XHR
-   branch at the top of the function), `src/ducknng_sql_aio.c` (a whole parallel
-   `ducknng_client_add_terminal_http_*_aio` family), `src/ducknng_sql_socket.c`,
-   and `src/ducknng_service.c`. Each new browser capability adds another guarded
-   branch in another file rather than another binding behind one boundary.
+## Network backend
 
-2. **A synchronous XHR is the root of the async divergence.**
-   `ducknng_wasm_http_fetch_perform` issues a blocking `XMLHttpRequest` via
-   `EM_ASM`. It "is accepted for signature parity but ignored" for `timeout_ms`,
-   cannot be cancelled, and blocks the worker for the duration of the request.
-   Because the primitive is synchronous, the AIO surface cannot be real async in
-   the browser, so `ducknng_ncurl_aio(...)` is implemented as a
-   *terminal-at-launch* handle: the request has already completed by the time a
-   handle exists (`ducknng_client_aio_alloc_terminal_slot` and its callers in
-   `src/ducknng_sql_aio.c`). `ducknng_aio_status/wait/cancel` are then coherent
-   only by construction, and every AIO-shaped function needs its own browser
-   twin. This is one impedance mismatch, papered over once per operation.
+Shared SQL, RPC, and AIO code calls `ducknng_net_backend`. Target selection happens once at build time. Native code binds that interface to NNG HTTP and socket operations. Browser code binds it to synchronous XHR for the synchronous whole-response client, Fetch for asynchronous HTTP, and the browser WebSocket frame carrier for asynchronous WS/WSS RPC.
 
-3. **The pthread `inproc://` proof is a perpetual diagnostic.** Real effort keeps
-   going into making `wasm_threads` `inproc://` progress reliably (COOP/COEP,
-   the Pages COI service worker, `pthread_create` yielding, trace builds). The
-   docs are honest that it "still expose[s] extension-load and inproc progress
-   flakiness" and "is a diagnostic proof, not a stable regression gate yet." It
-   may never become a gate on the current pthread-polling progress model, yet it
-   keeps drawing incremental commits.
+The descriptor records three-state support for HTTP, HTTPS, incremental response streams, inproc, TCP, IPC, TLS-over-TCP, and WebSocket. It also records whether AIO is genuinely asynchronous, whether timeout and cancellation are honored, and whether TLS is native or browser-managed. `make wasm_matrix` renders the descriptor into `docs/wasm.md`; generated matrix prose is not a second authority.
 
-4. **Support is asserted in prose, not in a contract.** What the browser build
-   can do is a growing English list ("Proven locally in real Chromium…"). There
-   is no single machine-readable statement of capability that the extension
-   reports and the test harness gates on. So proving one more cell means editing
-   a table, adding a probe name to a `--probes=...` list, and writing another
-   paragraph — for every cell, forever.
+No `__EMSCRIPTEN__` transport choice belongs in the method registry or RPC method implementation. Browser-specific bridge code remains in the network adapter and wasm bridge translation units. The manifest and method state machines remain carrier-independent.
 
-The through-line: the browser is treated as a set of exceptions to the native
-code, discovered and pinned one at a time. The generic fix is to make the
-browser one more *backend behind a single boundary*, described by a *capability
-contract*, exercised by the *same* conformance suite native already runs.
+## Asynchronous completion
 
-## Design goals
+Browser HTTP AIO uses `fetch()` plus `AbortController`. JavaScript records pending operations in a runtime-owned table; the C runtime pumps settled operations through the same SQL-visible AIO state machine used by native operations. Timeout and cancellation abort the fetch. Because the DuckDB wasm worker event loop runs between queries, SQL wait operations poll rather than block the worker waiting for a callback that cannot run.
 
-- **One boundary.** No `#ifdef __EMSCRIPTEN__` above a single net-backend
-  interface. The SQL method layer, the AIO layer, and the RPC/frame layer see
-  the same API on native and in the browser.
-- **One async primitive.** A single promise→AIO completion bridge, so async,
-  timeout, and cancellation are implemented once and inherited by every
-  AIO-shaped function instead of re-derived per function.
-- **One carrier interface for frames.** RPC/session helpers speak "send frame,
-  await reply frame" to a pluggable carrier, so a new carrier (browser
-  WebSocket, later) is an added binding, not a new matrix column.
-- **A capability contract, not prose.** The backend advertises what it supports;
-  SQL can read it; the harness gates on it. Claiming a capability you cannot
-  honor is a hard failure; not claiming one is a clean skip.
-- **Research stays research.** The pthread `inproc://` path is explicitly a spike
-  behind an `experimental` capability flag and is never a release gate on the
-  current progress model.
+Browser WebSocket AIO uses the same operation table. One persistent `WebSocket` actor is retained per URL. Requests and replies are correlated FIFO because the server processes one frame at a time per connection and the version-1 ducknng frame has no transport request identifier. Cancelling or timing out one request closes that actor and fails every outstanding request on it, preventing a late reply from being assigned to the wrong operation. Abnormal closes become terminal AIO errors.
 
-## Proposed structure
+The browser Fetch, XHR, and WebSocket paths enforce the embedding host's hard hostname allowlist. Browser WebSocket does not expose arbitrary handshake-header control, so configured HTTP headers do not apply to WS/WSS. Cookies and browser credentials remain subject to browser policy.
 
-### 1. A single net-backend interface
+## Frame carriers
 
-Introduce one internal vtable — call it `ducknng_net_backend` — with a small,
-transport-agnostic surface:
+HTTP carries one `application/vnd.ducknng.frame` request and one framed response per POST. The browser WebSocket carrier sends one binary ducknng frame per WebSocket message and receives one binary reply message.
 
-```c
-typedef struct ducknng_net_backend {
-    const ducknng_net_caps *(*capabilities)(void);
-    /* async by contract; native completes on NNG AIO, browser on the JS bridge */
-    int (*http_submit)(const ducknng_http_request *req,
-                       ducknng_completion *on_done);
-    int (*frame_submit)(const ducknng_frame_request *req,
-                        ducknng_completion *on_done);
-    int (*cancel)(ducknng_op_handle h);
-} ducknng_net_backend;
-```
+The server half of the browser WebSocket carrier lives in `src/ducknng_ws_frame.c`. An HTTP or HTTPS ducknng service starts a raw-WebSocket sibling endpoint at `<mount>/ws`, using `ws://` or `wss://` respectively. Each frame passes through `ducknng_service_authorize_and_dispatch_frame()`, the same admission, authorization, accounting, execution-subject, and session checks as the HTTP frame endpoint.
 
-Native binds `http_submit`/`frame_submit` to the existing NNG HTTP client and
-socket paths in `src/ducknng_http_compat.c`. The browser binds them to the JS
-bridge (below). Selection happens once, at extension load, by target — not at
-every call site. `ducknng_http_transact` and the `ducknng_ncurl*` SQL functions
-call `backend->http_submit(...)`; the `__EMSCRIPTEN__` branch currently inside
-`ducknng_http_transact` moves *into* the browser backend and disappears from the
-shared code.
+This browser carrier is not NNG SP-over-WebSocket. Native `ws://` and `wss://` continue to use NNG's SP transport. Browsers use ducknng-frame-over-WebSocket because the JavaScript WebSocket API cannot reproduce NNG's SP handshake and stream framing. Synchronous browser WS/WSS helpers reject the operation and direct callers to the raw AIO helper family.
 
-### 2. A capability descriptor the extension reports
+## Conformance gate
 
-Replace the prose matrix with a struct the backend fills in and SQL can read via
-a new scalar (e.g. `ducknng_transport_capabilities()` returning JSON):
+`node test/browser/run_smoke.mjs <site> --probes=conformance` first compares the scalar capability JSON with the active row returned by the capability table function. It then applies the three-state policy to each carrier probe.
 
-```c
-typedef struct ducknng_net_caps {
-    /* per-transport: unsupported | experimental | supported */
-    ducknng_cap http;        /* http://  */
-    ducknng_cap https;       /* https:// (TLS ownership below) */
-    ducknng_cap http_response_stream; /* incremental client body reads */
-    ducknng_cap inproc;      /* inproc:// */
-    ducknng_cap tcp;         /* tcp:// */
-    ducknng_cap ipc;         /* ipc:// */
-    ducknng_cap tls_tcp;     /* tls+tcp:// */
-    ducknng_cap websocket;   /* ws:// wss:// */
-    /* async semantics */
-    bool async_is_real;      /* false => terminal-at-launch handles */
-    bool honors_timeout;
-    bool honors_cancel;
-    /* tls ownership */
-    ducknng_tls_owner tls_owner; /* native | browser_managed */
-} ducknng_net_caps;
-```
+The `wasm_eh` gate covers:
 
-The native backend reports everything `supported`, real async, native TLS. The
-browser `wasm_eh` backend reports `http`/`https` supported, browser-managed TLS,
-and real unary async Fetch handles; incremental `http_response_stream` remains
-unsupported until the backend uses `ReadableStream`. The `wasm_threads`
-`inproc://` spike sets `inproc = experimental`. The compatibility
-table in `docs/wasm.md` becomes a *rendering* of this descriptor rather than a
-source of truth maintained by hand.
+- extension loading and scalar SQL;
+- same-origin HTTP GET/POST, headers, status-as-data, invalid input, and CORS failures;
+- asynchronous Fetch pending, collect, cancellation, timeout, and cleanup;
+- JSON, text, and CSV table decoding;
+- HTTPS/CORS and explicit TLS-handle rejection;
+- raw, structured, AIO, and session RPC over HTTP;
+- WS and WSS framed RPC, persistent actor reuse, cancellation, timeout, abnormal close, synchronous-call rejection, and explicit WSS TLS-handle rejection.
 
-### 3. One promise→AIO bridge (retire the terminal handles)
+The Pages workflow runs this conformance gate against the CI-built `wasm_eh` artifact before publishing any demo artifact. The `wasm_threads` build remains a report-only load check because repeated browser runs still expose runtime load and NNG pthread progress instability.
 
-This is the change that removes the largest body of per-operation browser code.
-Instead of a synchronous XHR that forces terminal-at-launch handles, implement a
-single async bridge:
+## Incremental HTTP bodies
 
-- JS side issues `fetch(url, { signal })` with an `AbortController`, and on
-  settle pushes `{opId, status, headers, body}` (or an error) onto a completion
-  queue.
-- C side drains that queue on the extension's normal progress tick and completes
-  the corresponding `nng_aio` / ducknng AIO object, exactly as the native NNG
-  completion callback does today.
-- `timeout_ms` maps to `AbortController.abort()` after the deadline; cancel maps
-  to the same `abort()`. Both now work, so `honors_timeout`/`honors_cancel` flip
-  to `true` and `async_is_real` becomes `true` for the browser backend.
+The capability descriptor reports browser response streaming as `unsupported`. Future implementation should follow the direction of [`r-lib/nanonext#329`](https://github.com/r-lib/nanonext/issues/329): open an HTTP session that returns status and headers, then receive body chunks through the ordinary AIO receive model, with a zero-length chunk marking EOF. Browser `ReadableStream.getReader()` can implement that transport later. Do not expand the public API with another browser-specific streaming method family.
 
-With this in place, the entire `ducknng_client_add_terminal_http_*_aio` family in
-`src/ducknng_sql_aio.c` collapses: `ducknng_ncurl_aio(...)`,
-`ducknng_ncurl_table(...)`, and the framed helpers use the *same* AIO plumbing as
-native, because the browser backend now delivers real completions. The
-synchronous `EM_ASM` XHR in `src/ducknng_wasm_http_fetch.c` remains available
-only as a fallback for runtimes without a usable event loop, gated by a
-capability flag, not as the default path.
+## Hosting and artifacts
 
-The bridge needs one of: Emscripten Asyncify around the submit call, or (leaner)
-a completion-queue drain wired to the extension progress loop so no stack
-unwinding is required. The queue-drain option keeps the C control flow identical
-to native and is the recommended route; Asyncify is the fallback if a synchronous
-SQL entry point must await inline.
+The local harness serves COOP/COEP and no-cache headers. GitHub Pages uses a same-origin mirror of the CI-built side module because direct release assets may not provide the CORS/CORP response headers required by a cross-origin-isolated threaded runtime. The rolling Pages artifact is demo provenance, not a stable binary release channel.
 
-### 4. A carrier interface for frames
-
-The tree already contains "Use browser HTTP frame client fallback": RPC/session
-frames are tunnelled over an HTTP POST when native sockets are unavailable.
-Generalize that into an explicit **frame carrier** interface — "send this frame,
-await the reply frame" — with implementations for native inproc/tcp, browser
-HTTP POST, and, later, browser WebSocket. The RPC method layer in
-`src/ducknng_sql_rpc.c` speaks only to the carrier, so:
-
-- Browser `ws://`/`wss://` becomes "add a `WsFrameCarrier` that advertises
-  `websocket = supported`," not a new column threaded through every RPC method.
-- The frame wire format stays transport-independent, which is already the
-  implicit contract the HTTP fallback relies on.
-
-**Status (#11): implemented.** Tracing the wire showed this needed a server half
-too, not just a client binding: native `ws://` speaks NNG SP-over-WebSocket
-(subprotocol, SP stream framing, req/rep backtrace header), which a browser JS
-`WebSocket` cannot reasonably reproduce. So the carrier is *ducknng-frame-over-
-WebSocket*, symmetric with the HTTP POST carrier, with both halves:
-
-- **Server** (`src/ducknng_ws_frame.c`): a raw-WebSocket (message-mode) nng
-  stream listener beside the HTTP RPC mount, sharing the same nng HTTP server at
-  a `/ws` sibling path (`ws://host:port/<path>/ws`, `wss://` when the mount is
-  TLS). Each connection reads one binary WS message as a ducknng frame and
-  dispatches it through `ducknng_service_authorize_and_dispatch_frame()` — the
-  same admission/authorization/accounting/session gate the HTTP handler now also
-  uses — then replies with one binary WS message.
-- **Client** (`src/ducknng_wasm_ws_bridge.c`): a `WsFrameCarrier` keeping one
-  persistent JS `WebSocket` per URL, riding the step-4 completion-queue op table
-  and pump. Replies are correlated **FIFO per socket** (the server is serial per
-  connection and the frame carries no request id). It is **async-only**: browsers
-  have no synchronous WebSocket receive, so the synchronous RPC path rejects
-  `ws://`/`wss://` and points callers at `*_rpc_aio`. `wss://` is browser-managed
-  TLS. Non-goal: browser SP-over-WS.
-
-### 5. One conformance suite, gated by capabilities
-
-Replace the growing `--probes=load,inproc,http-sync,http-aio,...` enumeration
-with a single conformance suite (ideally the *same* SQL assertions native runs)
-that reads `ducknng_transport_capabilities()` and:
-
-- runs every assertion whose required capability is `supported`,
-- **skips** assertions whose capability is `unsupported` (a clean, expected skip),
-- runs `experimental` assertions in a non-gating lane,
-- **fails hard** if a `supported` capability's assertion fails, or if an
-  assertion succeeds for a capability the backend claims is `unsupported`
-  (claim/behavior drift in either direction is a bug).
-
-The Playwright runner under `test/browser/` then stops needing a bespoke probe
-list per browser lane. Promoting a capability from `experimental` to `supported`
-is a one-line descriptor change that immediately subjects it to the shared suite
-— which is exactly the "flip a flag" property we want instead of "write another
-slice."
-
-## What this buys, and what it costs
-
-**Buys:** browser support grows by editing a capability descriptor and binding a
-backend method, not by forking each SQL function. Async/timeout/cancel are
-correct once. `ws://` and any future carrier are additive. The support matrix
-stops being hand-maintained prose. The pthread `inproc://` research is quarantined
-behind `experimental` and no longer a source of gate flakiness.
-
-**Costs:** the promise→AIO bridge is real work (a completion queue wired to the
-progress loop, plus `AbortController` lifetime handling), and introducing the
-`ducknng_net_backend` vtable is a refactor of live native code paths — it must be
-behavior-preserving on native, verified by the existing native test suite before
-any browser rebinding. The synchronous XHR shim should stay in-tree as the
-capability-gated fallback during the transition rather than being deleted up
-front.
-
-## Suggested sequencing
-
-1. Extract `ducknng_net_backend` and route native code through it with **no**
-   behavior change; prove parity with the native test suite.
-2. Add `ducknng_net_caps` + `ducknng_transport_capabilities()`; render the
-   `docs/wasm.md` matrix from it.
-3. Rebind the browser backend behind the same interface, still using synchronous
-   XHR, reporting `async_is_real = false`. No behavior change versus today.
-4. Land the promise→AIO bridge; flip the browser backend to real async and
-   delete the terminal-handle twins in `src/ducknng_sql_aio.c`.
-5. Introduce the frame-carrier interface; move the HTTP frame fallback behind it.
-6. Convert the browser harness to the capability-gated conformance suite.
-7. Only then consider a `WsFrameCarrier` and, separately, whether the pthread
-   `inproc://` spike has a progress model worth promoting past `experimental`.
-
-## Non-goals (unchanged)
-
-This proposal does not change the browser sandbox facts recorded in the
-checklist: raw `tcp://`, `ipc://`, and native `tls+tcp://` remain unsupported in
-the browser; browser HTTPS TLS stays browser-managed and explicit ducknng TLS
-config handles stay rejected rather than silently ignored; GitHub Pages wasm
-artifacts remain demo provenance, not a stable binary release channel. The point
-here is only to change *how support is structured and grown*, not to claim any
-new transport.
+The detailed build commands, target matrix, and evidence log are in `docs/wasm.md`. `docs/wasm_browser_transport_checklist.md` records the completed browser-client scope and explicit non-goals. `test/browser/README.md` documents the executable probes.

@@ -1,99 +1,67 @@
-# Browser wasm smoke tests
+# Browser wasm conformance
 
-This directory contains the local Playwright test runner for the `duckdb-wasm` side-module smoke page. It is intentionally separate from the static smoke page itself: the page lives under `scripts/`, while this runner starts a local header-capable HTTP server and drives that page in real Chromium.
-
-The runner proves only the probes requested on the command line. The default `load` probe starts DuckDB wasm, loads the `ducknng` extension, verifies `crossOriginIsolated` under local COOP/COEP headers, and runs one SQL shell query through the loaded extension. Transport probes such as `inproc`, `http-sync`, `http-aio`, `http-table`, `https-cors`, and `http-rpc` are opt-in so an artifact does not accidentally claim transport support before that path is present.
+`run_smoke.mjs` serves a staged duckdb-wasm site with COOP/COEP headers and drives it in real Chromium. The release gate is capability-driven: it reads the extension's active network descriptor, checks scalar/table agreement, and runs every supported probe as a hard assertion.
 
 ## Setup
-
-Install the local Node dependencies once:
 
 ```sh
 cd test/browser
 npm ci
-```
-
-If Playwright browsers are not already installed on the machine, install Chromium with:
-
-```sh
 npx playwright install chromium
+cd ../..
 ```
 
-## Stage a site
-
-The runner consumes a staged static site. Build and stage one from the repository root:
+Stage the release-supported EH artifact:
 
 ```sh
 DUCKNNG_WASM_SERVE=0 DUCKDB_WASM_PLATFORM=wasm_eh \
   scripts/start_duckdb_wasm_local_test.sh
 ```
 
-or, for the pthread runtime:
-
-```sh
-DUCKNNG_WASM_SERVE=0 DUCKDB_WASM_PLATFORM=wasm_threads \
-  scripts/start_duckdb_wasm_local_test.sh
-```
-
-The staged site is normally written to:
-
-```text
-.duckdb-wasm-local-artifacts/site
-```
-
-## Run probes
-
-From the repository root, prove extension load and the SQL shell:
-
-```sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site
-```
-
-That is equivalent to:
-
-```sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site --probes=load
-```
-
-To run the smoke page's scalar/codec/`inproc://` proof as well:
-
-```sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site --probes=load,inproc
-```
-
-The `inproc` probe is diagnostic for `wasm_threads` on a real COOP/COEP local server. It has passed individual local proofs, but repeated headless Chromium runs currently expose extension-load and NNG progress flakiness. For non-threaded runtimes, an unavailable `inproc://` result is reported as acceptable rather than as transport support.
-
-To exercise the release-supported `wasm_eh` browser HTTP lane after staging an EH site:
+Run the complete gate:
 
 ```sh
 node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
+  --probes=conformance
 ```
 
-The HTTP probes start local test endpoints and call them through the page's SQL shell. They prove same-origin `ducknng_ncurl(...)` GET/POST, request-header propagation, response-header exposure, HTTP-status-as-data behavior for 404, invalid method and invalid-header in-band errors, cross-origin no-CORS error mapping, terminal `ducknng_ncurl_aio(...)` collect/status/cancel/drop behavior for both success and launch-failure handles, `ducknng_ncurl_table(...)` JSON/text/CSV parsing, raw HTTPS CORS plus HTTPS CORS table parsing, browser-managed TLS rejection for explicit ducknng TLS handles, and framed raw/RPC/session helper routing over browser HTTP. They do not prove browser `ipc://`, raw `tcp://`, native POSIX-style `tls+tcp://`, or WebSocket support.
-
-The threaded lane is diagnostic rather than release-blocking:
-
-```sh
-DUCKNNG_WASM_SERVE=0 DUCKDB_WASM_PLATFORM=wasm_threads \
-  scripts/start_duckdb_wasm_local_test.sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,http-sync,http-aio,http-table,https-cors,http-rpc
-```
-
-Repeated `wasm_threads` runs can still expose extension-load timeouts, NNG `inproc://` progress timeouts, or DuckDB-wasm JSON extension autoload failures. Use those results for diagnosis, not as the release support gate.
-
-Useful environment variables:
-
-```sh
-BROWSER_DEBUG=1
-DUCKNNG_BROWSER_PROBES=load,http-sync,http-aio,http-table,https-cors,http-rpc
-```
-
-A successful run prints:
+A successful run ends with:
 
 ```text
 BROWSER SMOKE: PASS
 ```
 
-Do not treat screenshots or browser images as proof unless the text log contains the passing status.
+The same command gates the wasm Pages workflow before demo artifacts are published.
+
+## Probes
+
+`load` loads the extension, checks cross-origin isolation, and runs scalar SQL.
+
+`inproc` exercises the page's scalar, codec, raw-AIO, and manifest path. It is unsupported on `wasm_eh` and experimental on `wasm_threads`, so it does not gate the release lane.
+
+`http-sync` covers same-origin GET/POST, request and response headers, status-as-data, invalid input, and no-CORS failure mapping.
+
+`http-aio` covers pending state, collection, poll-style wait, cancellation, timeout, terminal launch errors, and cleanup through the Fetch/AbortController bridge.
+
+`http-table` decodes JSON, text, and CSV responses.
+
+`https-cors` covers a separate local HTTPS origin, exposed headers, table decoding, and rejection of explicit ducknng TLS handles under browser-managed TLS.
+
+`http-rpc` covers raw, structured, AIO, and query-session helpers over the HTTP frame carrier.
+
+`ws-rpc` covers asynchronous `ws://` and `wss://` framed RPC, persistent actor reuse, cancellation, timeout, abnormal close, synchronous-call rejection, and explicit WSS TLS-handle rejection. It uses a bounded local WebSocket frame responder from the pinned `ws` development dependency.
+
+`conformance` reads `ducknng_transport_capabilities()`, verifies the active `ducknng_list_transport_capabilities()` row, then runs supported probes, skips unsupported probes, and treats experimental failures as report-only. It is the preferred command; explicit probe lists are for diagnosis.
+
+## Diagnostic threaded runtime
+
+```sh
+DUCKNNG_WASM_SERVE=0 DUCKDB_WASM_PLATFORM=wasm_threads \
+  scripts/start_duckdb_wasm_local_test.sh
+node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
+  --probes=load
+```
+
+Repeated `wasm_threads` runs can expose extension-load and NNG pthread progress timeouts. Do not promote those paths from `experimental` without repeatable browser evidence.
+
+`BROWSER_DEBUG=1` mirrors page console output. `BROWSER_HEADFUL=1` opens Chromium visibly. Screenshots are not proof; retain the textual passing log.

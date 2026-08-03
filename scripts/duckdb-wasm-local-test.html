@@ -129,17 +129,18 @@
       codec and registry calls, and a diagnostic raw <code>inproc://</code>
       URL-launched AIO / framed manifest path for pthread-capable runtimes. The
       Playwright harness around this page also proves browser HTTP client, AIO,
-      table, HTTPS/CORS, and framed RPC/session helper paths against local test
-      endpoints. On GitHub Pages, where cross-origin isolation is supplied by a
+      table, HTTPS/CORS, framed RPC/session helpers, and asynchronous WS/WSS
+      frame carriers against local test endpoints. On GitHub Pages, where
+      cross-origin isolation is supplied by a
       service worker, the page loads the extension and enables the SQL shell but
       skips the <code>inproc://</code> transport proof unless the host can provide
       real COOP/COEP headers.
     </p>
     <div class="banner">
       Browser <code>ipc://</code>, raw <code>tcp://</code>, native POSIX-style
-      <code>tls+tcp://</code>, and WebSocket transports are not supported by this page.
-      Browser HTTP(S) client requests use browser-managed TLS and require normal
-      same-origin/CORS permission.
+      <code>tls+tcp://</code>, generic socket handles, and listeners are unsupported.
+      Browser HTTP(S) and asynchronous WS/WSS clients use browser-managed TLS;
+      synchronous WS/WSS RPC is intentionally rejected.
     </div>
 
     <div class="grid">

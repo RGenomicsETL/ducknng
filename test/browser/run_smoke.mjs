@@ -8,7 +8,7 @@
 //
 // Usage:
 //   node test/browser/run_smoke.mjs [siteDir]
-//   node test/browser/run_smoke.mjs [siteDir] --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
+//   node test/browser/run_smoke.mjs [siteDir] --probes=conformance
 //
 // Environment:
 //   DUCKNNG_BROWSER_PROBES=load,http-sync
@@ -20,6 +20,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { WebSocketServer } from "ws";
 
 const DEFAULT_SITE_DIR = ".duckdb-wasm-local-artifacts/site";
 const SMOKE_PATH = "/scripts/duckdb-wasm-local-test.html";
@@ -31,6 +32,7 @@ const KNOWN_PROBES = new Set([
   "http-table",
   "https-cors",
   "http-rpc",
+  "ws-rpc",
   "conformance",
 ]);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -95,7 +97,7 @@ function parseProbes(raw) {
 }
 
 function printUsage() {
-  console.log(`Usage: node test/browser/run_smoke.mjs [siteDir] [--probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc]
+  console.log(`Usage: node test/browser/run_smoke.mjs [siteDir] [--probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc,ws-rpc]
 
 Probes:
   load       Load DuckDB wasm, LOAD the ducknng extension, verify local
@@ -122,6 +124,9 @@ Probes:
              for this probe.
   http-rpc   Exercise framed raw/RPC/session helper routing over browser HTTP
              against a small local ducknng-frame responder.
+  ws-rpc     Exercise the async browser ws:// and wss:// frame carrier,
+             including persistent reuse, timeout, cancellation, abnormal close,
+             synchronous-call rejection, and browser-managed WSS TLS.
   conformance
              Read ducknng_transport_capabilities(), assert the scalar and the
              active ducknng_list_transport_capabilities() row agree, then gate
@@ -297,6 +302,45 @@ function safeFilePath(root, pathname) {
   return filePath;
 }
 
+function attachWebSocketProbe(server) {
+  const wsServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
+  const paths = new Set(["/probe/rpc/ws", "/probe/rpc/ws-hang", "/probe/rpc/ws-close"]);
+
+  server.on("upgrade", (req, socket, head) => {
+    let pathname;
+    try {
+      pathname = new URL(req.url || "/", "http://localhost").pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (!paths.has(pathname)) {
+      socket.destroy();
+      return;
+    }
+    wsServer.handleUpgrade(req, socket, head, (ws) => {
+      wsServer.emit("connection", ws, req);
+    });
+  });
+
+  wsServer.on("connection", (ws, req) => {
+    const pathname = new URL(req.url || "/", "http://localhost").pathname;
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary) {
+        ws.close(1003, "binary ducknng frames required");
+        return;
+      }
+      if (pathname === "/probe/rpc/ws-hang") return;
+      if (pathname === "/probe/rpc/ws-close") {
+        ws.close(1011, "intentional probe close");
+        return;
+      }
+      ws.send(ducknngFrameResponseFor(Buffer.from(data)), { binary: true });
+    });
+  });
+  return wsServer;
+}
+
 function startServer(root) {
   const server = createServer(async (req, res) => {
     try {
@@ -322,9 +366,10 @@ function startServer(root) {
     }
   });
 
+  const wsServer = attachWebSocketProbe(server);
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
-      resolveServer({ server, port: server.address().port });
+      resolveServer({ server, wsServer, port: server.address().port });
     });
   });
 }
@@ -364,9 +409,10 @@ async function startHttpsProbeServer() {
       res.end("https probe failure");
     }
   });
+  const wsServer = attachWebSocketProbe(server);
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
-      resolveServer({ server, port: server.address().port });
+      resolveServer({ server, wsServer, port: server.address().port });
     });
   });
 }
@@ -512,7 +558,7 @@ async function conformanceGate(name, capability, fn, available = true) {
   await fn();
 }
 
-async function runConformanceProbe(page, base, httpsBase, noCorsBase) {
+async function runConformanceProbe(page, base, httpsBase, noCorsBase, wsBase, wssBase) {
   const caps = await readCapabilities(page);
   // HTTP client family, including the frame carrier, gates on http support.
   await conformanceGate("http sync client", caps.http,
@@ -525,6 +571,8 @@ async function runConformanceProbe(page, base, httpsBase, noCorsBase) {
     () => runHttpRpcProbe(page, base));
   await conformanceGate("https client", caps.https,
     () => runHttpsCorsProbe(page, httpsBase), httpsBase != null);
+  await conformanceGate("websocket frame carrier", caps.websocket,
+    () => runWebSocketRpcProbe(page, wsBase, wssBase), wsBase != null && wssBase != null);
   // inproc is drift-checked: the runInprocProbe already fails for wasm_threads
   // and reports unavailable otherwise, so map it to the same three-way rule.
   await conformanceGate("inproc transport", caps.inproc,
@@ -654,7 +702,7 @@ async function runHttpAioProbe(page, base) {
     `ducknng_aio_wait(list_value(aio), 5000) AS waited FROM browser_http_aio`,
     30000);
   if (/error/i.test(waited.meta) || !/false/i.test(waited.table) || !/true/i.test(waited.table)) {
-    fail(`http-aio wait/cancel did not match terminal browser handle semantics: "${waited.table}"`);
+    fail(`http-aio wait/cancel did not match an already-ready browser handle: "${waited.table}"`);
   }
 
   const status = await runShell(page,
@@ -912,6 +960,121 @@ async function runHttpRpcProbe(page, base) {
   console.log("ok: http-rpc proved raw, structured, aio, and session helper routing over browser HTTP");
 }
 
+async function collectWebSocketAio(page, tableName, launchSql, expectedName, expectedPayload) {
+  await runShell(page, `DROP TABLE IF EXISTS ${tableName}`, 10000);
+  const launch = await runShell(page,
+    `CREATE TEMP TABLE ${tableName} AS SELECT ${launchSql} AS aio`, 30000);
+  if (/error/i.test(launch.meta)) fail(`websocket aio launch failed for ${tableName}: ${launch.table}`);
+  // Let the DB worker event loop deliver the browser WebSocket callback before
+  // entering a collect query; browser waits are deliberately poll-style.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const collected = await runShell(page,
+    `WITH c AS (` +
+    `  SELECT * FROM ducknng_aio_collect_decoded((SELECT list_value(aio) FROM ${tableName}), 5000)` +
+    `), d AS (` +
+    `  SELECT c.*, ducknng_aio_drop(c.aio_id) AS dropped FROM c` +
+    `) SELECT ok AND dropped AS lifecycle_ok, type_name, name, payload_text FROM d`,
+    30000);
+  if (/error/i.test(collected.meta) || !/true/i.test(collected.table) ||
+      !new RegExp(expectedName, "i").test(collected.table) ||
+      !new RegExp(expectedPayload, "i").test(collected.table)) {
+    fail(`websocket aio collect failed for ${tableName}: ${collected.table}`);
+  }
+  await runShell(page, `DROP TABLE IF EXISTS ${tableName}`, 10000);
+}
+
+async function runWebSocketRpcProbe(page, wsBase, wssBase) {
+  const sync = await runShell(page,
+    `SELECT ok, error FROM ducknng_get_rpc_manifest('${wsBase}', 0::UBIGINT)`, 30000);
+  if (/error/i.test(sync.meta) || !/false/i.test(sync.table) ||
+      !/(synchronous WebSocket|async.*aio)/i.test(sync.table)) {
+    fail(`websocket synchronous helper was not rejected explicitly: ${sync.table}`);
+  }
+
+  await collectWebSocketAio(page, "browser_ws_manifest_aio",
+    `ducknng_get_rpc_manifest_raw_aio('${wsBase}', 5000, 0::UBIGINT)`,
+    "manifest", "browser_manifest");
+  // A second operation on the same URL reuses the persistent actor and proves
+  // that request/reply FIFO remains aligned after the first op is collected.
+  await collectWebSocketAio(page, "browser_ws_exec_aio",
+    `ducknng_run_rpc_raw_aio('${wsBase}', 'SELECT 1', 5000, 0::UBIGINT)`,
+    "exec", "rows_changed");
+  await collectWebSocketAio(page, "browser_wss_manifest_aio",
+    `ducknng_get_rpc_manifest_raw_aio('${wssBase}', 5000, 0::UBIGINT)`,
+    "manifest", "browser_manifest");
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_cancel_aio", 10000);
+  const cancelLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_ws_cancel_aio AS ` +
+    `SELECT ducknng_get_rpc_manifest_raw_aio('${wsBase}-hang', 0, 0::UBIGINT) AS aio`, 30000);
+  if (/error/i.test(cancelLaunch.meta)) fail(`websocket cancel launch failed: ${cancelLaunch.table}`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const pending = await runShell(page,
+    `SELECT state, terminal FROM ducknng_aio_status((SELECT aio FROM browser_ws_cancel_aio))`, 30000);
+  if (/error/i.test(pending.meta) || !/pending/i.test(pending.table) || !/false/i.test(pending.table)) {
+    fail(`websocket hanging operation was not pending: ${pending.table}`);
+  }
+  const cancelled = await runShell(page,
+    `SELECT ducknng_aio_cancel(aio) AS cancelled FROM browser_ws_cancel_aio`, 10000);
+  if (/error/i.test(cancelled.meta) || !/true/i.test(cancelled.table)) {
+    fail(`websocket pending operation did not cancel: ${cancelled.table}`);
+  }
+  const cancelledStatus = await runShell(page,
+    `SELECT state, terminal FROM ducknng_aio_status((SELECT aio FROM browser_ws_cancel_aio))`, 30000);
+  if (/error/i.test(cancelledStatus.meta) || !/cancelled/i.test(cancelledStatus.table) ||
+      !/true/i.test(cancelledStatus.table)) {
+    fail(`websocket cancelled operation reported the wrong state: ${cancelledStatus.table}`);
+  }
+  await runShell(page, `SELECT ducknng_aio_drop(aio) FROM browser_ws_cancel_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_cancel_aio", 10000);
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_timeout_aio", 10000);
+  const timeoutLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_ws_timeout_aio AS ` +
+    `SELECT ducknng_get_rpc_manifest_raw_aio('${wsBase}-hang', 200, 0::UBIGINT) AS aio`, 30000);
+  if (/error/i.test(timeoutLaunch.meta)) fail(`websocket timeout launch failed: ${timeoutLaunch.table}`);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const timedOut = await runShell(page,
+    `SELECT state, error FROM ducknng_aio_status((SELECT aio FROM browser_ws_timeout_aio))`, 30000);
+  if (/error(?!\s*\|)/i.test(timedOut.meta) || !/timed out/i.test(timedOut.table)) {
+    fail(`websocket timeout did not tear down the actor: ${timedOut.table}`);
+  }
+  await runShell(page, `SELECT ducknng_aio_drop(aio) FROM browser_ws_timeout_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_timeout_aio", 10000);
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_close_aio", 10000);
+  const closeLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_ws_close_aio AS ` +
+    `SELECT ducknng_get_rpc_manifest_raw_aio('${wsBase}-close', 5000, 0::UBIGINT) AS aio`, 30000);
+  if (/error/i.test(closeLaunch.meta)) fail(`websocket abnormal-close launch failed: ${closeLaunch.table}`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const closed = await runShell(page,
+    `SELECT state, error FROM ducknng_aio_status((SELECT aio FROM browser_ws_close_aio))`, 30000);
+  if (/error(?!\s*\|)/i.test(closed.meta) || !/browser WebSocket (error|closed)/i.test(closed.table)) {
+    fail(`websocket abnormal close was not surfaced: ${closed.table}`);
+  }
+  await runShell(page, `SELECT ducknng_aio_drop(aio) FROM browser_ws_close_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_ws_close_aio", 10000);
+
+  await runShell(page, "DROP TABLE IF EXISTS browser_wss_tls_aio", 10000);
+  const tlsLaunch = await runShell(page,
+    `CREATE TEMP TABLE browser_wss_tls_aio AS WITH cfg AS (` +
+    `  SELECT ducknng_tls_config_from_pem('browser-wss-test', NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, 0) AS tls_id` +
+    `) SELECT tls_id, ducknng_get_rpc_manifest_raw_aio('${wssBase}', 5000, tls_id) AS aio FROM cfg`, 30000);
+  if (/error/i.test(tlsLaunch.meta)) fail(`wss explicit-TLS rejection launch failed: ${tlsLaunch.table}`);
+  const tlsStatus = await runShell(page,
+    `SELECT state, error FROM ducknng_aio_status((SELECT aio FROM browser_wss_tls_aio))`, 30000);
+  if (/error(?!\s*\|)/i.test(tlsStatus.meta) ||
+      !/(browser-managed TLS|explicit TLS configuration)/i.test(tlsStatus.table)) {
+    fail(`wss explicit TLS handle was not rejected: ${tlsStatus.table}`);
+  }
+  await runShell(page, `SELECT ducknng_aio_drop(aio) FROM browser_wss_tls_aio`, 10000);
+  await runShell(page, `SELECT ducknng_drop_tls_config(tls_id) FROM browser_wss_tls_aio`, 10000);
+  await runShell(page, "DROP TABLE IF EXISTS browser_wss_tls_aio", 10000);
+
+  console.log("ok: websocket carrier passed ws/wss RPC, persistence, cancel, timeout, close, and TLS semantics");
+}
+
 let options;
 try {
   options = parseArgs(process.argv.slice(2));
@@ -925,13 +1088,15 @@ try {
 }
 
 const { siteDir, probes } = options;
-const { server, port } = await startServer(siteDir);
-const wantsHttps = probes.has("https-cors") || probes.has("conformance");
+const { server, wsServer, port } = await startServer(siteDir);
+const wantsHttps = probes.has("https-cors") || probes.has("ws-rpc") || probes.has("conformance");
 const wantsNoCors = probes.has("http-sync") || probes.has("conformance");
 const httpsProbe = wantsHttps ? await startHttpsProbeServer() : null;
 const noCorsProbe = wantsNoCors ? await startNoCorsProbeServer() : null;
 const base = `http://127.0.0.1:${port}`;
 const httpsBase = httpsProbe ? `https://127.0.0.1:${httpsProbe.port}` : null;
+const wsBase = `ws://127.0.0.1:${port}/probe/rpc/ws`;
+const wssBase = httpsProbe ? `wss://127.0.0.1:${httpsProbe.port}/probe/rpc/ws` : null;
 const noCorsBase = noCorsProbe ? `http://127.0.0.1:${noCorsProbe.port}` : null;
 console.log(`serving ${siteDir} at ${base} (COOP/COEP enabled)`);
 if (httpsBase) console.log(`serving HTTPS CORS probe at ${httpsBase}`);
@@ -962,7 +1127,10 @@ try {
   if (probes.has("http-table")) await runHttpTableProbe(page, base);
   if (probes.has("https-cors")) await runHttpsCorsProbe(page, httpsBase);
   if (probes.has("http-rpc")) await runHttpRpcProbe(page, base);
-  if (probes.has("conformance")) await runConformanceProbe(page, base, httpsBase, noCorsBase);
+  if (probes.has("ws-rpc")) await runWebSocketRpcProbe(page, wsBase, wssBase);
+  if (probes.has("conformance")) {
+    await runConformanceProbe(page, base, httpsBase, noCorsBase, wsBase, wssBase);
+  }
 } catch (error) {
   if ((error?.message ?? String(error)) !== RECORDED_FAILURE) {
     console.error(`FAIL: ${error?.message ?? String(error)}`);
@@ -971,8 +1139,14 @@ try {
 } finally {
   if (context) await context.close();
   if (browser) await browser.close();
-  if (httpsProbe) httpsProbe.server.close();
+  if (httpsProbe) {
+    for (const client of httpsProbe.wsServer.clients) client.terminate();
+    httpsProbe.wsServer.close();
+    httpsProbe.server.close();
+  }
   if (noCorsProbe) noCorsProbe.server.close();
+  for (const client of wsServer.clients) client.terminate();
+  wsServer.close();
   server.close();
 }
 

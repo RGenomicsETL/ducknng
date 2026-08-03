@@ -5,12 +5,14 @@
   "type": "module",
   "description": "Headless Playwright smoke tests for the ducknng duckdb-wasm side module.",
   "scripts": {
-    "test": "node run_smoke.mjs",
+    "test": "node run_smoke.mjs --probes=conformance",
     "test:load": "node run_smoke.mjs --probes=load",
     "test:baseline": "node run_smoke.mjs --probes=load,inproc",
-    "test:http-sync": "node run_smoke.mjs --probes=load,http-sync"
+    "test:http-sync": "node run_smoke.mjs --probes=load,http-sync",
+    "test:ws": "node run_smoke.mjs --probes=load,ws-rpc"
   },
   "devDependencies": {
-    "playwright": "1.60.0"
+    "playwright": "1.60.0",
+    "ws": "8.21.1"
   }
 }

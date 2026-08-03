@@ -12,6 +12,7 @@ on:
       - 'scripts/docker/duckdb-wasm-local.Dockerfile'
       - 'scripts/duckdb-wasm-local-test.html'
       - 'scripts/start_duckdb_wasm_local_test.sh'
+      - 'test/browser/**'
       - 'src/**'
       - 'third_party/**'
       - 'patches/nng/**'

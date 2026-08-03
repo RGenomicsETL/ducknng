@@ -4104,7 +4104,7 @@ when validating a wasm/browser change.</p>
 <div class="sourceCode" id="cb54"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb54-1"><a href="#cb54-1" tabindex="-1"></a><span class="va">DUCKDB_WASM_PLATFORM</span><span class="op">=</span>wasm_eh <span class="va">DUCKNNG_WASM_SERVE</span><span class="op">=</span>0 <span class="dt">\</span></span>
 <span id="cb54-2"><a href="#cb54-2" tabindex="-1"></a>  <span class="ex">scripts/start_duckdb_wasm_local_test.sh</span></span></code></pre></div>
 <div class="sourceCode" id="cb55"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb55-1"><a href="#cb55-1" tabindex="-1"></a><span class="ex">node</span> test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site <span class="dt">\</span></span>
-<span id="cb55-2"><a href="#cb55-2" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc</span></code></pre></div>
+<span id="cb55-2"><a href="#cb55-2" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>conformance</span></code></pre></div>
 <p>The threaded runtime remains diagnostic rather than release-blocking.
 It can build and individual HTTP probes can pass, but repeated headless
 runs still expose extension-load, <code>inproc://</code> progress, and
@@ -4112,7 +4112,7 @@ DuckDB-wasm JSON-autoload instability.</p>
 <div class="sourceCode" id="cb56"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb56-1"><a href="#cb56-1" tabindex="-1"></a><span class="va">DUCKDB_WASM_PLATFORM</span><span class="op">=</span>wasm_threads <span class="va">DUCKNNG_WASM_SERVE</span><span class="op">=</span>0 <span class="dt">\</span></span>
 <span id="cb56-2"><a href="#cb56-2" tabindex="-1"></a>  <span class="ex">scripts/start_duckdb_wasm_local_test.sh</span></span>
 <span id="cb56-3"><a href="#cb56-3" tabindex="-1"></a><span class="ex">node</span> test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site <span class="dt">\</span></span>
-<span id="cb56-4"><a href="#cb56-4" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>load,http-sync,http-aio,http-table,https-cors,http-rpc</span></code></pre></div>
+<span id="cb56-4"><a href="#cb56-4" tabindex="-1"></a>  <span class="at">--probes</span><span class="op">=</span>load</span></code></pre></div>
 <p>Self-published unsigned release assets are built by the dedicated
 release workflow. Push release tags one at a time using
 <code>v&lt;ducknng-version&gt;-duckdb&lt;duckdb-version&gt;</code> so

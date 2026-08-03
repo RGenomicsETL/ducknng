@@ -2480,7 +2480,7 @@ DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
 
 ``` bash
 node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,inproc,http-sync,http-aio,http-table,https-cors,http-rpc
+  --probes=conformance
 ```
 
 The threaded runtime remains diagnostic rather than release-blocking. It
@@ -2492,7 +2492,7 @@ JSON-autoload instability.
 DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
   scripts/start_duckdb_wasm_local_test.sh
 node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load,http-sync,http-aio,http-table,https-cors,http-rpc
+  --probes=load
 ```
 
 Self-published unsigned release assets are built by the dedicated
