@@ -82,11 +82,11 @@ SELECT (ducknng_dial_socket(
   1000, getvariable('tour_tls')::UBIGINT
 )).ok AS dialed;
 
-+-------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS "UBIGINT")) |
-+-------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                    |
-+-------------------------------------------------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS UBIGINT)) |
++-----------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                  |
++-----------------------------------------------------------------------------------------------------------------------+
 
 +------------------+
 | tls_listen_ready |
@@ -155,18 +155,33 @@ SELECT ducknng_request_raw_aio(
          getvariable('tour_tls')::UBIGINT
        ) AS aio_id
 FROM range(2) t(i);
--- A one-element collect waits for that specific handle.
-SELECT count(*) AS replies,
-       bool_and(c.ok) AS all_ok,
-       bool_and(octet_length(c.frame) > 0) AS all_have_frames
-FROM tour_aios AS a,
-LATERAL ducknng_aio_collect(list_value(a.aio_id), 1000) AS c;
+-- A one-element collect waits for that specific handle. DuckDB 1.4 cannot
+-- bind this collector as a correlated table function, so resolve each handle
+-- before invoking it.
+SET VARIABLE tour_aio_1 = (
+  SELECT aio_id FROM tour_aios ORDER BY aio_id LIMIT 1
+);
+SET VARIABLE tour_aio_2 = (
+  SELECT aio_id FROM tour_aios ORDER BY aio_id LIMIT 1 OFFSET 1
+);
+SELECT ok, octet_length(frame) > 0 AS has_frame
+FROM ducknng_aio_collect(
+  list_value(getvariable('tour_aio_1')::UBIGINT), 1000
+)
+UNION ALL
+SELECT ok, octet_length(frame) > 0 AS has_frame
+FROM ducknng_aio_collect(
+  list_value(getvariable('tour_aio_2')::UBIGINT), 1000
+);
 
-+---------+--------+-----------------+
-| replies | all_ok | all_have_frames |
-+---------+--------+-----------------+
-| 2       | true   | true            |
-+---------+--------+-----------------+
+
+
++------+-----------+
+|  ok  | has_frame |
++------+-----------+
+| true | true      |
+| true | true      |
++------+-----------+
 ```
 
 **`ducknng_ncurl` — HTTP client primitive.** The framed RPC mount
@@ -190,11 +205,11 @@ SET VARIABLE tour_http_reply = (
 SELECT ok, type_name, name,
        json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
 FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
-+------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                             |
-+------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++----------------------------------------------------------------------------------------------------------------+
+| true                                                                                                           |
++----------------------------------------------------------------------------------------------------------------+
 
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
@@ -360,23 +375,23 @@ SELECT ducknng_add_stream_route(
 -- ncurl transparently reassembles the chunked body.
 SELECT ok, status, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18440/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-+--------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------+
 | ducknng_add_stream_route('tour_http', 'GET', '/events', 'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
    FROM generate_series(1, 3) t(i)') |
-+--------------------------------------+
-| true                                 |
-+--------------------------------------+
-+------+--------+-----------+
-|  ok  | status | body_text |
-+------+--------+-----------+
++----------------------------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                                     |
++----------------------------------------------------------------------------------------------------------------------------------------------------------+
++------+--------+--------------------------------------+
+|  ok  | status |              body_text               |
++------+--------+--------------------------------------+
 | true | 200    | data: tick 1
 
 data: tick 2
 
 data: tick 3
 
-          |
-+------+--------+-----------+
+ |
++------+--------+--------------------------------------+
 ```
 
 Explicit cleanup — everything that was opened must be explicitly
@@ -415,11 +430,11 @@ SELECT ducknng_drop_tls_config(getvariable('tour_tls')::UBIGINT);
 +-----------------------------+
 | true                        |
 +-----------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 ## Development
@@ -458,8 +473,8 @@ extension targets `TARGET_DUCKDB_VERSION`. It builds with
 (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
 result-to-IPC emit path. The only deprecated-entrypoint exception is the
 pending-result streaming pair, isolated in
-`src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.5.2 does not
-yet expose an undeprecated C API for pending execution with incremental
+`src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.4.0 does not
+expose an undeprecated C API for pending execution with incremental
 chunk delivery. Query sessions do not silently fall back to materialized
 results; when DuckDB provides a replacement streaming API, that
 compatibility boundary is the single place to change. `make rpc_bench`
@@ -475,23 +490,19 @@ dataset if needed and installs `quack` from `core_nightly`. The unstable
 functions in use are tracked by `tools/used_duckdb_unstable_api.R`; the
 table below is generated fresh on every README render:
 
-| ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
-|------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
-| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_result_chunk_count`, `duckdb_result_get_chunk`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                |     4 |
-| `unstable_new_append_functions`                | `duckdb_appender_error_data`                                                                                                                                                                                                                                                                                                            |     1 |
-| `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
-| `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
-| `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
-| `unstable_new_logger_functions`                | `duckdb_create_log_storage`, `duckdb_destroy_log_storage`, `duckdb_log_storage_set_extra_data`, `duckdb_log_storage_set_name`, `duckdb_log_storage_set_write_log_entry`, `duckdb_register_log_storage`                                                                                                                                  |     6 |
-| `unstable_new_open_connect_functions`          | `duckdb_client_context_get_connection_id`, `duckdb_connection_get_arrow_options`, `duckdb_connection_get_client_context`, `duckdb_destroy_arrow_options`, `duckdb_destroy_client_context`                                                                                                                                               |     5 |
-| `unstable_new_prepared_statement_functions`    | `duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_logical_type`, `duckdb_prepared_statement_column_name`                                                                                                                                                                                                      |     3 |
-| `unstable_new_query_execution_functions`       | `duckdb_result_get_arrow_options`                                                                                                                                                                                                                                                                                                       |     1 |
-| `unstable_new_scalar_function_functions`       | `duckdb_scalar_function_bind_set_error`, `duckdb_scalar_function_get_bind_data`, `duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_set_bind`, `duckdb_scalar_function_set_bind_data`, `duckdb_scalar_function_set_bind_data_copy`                                                                                    |     6 |
-| `unstable_new_scalar_function_state_functions` | `duckdb_scalar_function_set_init`                                                                                                                                                                                                                                                                                                       |     1 |
-| `unstable_new_string_functions`                | `duckdb_valid_utf8_check`                                                                                                                                                                                                                                                                                                               |     1 |
-| `unstable_new_table_function_functions`        | `duckdb_table_function_get_client_context`                                                                                                                                                                                                                                                                                              |     1 |
-| `unstable_new_value_functions`                 | `duckdb_create_map_value`, `duckdb_create_time_ns`, `duckdb_create_union_value`                                                                                                                                                                                                                                                         |     3 |
-| `unstable_new_vector_functions`                | `duckdb_create_selection_vector`, `duckdb_create_vector`, `duckdb_destroy_selection_vector`, `duckdb_destroy_vector`, `duckdb_selection_vector_get_data_ptr`, `duckdb_unsafe_vector_assign_string_element_len`, `duckdb_vector_copy_sel`                                                                                                |     7 |
+| ABI group                                   | Functions used                                                                                                                                                                                                                                       | Count |
+|---------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
+| `unstable_deprecated`                       | `duckdb_pending_prepared_streaming`, `duckdb_result_chunk_count`, `duckdb_result_get_chunk`, `duckdb_stream_fetch_chunk`                                                                                                                             |     4 |
+| `unstable_new_append_functions`             | `duckdb_appender_error_data`                                                                                                                                                                                                                         |     1 |
+| `unstable_new_arrow_functions`              | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                               |     2 |
+| `unstable_new_error_data_functions`         | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                              |     3 |
+| `unstable_new_open_connect_functions`       | `duckdb_client_context_get_connection_id`, `duckdb_connection_get_arrow_options`, `duckdb_connection_get_client_context`, `duckdb_destroy_arrow_options`, `duckdb_destroy_client_context`                                                            |     5 |
+| `unstable_new_prepared_statement_functions` | `duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_logical_type`, `duckdb_prepared_statement_column_name`                                                                                                                   |     3 |
+| `unstable_new_query_execution_functions`    | `duckdb_result_get_arrow_options`                                                                                                                                                                                                                    |     1 |
+| `unstable_new_scalar_function_functions`    | `duckdb_scalar_function_bind_set_error`, `duckdb_scalar_function_get_bind_data`, `duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_set_bind`, `duckdb_scalar_function_set_bind_data`, `duckdb_scalar_function_set_bind_data_copy` |     6 |
+| `unstable_new_table_function_functions`     | `duckdb_table_function_get_client_context`                                                                                                                                                                                                           |     1 |
+| `unstable_new_value_functions`              | `duckdb_create_map_value`, `duckdb_create_time_ns`, `duckdb_create_union_value`                                                                                                                                                                      |     3 |
+| `unstable_new_vector_functions`             | `duckdb_create_selection_vector`, `duckdb_create_vector`, `duckdb_destroy_selection_vector`, `duckdb_destroy_vector`, `duckdb_selection_vector_get_data_ptr`, `duckdb_vector_copy_sel`                                                               |     6 |
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
 All tests live under `test/sql/` as `.test` files. The public function
@@ -834,11 +845,11 @@ FROM ducknng_decode_frame(
 SELECT ducknng_stop_server('tls_demo');
 SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 
-+---------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_demo', 'tls+tcp://127.0.0.1:45453', 1, 134217728, 300000, CAST(getvariable('tls_self') AS "UBIGINT")) |
-+---------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                            |
-+---------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tls_demo', 'tls+tcp://127.0.0.1:45453', 1, 134217728, 300000, CAST(getvariable('tls_self') AS UBIGINT)) |
++-------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                          |
++-------------------------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -849,11 +860,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 +---------------------------------+
 | true                            |
 +---------------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_self') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_self') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 File-backed material uses
@@ -889,11 +900,11 @@ FROM ducknng_decode_frame(
 SELECT ducknng_stop_server('tls_files_demo');
 SELECT ducknng_drop_tls_config(getvariable('tls_files')::UBIGINT);
 
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_files_demo', 'tls+tcp://127.0.0.1:45454', 1, 134217728, 300000, CAST(getvariable('tls_files') AS "UBIGINT")) |
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                   |
-+----------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tls_files_demo', 'tls+tcp://127.0.0.1:45454', 1, 134217728, 300000, CAST(getvariable('tls_files') AS UBIGINT)) |
++--------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                 |
++--------------------------------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -904,11 +915,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_files')::UBIGINT);
 +---------------------------------------+
 | true                                  |
 +---------------------------------------+
-+----------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_files') AS "UBIGINT")) |
-+----------------------------------------------------------------------+
-| true                                                                 |
-+----------------------------------------------------------------------+
++--------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_files') AS UBIGINT)) |
++--------------------------------------------------------------------+
+| true                                                               |
++--------------------------------------------------------------------+
 ```
 
 ### WebSocket (`ws://`, `wss://`)
@@ -931,11 +942,11 @@ FROM ducknng_decode_frame(
   )
 );
 SELECT ducknng_stop_server('ws_demo');
-+--------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+--------------------------------------------------------------------------------------------------------------+
-| true                                                                                                         |
-+--------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++------------------------------------------------------------------------------------------------------------+
+| true                                                                                                       |
++------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -1159,11 +1170,12 @@ Version and schema compatibility belong to the negotiated ducknng
 session contract rather than to a suffix on the serializer token; full
 Quack protocol traffic uses `application/vnd.duckdb` messages and
 negotiates `quackVersion` during the connection exchange, but this fetch
-payload is not wrapped in that Quack connection envelope.
-`ducknng.fetch_batch_chunks` controls the default number of DuckDB
-chunks requested per fetch; it defaults to 12 and applies to Arrow IPC
-and `ducknng_quack_batch` alike unless the client sends an explicit
-`batch_rows` hint.
+payload is not wrapped in that Quack connection envelope. The fetch
+default is 12 DuckDB chunks and applies to Arrow IPC and
+`ducknng_quack_batch` alike unless the client sends an explicit
+`batch_rows` hint. DuckDB 1.4 cannot register extension configuration
+options through the C API, so this backport keeps that compiled default
+rather than accepting `SET ducknng.fetch_batch_chunks`.
 
 ``` sql
 SELECT *
@@ -1197,12 +1209,13 @@ API, so the executable compressed-vector fixtures are generated by
 `test/sql/ducknng_body_codecs.test` rather than rendered as opaque
 hexadecimal output here.
 
-This is not a claim over every logical type in every DuckDB release.
-DuckDB v1.5.2 has `GEOMETRY` and `VARIANT`, but the current
-Quack-derived codec rejects both: geometry carries versioned format and
-optional CRS metadata, while that release’s C API has no
-`DUCKDB_TYPE_VARIANT` constructor or vector contract. They are not
-silently projected to `BLOB` or `STRUCT`.
+This is not a claim over every logical type. DuckDB 1.4’s C type
+conversion returns `INVALID` for `TIME_NS`, so this backport rejects
+that type rather than guessing from its physical integer storage. Quack
+preserves `UHUGEINT` and `TIMETZ`; DuckDB 1.4’s Arrow producer does not
+preserve `UHUGEINT`, `TIME_NS`, or `TIMETZ`. `GEOMETRY` and `VARIANT`
+also remain outside the codec contract rather than being silently
+projected to `BLOB` or `STRUCT`.
 
 ``` sql
 SELECT st.a = 7 AS struct_ok,
@@ -1549,11 +1562,11 @@ SELECT position('"state":"closed"' IN
 SELECT ducknng_stop_server('session_raw');
 SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
 
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                  |
-+---------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS UBIGINT)) |
++-------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                |
++-------------------------------------------------------------------------------------------------------------------------------------+
 
 
 
@@ -1582,11 +1595,11 @@ SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
 +------------------------------------+
 | true                               |
 +------------------------------------+
-+----------------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
-+----------------------------------------------------------------------------+
-| true                                                                       |
-+----------------------------------------------------------------------------+
++--------------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS UBIGINT)) |
++--------------------------------------------------------------------------+
+| true                                                                     |
++--------------------------------------------------------------------------+
 ```
 
 ### Async (open_aio / fetch_aio / close_aio / cancel_aio)
@@ -1739,11 +1752,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
 +------+--------+----------+------------+
 | true | 200    | 01020304 | true       |
 +------+--------+----------+------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_http') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_http') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 `ducknng_ncurl_aio(...)` is the unary async form and still completes
@@ -1783,11 +1796,11 @@ SET VARIABLE http_frame = (
 );
 SELECT ok, type_name, name FROM ducknng_decode_frame(getvariable('http_frame'));
 SELECT ducknng_stop_server('http_rpc');
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++---------------------------------------------------------------------------------------------------------------+
+| true                                                                                                          |
++---------------------------------------------------------------------------------------------------------------+
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
@@ -1840,35 +1853,35 @@ SELECT ducknng_register_http_route_pattern(
              ducknng_http_path_param(''item_id'')
       FROM ducknng_http_request()))'
 );
-+--------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+--------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                               |
-+--------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                             |
++------------------------------------------------------------------------------------------------------------------+
 +---------------------------------------------------------------------------------------------------------------+
 | ducknng_register_http_route('http_routes', 'GET', '/healthz', 'SELECT * FROM ducknng_http_text(200, ''ok'')') |
 +---------------------------------------------------------------------------------------------------------------+
 | true                                                                                                          |
 +---------------------------------------------------------------------------------------------------------------+
-+--------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | ducknng_register_http_route('http_routes', 'POST', '/echo', 'SELECT * FROM ducknng_http_text(
      201,
      (SELECT method || '' '' || path || '' x='' ||
              coalesce(ducknng_http_query_param(''x''), '''') ||
              '' body='' || coalesce(body_text, '''')
       FROM ducknng_http_request(), ducknng_http_request_body()))') |
-+--------------------------------------------------------------------+
-| true                                                               |
-+--------------------------------------------------------------------+
-+---------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                                                                                                                                                                                                                          |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | ducknng_register_http_route_pattern('http_routes', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}', 'SELECT * FROM ducknng_http_text(
      200,
      (SELECT ducknng_http_path_param(''tenant_id'') || '':'' ||
              ducknng_http_path_param(''item_id'')
       FROM ducknng_http_request()))') |
-+---------------------------------------+
-| true                                  |
-+---------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                                                                                                                                                                                         |
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
 
 ``` sql
@@ -1978,17 +1991,17 @@ SELECT ducknng_add_stream_route(
 SELECT is_stream, stream_content_type
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_sse' AND path = '/events';
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
-+--------------------------------------+
++---------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++---------------------------------------------------------------------------------------------------------------+
+| true                                                                                                          |
++---------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------+
 | ducknng_add_stream_route('http_sse', 'GET', '/events', 'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
    FROM generate_series(1, 3) t(i)') |
-+--------------------------------------+
-| true                                 |
-+--------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                                   |
++--------------------------------------------------------------------------------------------------------------------------------------------------------+
 +-----------+----------------------------------+
 | is_stream |       stream_content_type        |
 +-----------+----------------------------------+
@@ -2002,17 +2015,17 @@ is the concatenation of all SSE events written by the server.
 ``` sql
 SELECT ok, status, headers_json, body_text
 FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
-|  ok  | status |                                                                          headers_json                                                                           | body_text |
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------+
+|  ok  | status |                                                                          headers_json                                                                           |             body_text             |
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------+
 | true | 200    | [{"name":"Transfer-Encoding","value":"chunked"},{"name":"Content-Type","value":"text/event-stream; charset=utf-8"},{"name":"Cache-Control","value":"no-cache"}] | data: row 1
 
 data: row 2
 
 data: row 3
 
-          |
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
+ |
++------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------+
 ```
 
 For incremental consumption, the open aio completes as soon as the
@@ -2088,11 +2101,11 @@ SELECT ducknng_stop_server('http_sse');
 +------+---------------+
 | NULL | true          |
 +------+---------------+
-+--------------------------------------------------------------------------+
-| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS "UBIGINT")) |
-+--------------------------------------------------------------------------+
-| true                                                                     |
-+--------------------------------------------------------------------------+
++------------------------------------------------------------------------+
+| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS UBIGINT)) |
++------------------------------------------------------------------------+
+| true                                                                   |
++------------------------------------------------------------------------+
 +---------+
 | dropped |
 +---------+
@@ -2174,8 +2187,8 @@ DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 DBI::dbGetQuery(db_con, sprintf(
   "SELECT ducknng_start_server('sql_exec', '%s', 1, 134217728, 300000, 0::UBIGINT)", ipc_url
 ))
-  ducknng_start_server('sql_exec', 'ipc:///tmp/ducknng_readme_exec.ipc', 1, 134217728, 300000, CAST(0 AS "UBIGINT"))
-1                                                                                                               TRUE
+  ducknng_start_server('sql_exec', 'ipc:///tmp/ducknng_readme_exec.ipc', 1, 134217728, 300000, CAST(0 AS UBIGINT))
+1                                                                                                             TRUE
 DBI::dbGetQuery(db_con, "SELECT ducknng_register_exec_method()")
   ducknng_register_exec_method()
 1                           TRUE
@@ -2328,14 +2341,11 @@ For deeper write-ups see `docs/protocol.md`, `docs/manifest.md`,
 
 ### DuckDB log entries
 
-`ducknng_log_entries()` returns a snapshot of the most recent DuckDB log
-entries captured by the extension’s in-memory ring buffer (capacity
-512). The ring is populated via the DuckDB logger API. Log capture is
-not active by default; call `ducknng_enable_log_capture()` once to
-register the ring with DuckDB’s logger before querying the ring. Note:
-`ducknng_enable_log_capture()` is unsafe to call under DuckDB v1.5.2 due
-to a crash in the logger registration API; the example below is shown
-but not executed.
+`ducknng_log_entries()` returns a snapshot of DuckDB log entries
+captured by the extension’s in-memory ring buffer (capacity 512). DuckDB
+1.4 does not expose the log-storage registration C API, so this backport
+cannot activate capture and `ducknng_enable_log_capture()` returns
+false. The example below is shown but not executed.
 
 ``` sql
 SELECT ducknng_enable_log_capture();
@@ -2380,11 +2390,11 @@ counters.
 ``` sql
 SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
 SET VARIABLE monitor_url = (SELECT listen FROM ducknng_list_servers() WHERE name = 'monitor_demo');
-+------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS "UBIGINT")) |
-+------------------------------------------------------------------------------------------------------+
-| true                                                                                                 |
-+------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------+
+| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS UBIGINT)) |
++----------------------------------------------------------------------------------------------------+
+| true                                                                                               |
++----------------------------------------------------------------------------------------------------+
 ```
 
 ``` sql
@@ -2428,7 +2438,7 @@ FROM ducknng_list_pipes('monitor_demo');
 SELECT ducknng_close_socket(getvariable('monitor_req')::UBIGINT);
 SELECT ducknng_stop_server('monitor_demo');
 +-------------------------------------------------------------------------------------------------------------------------+
-|                           ducknng_close_socket(CAST(getvariable('monitor_req') AS "UBIGINT"))                           |
+|                            ducknng_close_socket(CAST(getvariable('monitor_req') AS UBIGINT))                            |
 +-------------------------------------------------------------------------------------------------------------------------+
 | {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 5, 'payload': NULL, 'url': NULL} |
 +-------------------------------------------------------------------------------------------------------------------------+
@@ -2534,7 +2544,7 @@ Version 0.1.2.9000. Every DuckDB chunk shown as runnable in this README
 is implemented, tested, and runs at render time. Browser/WebAssembly and
 release-matrix checks require external runtimes, so their exact commands
 are shown above and covered by the Playwright and GitHub Actions
-harnesses. The extension builds against DuckDB v1.5.2 using the C API
+harnesses. The extension builds against DuckDB v1.4.0 using the C API
 only.
 
 ## References
