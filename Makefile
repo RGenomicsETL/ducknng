@@ -1,6 +1,6 @@
 .PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
 .PHONY: rpc_bench rpc_bulk_compare rpc_upload_compare http_smoke ws_smoke subscriber_gateway_rdm
-.PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean
+.PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean quack-fixtures
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
@@ -74,6 +74,9 @@ prop-quick: $(PROP_BIN)
 	DUCKNNG_PROP_TRIALS=$(PROP_QUICK_TRIALS) DUCKNNG_PROP_SEED=$(PROP_SEED) $(PROP_BIN)
 
 prop-regression: prop
+
+quack-fixtures:
+	Rscript tools/quack_compressed_fixtures.R --check
 
 prop-asan: $(PROP_ASAN_BIN)
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \

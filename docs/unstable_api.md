@@ -159,10 +159,12 @@ selection vector. `duckdb_vector_reference_value` fills a vector with a single s
 value. `duckdb_vector_copy_sel` copies elements with per-element selection.
 
 **Update:** `duckdb_unsafe_vector_assign_string_element_len` is adopted — see the
-string functions entry above. The remaining vector manipulation functions
-(`duckdb_create_vector`, `duckdb_slice_vector`, `duckdb_vector_copy_sel`, etc.) are
-not needed today; `ducknng` does not implement custom pushdown operators or standalone
-vector allocation outside TVF scan callbacks.
+string functions entry above. The Quack-derived decoder also uses
+`duckdb_create_selection_vector`, `duckdb_selection_vector_get_data_ptr`,
+`duckdb_vector_copy_sel`, and `duckdb_destroy_selection_vector` to materialize
+constant and dictionary vectors into flat output while retaining DuckDB's
+recursive-value ownership semantics. Standalone vector allocation, vector references,
+and `duckdb_slice_vector` remain unused.
 
 ---
 
@@ -466,7 +468,7 @@ end-to-end contract is covered by `test/sql/ducknng_parameter_binding.test`.
 | `unstable_new_query_execution_functions` | **DONE** | `duckdb_result_get_arrow_options` in result path; `duckdb_connection_get_arrow_options` in prepared-schema path |
 | `unstable_new_scalar_function_state_functions` | **DONE** | Per-thread scratch buffer for `ducknng_http_headers_build` in `ducknng_sql_http.c` |
 | `unstable_new_value_functions` | **DONE** | Arrow parameter decoding constructs MAP, UNION, ARRAY, TIME_NS, and other typed DuckDB values before prepared-statement binding |
-| `unstable_new_vector_functions` | PARTIAL | `duckdb_unsafe_vector_assign_string_element_len` adopted; remaining vector manipulation functions not needed |
+| `unstable_new_vector_functions` | PARTIAL | Length-aware string assignment and selection-copy materialization are adopted; standalone/reference/slice functions remain unused |
 | `unstable_new_geo_functions` | NOT applicable | GEOMETRY CRS metadata; `ducknng` does not handle geometry columns |
 | `unstable_new_table_description_functions` | NOT applicable | Named-table schema introspection not used |
 | `unstable_new_copy_functions_api` | NOT applicable | — |

@@ -456,6 +456,18 @@ The current upstream `Vector::Serialize` has a TODO for other compressed vector
 types such as FSST in this path. A C implementation should reject `FSST_VECTOR`
 until actual upstream emission is verified with fixtures.
 
+### Versioned logical types outside the current codec
+
+“Full type spectrum” must always be qualified by a pinned DuckDB version and a
+usable public API. DuckDB v1.5.2 defines `GEOMETRY` logical id 60 and `VARIANT`
+logical id 109. Geometry vectors add field 99 to select WKB or older spatial
+storage, and geometry type information may include a CRS. Variant uses a
+struct-like physical layout, but that release's C API has no
+`DUCKDB_TYPE_VARIANT` constructor or documented variant-vector accessors. The
+current pure-C codec rejects both. Treating geometry as an ordinary blob or
+variant as an ordinary struct would discard logical semantics and is not
+compatibility.
+
 ## Result batching semantics
 
 The helper `CreateBatch` repeatedly calls `query_result->Fetch()` until it has
@@ -481,11 +493,14 @@ Notable differences are:
 
 * upstream Quack serializes a header object plus a typed message body; `ducknng`
   RPC has its own method envelope;
-* upstream Quack uses full DuckDB `DataChunk` serialization, including per-chunk
-  logical types and vector objects; `ducknng_quack_batch` currently implements a
-  narrower C codec for row batches;
-* upstream Quack repeats chunk types inside every `DataChunk`; `ducknng_quack_batch`
-  can omit schema in later fetch payloads under the `ducknng` session contract;
+* upstream Quack and canonical `ducknng_quack_batch` chunks both use DuckDB
+  `DataChunk` fields 100/101/102. ducknng emits flat vectors and materializes
+  flat, constant, dictionary, and integer sequence vectors on decode; FSST
+  remains rejected because this serializer path does not emit it;
+* upstream Quack repeats chunk types inside every `DataChunk`; canonical ducknng
+  output now does the same and validates those types against the result schema.
+  `ducknng_quack_batch` may omit the outer schema header in later fetch payloads
+  under the negotiated ducknng session contract;
 * upstream Quack has connection, fetch, append, and disconnect messages with
   `result_uuid`; `ducknng` RPC uses `query_open`, `fetch`, `close`, and
   `session_id` / `session_token`.

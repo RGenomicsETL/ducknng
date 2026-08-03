@@ -58,9 +58,22 @@ These are declared normalizations, not silent claims of identity.
 chunks through the ducknng session protocol. The round-trip matrix covers the
 scalar numeric, string/blob, temporal, decimal, interval, huge integer, UUID,
 list, array, struct, map, and union families, including recursive nesting and
-nested nulls. A client selecting this codec must implement the ducknng Quack
-batch format; selecting it does not change session ownership, fetch, cancel, or
-end-of-stream semantics.
+nested nulls. Flat vectors are canonical output. On input, constant and
+dictionary vectors are materialized through DuckDB's selection-copy C API, so
+the same scalar and recursive type families remain available; sequence vectors
+are accepted for the signed and unsigned integer logical types that DuckDB emits
+as sequences. FSST vectors remain unsupported and fail closed. A client
+selecting this codec must implement the ducknng Quack batch format; selecting it
+does not change session ownership, fetch, cancel, or end-of-stream semantics.
+
+DuckDB v1.5.2 also defines `GEOMETRY` (logical id 60) and `VARIANT`
+(logical id 109), but neither is part of this codec contract. `GEOMETRY` adds a
+versioned vector-format field and optional CRS type metadata that this codec does
+not yet preserve. `VARIANT` is a struct-like internal logical type, but v1.5.2's
+C API does not expose a `DUCKDB_TYPE_VARIANT` constructor or vector contract.
+Both fail closed rather than being silently normalized to `BLOB` or `STRUCT`.
+Support must be gated and tested against each pinned DuckDB serializer/C API
+version; the presence of an internal logical id alone is not a public C contract.
 
 ## SQL parameter tuples
 

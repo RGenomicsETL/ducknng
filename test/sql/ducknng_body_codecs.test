@@ -23,6 +23,128 @@ WHERE provider = 'ducknng_quack_batch'
 ----
 dynamic table
 
+# DuckDB compressed vectors are materialized into ordinary flat output vectors.
+# These fixtures follow DuckDB v1.5.2 Vector::Serialize and include exact
+# per-chunk DataChunk types plus DataChunk/DataChunkWrapper terminators.
+query I
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010176040001012c0164000465000164000effff6600015a00026400006600082a00000000000000ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+42
+42
+42
+42
+
+query I
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010176040001012c0164000365000164000effff6600015a000264000165000800000000000000006600080000000000000000ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+NULL
+NULL
+NULL
+
+query T
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('010001640019ffff0200010176040001012c01640005650001640019ffff6600015a00035b001402000000000000000200000001000000000000005c0003640000660003016101620163ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+c
+a
+c
+b
+a
+
+query T
+SELECT v::VARCHAR
+FROM ducknng_parse_body(
+  from_hex('010001640065650001640004c80064000dffffffffffff0200010176040001012c01640004650001640065650001640004c80064000dffffffffffff6600015a00035b0010020000000000000001000000020000005c0003640000680004690003640000650002ffff640002650000ffff640002650002ffff6a006400006600100a0000000b0000000c0000000d000000ffffffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+[12, 13]
+[10, 11]
+[]
+[12, 13]
+
+query I
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010176040001012c0164000465000164000effff6600015a00045b000a5c007effffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+10
+8
+6
+4
+
+query I
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('01000164001effff0200010176040001012c0164000365000164001effff6600015a00045b00035c0002ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+3
+5
+7
+
+# Payloads emitted by ducknng 0.1.2 omitted per-chunk type lists and placed one
+# wrapper terminator after the complete multi-chunk list. They remain readable.
+query I
+SELECT v
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010176040002012c016400016600016400006600080100000000000000ffffffff012c016400016600016400006600080200000000000000ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+1
+2
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('010001640019ffff0200010176040001012c01640001650001640019ffff6600015a0001ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: FSST quack vectors are unsupported
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('010001640019ffff0200010176040001012c01640005650001640019ffff6600015a00035b001403000000000000000200000001000000000000005c0003640000660003016101620163ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack dictionary selection index is out of range
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('01000164000bffff0200010176040001012c0164000265000164000bffff6600015a00045b00ff005c0001ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack sequence value is out of range for its logical type
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('01000164000effff0200010176040001012c0164000465000164000dffff6600015a00026400006600082a00000000000000ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack chunk type does not match the result schema
+
 statement error
 SELECT *
 FROM ducknng_parse_body(

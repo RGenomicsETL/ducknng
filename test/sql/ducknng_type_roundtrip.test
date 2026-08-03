@@ -352,6 +352,19 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 ----
 1	1	1
 
+# Multiple DataChunks in one result list prove that each canonical chunk closes
+# its DataChunkWrapper independently before the next nullable list element.
+query II
+SELECT count(*), sum(i)
+FROM ducknng_query_rpc_mode(
+  getvariable('u'),
+  'SELECT i FROM range(5000) t(i)',
+  0::UBIGINT,
+  'ducknng_quack_batch'
+)
+----
+5000	12497500
+
 # --------------------------------------------------------------------------
 # Deep-nesting guard. The Arrow IPC schema is a FlatBuffer whose verifier the
 # consumer runs is exponential in nesting depth, so a sufficiently deep result

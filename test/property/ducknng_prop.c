@@ -604,10 +604,16 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
 #define PROP_QK_OUTER_RESULTS      4u
 #define PROP_QK_TYPE_ID            100u
 #define PROP_QK_CHUNK_WRAPPER      300u
-#define PROP_QK_CHUNK_ROWS         100u
-#define PROP_QK_CHUNK_COLUMNS      102u
+#define PROP_QK_CHUNK_ROWS          100u
+#define PROP_QK_CHUNK_COLUMNS       102u
+#define PROP_QK_VECTOR_TYPE          90u
+#define PROP_QK_VECTOR_SELECTION     91u
+#define PROP_QK_VECTOR_AUX           92u
 #define PROP_QK_VECTOR_HAS_VALIDITY 100u
-#define PROP_QK_VECTOR_DATA        102u
+#define PROP_QK_VECTOR_DATA         102u
+#define PROP_QK_VECTOR_CONSTANT       2u
+#define PROP_QK_VECTOR_DICTIONARY     3u
+#define PROP_QK_VECTOR_SEQUENCE       4u
 
 struct prop_quack_buf {
     uint8_t data[256];
@@ -652,6 +658,34 @@ prop_qb_uleb(struct prop_quack_buf *b, uint64_t value)
 }
 
 static int
+prop_qb_sleb(struct prop_quack_buf *b, int64_t value)
+{
+    int more = 1;
+
+    while (more) {
+        int64_t next = value / 128;
+        uint8_t byte;
+        int sign;
+
+        if (value < 0 && value % 128 != 0) next--;
+        byte = (uint8_t)(value - next * 128);
+        sign = (byte & 0x40u) != 0;
+        more = !((next == 0 && !sign) || (next == -1 && sign));
+        if (more) byte |= 0x80u;
+        if (prop_qb_byte(b, byte) != 0) return -1;
+        value = next;
+    }
+    return 0;
+}
+
+static int
+prop_qb_blob(struct prop_quack_buf *b, const void *src, size_t len)
+{
+    return prop_qb_uleb(b, (uint64_t)len) != 0 ||
+        prop_qb_put(b, src, len) != 0 ? -1 : 0;
+}
+
+static int
 prop_qb_field_end(struct prop_quack_buf *b)
 {
     return prop_qb_u16(b, PROP_QK_FIELD_END);
@@ -683,6 +717,81 @@ prop_qb_begin_one_col_chunk(struct prop_quack_buf *b, uint64_t rows)
         prop_qb_u16(b, PROP_QK_VECTOR_HAS_VALIDITY) != 0 ||
         prop_qb_byte(b, 0) != 0 ||
         prop_qb_u16(b, PROP_QK_VECTOR_DATA) != 0 ? -1 : 0;
+}
+
+static int
+prop_qb_begin_one_col_result_vector(struct prop_quack_buf *b, uint64_t rows)
+{
+    memset(b, 0, sizeof(*b));
+    return prop_qb_u16(b, PROP_QK_OUTER_RESULTS) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_byte(b, 1) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_WRAPPER) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_ROWS) != 0 ||
+        prop_qb_uleb(b, rows) != 0 ||
+        prop_qb_u16(b, PROP_QK_CHUNK_COLUMNS) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ? -1 : 0;
+}
+
+static int
+prop_qb_finish_one_col_result_vector(struct prop_quack_buf *b)
+{
+    /* vector, DataChunk, DataChunkWrapper, top-level object */
+    return prop_qb_field_end(b) != 0 || prop_qb_field_end(b) != 0 ||
+        prop_qb_field_end(b) != 0 || prop_qb_field_end(b) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_payload_constant(struct prop_quack_buf *b)
+{
+    int64_t value = 42;
+
+    if (prop_qb_begin_one_col_result_vector(b, 4) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_TYPE) != 0 ||
+        prop_qb_uleb(b, PROP_QK_VECTOR_CONSTANT) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_HAS_VALIDITY) != 0 ||
+        prop_qb_byte(b, 0) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_DATA) != 0 ||
+        prop_qb_blob(b, &value, sizeof(value)) != 0) return -1;
+    return prop_qb_finish_one_col_result_vector(b);
+}
+
+static int
+prop_quack_payload_dictionary(struct prop_quack_buf *b, int malformed_selection)
+{
+    uint32_t selection[5] = {2, 0, 2, 1, 0};
+    static const char *values[3] = {"a", "b", "c"};
+    size_t i;
+
+    if (malformed_selection) selection[0] = 3;
+    if (prop_qb_begin_one_col_result_vector(b, 5) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_TYPE) != 0 ||
+        prop_qb_uleb(b, PROP_QK_VECTOR_DICTIONARY) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_SELECTION) != 0 ||
+        prop_qb_blob(b, selection, sizeof(selection)) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_AUX) != 0 ||
+        prop_qb_uleb(b, 3) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_HAS_VALIDITY) != 0 ||
+        prop_qb_byte(b, 0) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_DATA) != 0 ||
+        prop_qb_uleb(b, 3) != 0) return -1;
+    for (i = 0; i < 3; i++) {
+        if (prop_qb_blob(b, values[i], strlen(values[i])) != 0) return -1;
+    }
+    return prop_qb_finish_one_col_result_vector(b);
+}
+
+static int
+prop_quack_payload_sequence(struct prop_quack_buf *b)
+{
+    if (prop_qb_begin_one_col_result_vector(b, 4) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_TYPE) != 0 ||
+        prop_qb_uleb(b, PROP_QK_VECTOR_SEQUENCE) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_SELECTION) != 0 ||
+        prop_qb_sleb(b, 10) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_AUX) != 0 ||
+        prop_qb_sleb(b, -2) != 0) return -1;
+    return prop_qb_finish_one_col_result_vector(b);
 }
 
 static int
@@ -966,6 +1075,57 @@ TEST quack_rejects_or_scans_random_zero_column_payloads(void)
     ASSERT_EQ(THEFT_RUN_PASS,
         prop_run_one("quack random zero-column payloads", prop_quack_random_payloads,
             &prop_random_bytes_info));
+    PASS();
+}
+
+TEST quack_accepts_compressed_vector_fixtures(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_BIGINT));
+    ASSERT_EQ(0, prop_quack_payload_constant(&payload));
+    ASSERT_EQ(0, ducknng_quack_payload_read_row_count(payload.data, payload.len,
+        &schema, &row_count, &errmsg));
+    ASSERT_EQ((idx_t)4, row_count);
+    ASSERT_EQ(NULL, errmsg);
+    ASSERT_EQ(0, prop_quack_payload_sequence(&payload));
+    row_count = 0;
+    ASSERT_EQ(0, ducknng_quack_payload_read_row_count(payload.data, payload.len,
+        &schema, &row_count, &errmsg));
+    ASSERT_EQ((idx_t)4, row_count);
+    ASSERT_EQ(NULL, errmsg);
+    ducknng_quack_schema_reset(&schema);
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_VARCHAR));
+    ASSERT_EQ(0, prop_quack_payload_dictionary(&payload, 0));
+    row_count = 0;
+    ASSERT_EQ(0, ducknng_quack_payload_read_row_count(payload.data, payload.len,
+        &schema, &row_count, &errmsg));
+    ASSERT_EQ((idx_t)5, row_count);
+    ASSERT_EQ(NULL, errmsg);
+    ducknng_quack_schema_reset(&schema);
+    PASS();
+}
+
+TEST quack_rejects_malformed_dictionary_fixture(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_VARCHAR));
+    ASSERT_EQ(0, prop_quack_payload_dictionary(&payload, 1));
+    ASSERT_NEQ(0, ducknng_quack_payload_read_row_count(payload.data, payload.len,
+        &schema, &row_count, &errmsg));
+    ASSERT_EQ((idx_t)0, row_count);
+    ASSERT(errmsg != NULL);
+    ASSERT(strstr(errmsg, "selection index") != NULL);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
     PASS();
 }
 
@@ -1363,6 +1523,8 @@ SUITE(transport_properties)
 SUITE(quack_properties)
 {
     RUN_TEST(quack_rejects_or_scans_random_zero_column_payloads);
+    RUN_TEST(quack_accepts_compressed_vector_fixtures);
+    RUN_TEST(quack_rejects_malformed_dictionary_fixture);
     RUN_TEST(quack_rejects_fixed_width_size_overflow_fixture);
     RUN_TEST(quack_rejects_blob_length_wraparound_fixture);
     RUN_TEST(quack_rejects_huge_schema_column_count_fixture);
