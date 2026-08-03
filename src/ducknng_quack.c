@@ -1832,32 +1832,17 @@ static int ducknng_quack_decode_compressed_copy(ducknng_quack_reader *r,
     const uint8_t *dictionary_selection, idx_t offset,
     duckdb_vector out_vec, idx_t out_count, unsigned depth, char **errmsg) {
     duckdb_logical_type child_type = NULL;
-    duckdb_logical_type list_type = NULL;
-    duckdb_data_chunk holder = NULL;
-    duckdb_vector list_vec;
-    duckdb_vector source_vec;
+    duckdb_vector source_vec = NULL;
     duckdb_selection_vector selection = NULL;
     sel_t *selection_data;
     idx_t row;
     int rc = -1;
     if (ducknng_quack_node_to_duckdb(node, depth, &child_type, errmsg) != 0) goto done;
-    list_type = duckdb_create_list_type(child_type);
-    if (!list_type) {
-        ducknng_quack_set_error(errmsg, "ducknng: failed to create quack compressed-vector holder type");
+    source_vec = duckdb_create_vector(child_type, source_count ? source_count : 1);
+    if (!source_vec) {
+        ducknng_quack_set_error(errmsg, "ducknng: failed to allocate quack compressed-vector source");
         goto done;
     }
-    holder = duckdb_create_data_chunk(&list_type, 1);
-    if (!holder) {
-        ducknng_quack_set_error(errmsg, "ducknng: failed to allocate quack compressed-vector holder");
-        goto done;
-    }
-    list_vec = duckdb_data_chunk_get_vector(holder, 0);
-    if (duckdb_list_vector_reserve(list_vec, source_count) != DuckDBSuccess ||
-        duckdb_list_vector_set_size(list_vec, source_count) != DuckDBSuccess) {
-        ducknng_quack_set_error(errmsg, "ducknng: failed to size quack compressed-vector holder");
-        goto done;
-    }
-    source_vec = duckdb_list_vector_get_child(list_vec);
     if (ducknng_quack_decode_vector_into(r, node, source_count, 0, source_vec,
             source_count, depth + 1, errmsg) != 0) goto done;
     if (out_count == 0) {
@@ -1890,8 +1875,7 @@ static int ducknng_quack_decode_compressed_copy(ducknng_quack_reader *r,
     rc = 0;
 done:
     if (selection) duckdb_destroy_selection_vector(selection);
-    if (holder) duckdb_destroy_data_chunk(&holder);
-    if (list_type) duckdb_destroy_logical_type(&list_type);
+    if (source_vec) duckdb_destroy_vector(&source_vec);
     if (child_type) duckdb_destroy_logical_type(&child_type);
     return rc;
 }
