@@ -130,6 +130,24 @@ ducknng: quack dictionary selection index is out of range
 statement error
 SELECT *
 FROM ducknng_parse_body(
+  from_hex('010001640019ffff0200010176040001012c01640005650001640019ffff6600015a00035b001400000000010000000200000003000000040000005c0006640000660006016101620163016401650166ffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack dictionary count exceeds its selected row count
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
+  from_hex('010001640065650001640004c80064000dffffffffffff0200010176040001012c01640001650001640065650001640004c80064000dffffffffffff660001640000680081808002690001640000650081808002ffff6a005a00045b00005c0001ffffffffffffffffffff'),
+  'application/vnd.ducknng.quack-batch'
+)
+----
+ducknng: quack materialized value count exceeds supported limit
+
+statement error
+SELECT *
+FROM ducknng_parse_body(
   from_hex('01000164000bffff0200010176040001012c0164000265000164000bffff6600015a00045b00ff005c0001ffffffffffffffff'),
   'application/vnd.ducknng.quack-batch'
 )

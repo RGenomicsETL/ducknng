@@ -96,6 +96,7 @@ DUCKDB_EXTENSION_EXTERN
 #define DUCKNNG_QUACK_MAX_NESTING 64u
 #define DUCKNNG_QUACK_MAX_STRUCT_MEMBERS 65536u
 #define DUCKNNG_QUACK_MAX_ENUM_VALUES (1u << 24)
+#define DUCKNNG_QUACK_MAX_MATERIALIZED_VALUES (1u << 22)
 
 typedef struct ducknng_quack_writer {
     uint8_t *data;
@@ -107,6 +108,7 @@ typedef struct ducknng_quack_reader {
     const uint8_t *data;
     size_t len;
     size_t off;
+    uint64_t materialized_values;
 } ducknng_quack_reader;
 
 typedef struct ducknng_quack_type_meta {
@@ -1579,6 +1581,11 @@ static int ducknng_quack_read_dictionary_header(ducknng_quack_reader *r,
         ducknng_quack_set_error(errmsg, "ducknng: non-empty quack dictionary has no values");
         return -1;
     }
+    if (dictionary_count > rows) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack dictionary count exceeds its selected row count");
+        return -1;
+    }
     for (row = 0; row < rows; row++) {
         sel_t selected = 0;
         memcpy(&selected, selection + (size_t)row * sizeof(selected), sizeof(selected));
@@ -1810,6 +1817,19 @@ static int ducknng_quack_skip_data_chunk(ducknng_quack_reader *r,
     return ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_FIELD_END, errmsg);
 }
 
+static int ducknng_quack_check_materialized_values(ducknng_quack_reader *r,
+    idx_t count, int commit, char **errmsg) {
+    uint64_t value_count = (uint64_t)count;
+    if (!r || r->materialized_values > DUCKNNG_QUACK_MAX_MATERIALIZED_VALUES ||
+        value_count > DUCKNNG_QUACK_MAX_MATERIALIZED_VALUES - r->materialized_values) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack materialized value count exceeds supported limit");
+        return -1;
+    }
+    if (commit) r->materialized_values += value_count;
+    return 0;
+}
+
 static void ducknng_quack_copy_validity_slice(duckdb_vector out_vec,
     const uint8_t *src_validity, idx_t src_offset, idx_t count) {
     uint64_t *dst_validity;
@@ -1837,7 +1857,8 @@ static int ducknng_quack_decode_compressed_copy(ducknng_quack_reader *r,
     sel_t *selection_data;
     idx_t row;
     int rc = -1;
-    if (ducknng_quack_node_to_duckdb(node, depth, &child_type, errmsg) != 0) goto done;
+    if (ducknng_quack_check_materialized_values(r, source_count, 0, errmsg) != 0 ||
+        ducknng_quack_node_to_duckdb(node, depth, &child_type, errmsg) != 0) goto done;
     source_vec = duckdb_create_vector(child_type, source_count ? source_count : 1);
     if (!source_vec) {
         ducknng_quack_set_error(errmsg, "ducknng: failed to allocate quack compressed-vector source");
@@ -1968,6 +1989,7 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
         ducknng_quack_set_error(errmsg, "ducknng: quack vector slice is out of range");
         return -1;
     }
+    if (ducknng_quack_check_materialized_values(r, src_rows, 1, errmsg) != 0) return -1;
     if (ducknng_quack_read_vector_type(r, &vector_type, errmsg) != 0) return -1;
     if (vector_type == DUCKNNG_QUACK_VECTOR_FSST) {
         ducknng_quack_set_error(errmsg, "ducknng: FSST quack vectors are unsupported");
@@ -2063,7 +2085,8 @@ static int ducknng_quack_decode_vector_into(ducknng_quack_reader *r,
             return -1;
         }
         if (ducknng_quack_uint64_to_idx(child_size, &child_rows,
-                "ducknng: quack list child size exceeds supported size", errmsg) != 0) return -1;
+                "ducknng: quack list child size exceeds supported size", errmsg) != 0 ||
+            ducknng_quack_check_materialized_values(r, child_rows, 0, errmsg) != 0) return -1;
         if (duckdb_list_vector_reserve(out_vec, child_rows) != DuckDBSuccess) {
             ducknng_quack_set_error(errmsg, "ducknng: failed to reserve quack list child capacity");
             return -1;

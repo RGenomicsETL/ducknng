@@ -146,6 +146,16 @@ dictionary_list_vector <- function(selection) {
   )
 }
 
+flat_integer_list_sequence <- function(child_size) {
+  raw_join(
+    u16_le(100L), as.raw(0L),
+    u16_le(104L), uleb128(child_size),
+    u16_le(105L), uleb128(1L), list_entry(0L, child_size),
+    u16_le(106L), sequence_vector(0L, 1L),
+    end()
+  )
+}
+
 sequence_vector <- function(start, increment) {
   raw_join(
     u16_le(90L), uleb128(4L),
@@ -202,6 +212,13 @@ fixtures <- list(
   bad_dictionary_index = quack_batch(
     varchar_type, "v", 5L,
     dictionary_vector(c(3L, 0L, 2L, 1L, 0L), c("a", "b", "c"))
+  ),
+  bad_dictionary_count = quack_batch(
+    varchar_type, "v", 5L,
+    dictionary_vector(c(0L, 1L, 2L, 3L, 4L), letters[1:6])
+  ),
+  oversized_sequence_list = quack_batch(
+    integer_list_type, "v", 1L, flat_integer_list_sequence(2^22 + 1L)
   ),
   bad_chunk_type = quack_batch(
     bigint_type, "v", 4L, constant_vector(42L), logical_type(13L)

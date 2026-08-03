@@ -23,8 +23,8 @@ SELECT * FROM ducknng_parse_parquet(body);   -- DuckDB read_parquet via tempfile
 These write the body bytes to a cross-platform temporary file and delegate to DuckDB's standard CSV and Parquet SQL readers, then decode the result through the Arrow IPC path. They exist alongside the content-type dispatch in `ducknng_parse_body` as an explicit opt-in for callers who want DuckDB's full reader capabilities.
 
 The initial built-in providers are deliberately conservative. Unknown or missing content types fall back to raw `BLOB` output. `text/*` bodies are exposed as `VARCHAR` only when the bytes are valid UTF-8 text. `application/vnd.ducknng.frame` is decoded with the same envelope shape as `ducknng_decode_frame(...)`. Arrow IPC stream bytes are decoded through nanoarrow and the same stable manual DuckDB vector mapping used by `ducknng_query_rpc(...)`. `application/vnd.ducknng.quack-batch` decodes a standalone ducknng `ducknng_quack_batch` body using the native C Quack-derived codec. The body may contain one or more DuckDB `DataChunk` results, but it is intentionally not registered for upstream Quack's `application/vnd.duckdb` envelope. Malformed Quack-derived bodies fail closed when schema column counts, length arithmetic, fixed-width byte counts, row counts, nested child sizes, dictionary selections, compressed-vector fields, repeated
-chunk types, or object terminators would overflow, disagree, or exceed supported
-decoder bounds. Constant and dictionary vectors are materialized to flat output;
+chunk types, cumulative materialized values, or object terminators would overflow,
+disagree, or exceed supported decoder bounds. Constant and dictionary vectors are materialized to flat output;
 DuckDB integer sequence vectors are generated directly; FSST is rejected. The
 dependency-free `tools/quack_compressed_fixtures.R` generates the executable
 v1.5.2 literals; `make quack-fixtures` checks them against the SQL test.
