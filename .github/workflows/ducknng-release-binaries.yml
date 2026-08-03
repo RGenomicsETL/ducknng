@@ -433,6 +433,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           tag="${GITHUB_REF_NAME:-manual}"
+          tag="${tag//\//-}"
           duckdb_version=$(awk -F= '/^TARGET_DUCKDB_VERSION=/{print $2}' Makefile)
           platform=$(cat configure/platform.txt)
           asset_base="ducknng-${tag}-${platform}"
