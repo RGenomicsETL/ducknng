@@ -20,7 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # The top-level Makefile unconditionally includes
+      # extension-ci-tools/makefiles/c_api_extensions/c_cpp.Makefile, so every
+      # target here needs the submodule present.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install native fuzz toolchain
         run: |
