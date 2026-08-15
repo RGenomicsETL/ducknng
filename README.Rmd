@@ -679,7 +679,7 @@ ORDER BY a;
 
 ### Raw frame helpers
 
-The raw scalar forms return reply bytes as BLOBs. `ducknng_decode_frame(...)` projects all envelope fields plus the text payload.
+The raw scalar forms return reply bytes as BLOBs. `ducknng_decode_frame(...)` projects all envelope fields, including the protocol status, plus the text payload. `ducknng_frame_status(...)` returns that status directly; it is distinct from an NNG transport error code.
 
 ```{duckdb collapse=TRUE, comment=""}
 -- Raw bytes from a socket-scoped request (show first 14 bytes as hex).
@@ -700,11 +700,16 @@ SELECT substr(
 ) AS first_14_bytes_hex;
 
 -- Decode a manifest reply directly.
-SELECT ok, version, type_name, name,
+SELECT ok, version, type_name, status, name,
        position('"name":"exec"' IN payload_text) > 0 AS has_exec
 FROM ducknng_decode_frame(
   ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_readme_rpc.ipc', 0::UBIGINT)
 );
+
+-- A malformed request returns an INVALID protocol status in its error frame.
+SELECT ducknng_frame_status(ducknng_request_raw(
+  'ipc:///tmp/ducknng_readme_rpc.ipc', from_hex('00'), 1000, 0::UBIGINT
+)) AS invalid_status;
 
 SELECT (ducknng_close_socket(getvariable('req2')::UBIGINT)).ok AS closed;
 ```

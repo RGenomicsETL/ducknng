@@ -168,13 +168,19 @@ FROM ducknng_get_rpc_manifest('ftp://127.0.0.1:9', 0::UBIGINT)
 ----
 0	ducknng: unsupported transport URL scheme
 
-query ITT
-SELECT ok, type_name, error
+query ITIT
+SELECT ok, type_name, status, error
 FROM ducknng_decode_frame(
   ducknng_request_raw('ftp://127.0.0.1:9', from_hex('00'), 10, 0::UBIGINT)
 )
 ----
-0	error	ducknng: unsupported transport URL scheme
+0	error	6	ducknng: unsupported transport URL scheme
+
+query II
+SELECT ducknng_frame_status(from_hex('0103000000000000000001000000000000000000000078')),
+       ducknng_frame_status(from_hex('010300000000000000000100000000000000000000007800')) IS NULL
+----
+255	1
 
 query ITTT
 SELECT ok, type_name, name, error

@@ -46,11 +46,20 @@ typedef struct ducknng_request_context {
     void *session;
 } ducknng_request_context;
 
+/* A reply carries its body either as `payload` (the handler-owned buffer) or as
+ * `prebuilt_msg` (a complete nng_msg the handler already encoded into), never
+ * both. `payload_len` stays a stored field rather than being derived from
+ * nng_msg_len(prebuilt_msg) - prefix_size, because it is the only source of
+ * truth on the plain-payload path and because the dispatcher checks it against
+ * the method's max_reply_bytes before it inspects the message. On the prebuilt
+ * path the dispatcher then cross-checks the two against each other. */
 typedef struct ducknng_method_reply {
     uint8_t type;
     uint32_t flags;
     uint8_t *payload;
+    nng_msg *prebuilt_msg;
     size_t payload_len;
+    size_t prefix_size;
     char *error;
     int32_t status;
 } ducknng_method_reply;
@@ -167,6 +176,9 @@ void ducknng_method_reply_init(ducknng_method_reply *reply);
 void ducknng_method_reply_reset(ducknng_method_reply *reply);
 int ducknng_method_reply_set_payload(ducknng_method_reply *reply, uint8_t type, uint32_t flags,
     uint8_t *payload, size_t payload_len);
+int ducknng_method_reply_set_prebuilt_message(ducknng_method_reply *reply,
+    uint8_t type, uint32_t flags, nng_msg *msg, size_t prefix_size,
+    size_t payload_len);
 int ducknng_method_reply_set_error(ducknng_method_reply *reply, int32_t status, const char *message);
 const char *ducknng_transport_pattern_name(ducknng_transport_pattern value);
 const char *ducknng_payload_format_name(ducknng_payload_format value);

@@ -1,14 +1,8 @@
 #pragma once
 #include "duckdb_extension.h"
+#include "ducknng_checked.h"
 #include <stddef.h>
 #include <stdint.h>
-
-/*
- * Checked size arithmetic. Each returns 0 on success and writes *out; returns
- * -1, leaving *out untouched, when the operation would overflow size_t.
- */
-int ducknng_size_add(size_t a, size_t b, size_t *out);
-int ducknng_size_mul(size_t a, size_t b, size_t *out);
 
 /* Grow a doubling buffer capacity to at least need without overflowing. */
 int ducknng_grow_capacity(size_t need, size_t current_cap, size_t min_cap, size_t *out_cap);

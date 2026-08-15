@@ -1637,8 +1637,47 @@ static nng_msg *ducknng_dispatch_request(ducknng_service *svc, const ducknng_fra
             "ducknng: reply payload exceeds method limit");
     }
 
-    msg = ducknng_build_reply(reply.type, method->name, reply.flags, reply.error,
-        reply.payload, (uint64_t)reply.payload_len);
+    if (reply.prebuilt_msg) {
+        ducknng_frame_parts parts;
+        size_t expected_prefix = DUCKNNG_WIRE_HEADER_LEN;
+        size_t message_size = 0;
+        size_t prefix_written = 0;
+        memset(&parts, 0, sizeof(parts));
+        if (ducknng_size_add(expected_prefix, strlen(method->name),
+                &expected_prefix) != 0 ||
+            ducknng_size_add(expected_prefix,
+                reply.error ? strlen(reply.error) : 0, &expected_prefix) != 0 ||
+            ducknng_size_add(expected_prefix, reply.payload_len,
+                &message_size) != 0 ||
+            reply.prefix_size != expected_prefix ||
+            nng_msg_len(reply.prebuilt_msg) != message_size || reply.payload) {
+            ducknng_method_reply_reset(&reply);
+            return ducknng_error_msg(method->name, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: prebuilt reply message has inconsistent sizing");
+        }
+        parts.type = reply.type;
+        parts.status = reply.status;
+        parts.flags = reply.flags;
+        parts.name = (const uint8_t *)method->name;
+        parts.name_len = strlen(method->name);
+        parts.error = (const uint8_t *)reply.error;
+        parts.error_len = reply.error ? strlen(reply.error) : 0;
+        parts.payload_len = reply.payload_len;
+        if (ducknng_encode_frame_prefix(&parts,
+                (uint8_t *)nng_msg_body(reply.prebuilt_msg),
+                reply.prefix_size, &prefix_written) != 0 ||
+            prefix_written != reply.prefix_size) {
+            ducknng_method_reply_reset(&reply);
+            return ducknng_error_msg(method->name, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: failed to encode prebuilt reply prefix");
+        }
+        msg = reply.prebuilt_msg;
+        reply.prebuilt_msg = NULL;
+    } else {
+        msg = ducknng_build_reply_status(reply.type, method->name, reply.flags,
+            reply.status, reply.error, reply.payload,
+            (uint64_t)reply.payload_len);
+    }
     ducknng_method_reply_reset(&reply);
     if (!msg) {
         return ducknng_error_msg(method->name, DUCKNNG_STATUS_INTERNAL,

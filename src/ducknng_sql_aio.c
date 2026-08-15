@@ -3098,6 +3098,7 @@ static int register_aio_collect_decoded_macro(duckdb_connection con) {
         "       ducknng_frame_error_text(c.frame) AS frame_error, "
         "       ducknng_frame_version(c.frame) AS version, "
         "       ducknng_frame_type(c.frame) AS type, "
+        "       ducknng_frame_status(c.frame) AS status, "
         "       ducknng_frame_flags(c.frame) AS flags, "
         "       ducknng_frame_type_name(c.frame) AS type_name, "
         "       ducknng_frame_name(c.frame) AS name, "

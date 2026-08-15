@@ -244,9 +244,18 @@ void ducknng_method_reply_init(ducknng_method_reply *reply) {
     reply->status = DUCKNNG_STATUS_OK;
 }
 
+static void ducknng_method_reply_release_body(ducknng_method_reply *reply) {
+    if (reply->payload) duckdb_free(reply->payload);
+    if (reply->prebuilt_msg) nng_msg_free(reply->prebuilt_msg);
+    reply->payload = NULL;
+    reply->prebuilt_msg = NULL;
+    reply->payload_len = 0;
+    reply->prefix_size = 0;
+}
+
 void ducknng_method_reply_reset(ducknng_method_reply *reply) {
     if (!reply) return;
-    if (reply->payload) duckdb_free(reply->payload);
+    ducknng_method_reply_release_body(reply);
     if (reply->error) duckdb_free(reply->error);
     ducknng_method_reply_init(reply);
 }
@@ -254,7 +263,7 @@ void ducknng_method_reply_reset(ducknng_method_reply *reply) {
 int ducknng_method_reply_set_payload(ducknng_method_reply *reply, uint8_t type, uint32_t flags,
     uint8_t *payload, size_t payload_len) {
     if (!reply) return 0;
-    if (reply->payload) duckdb_free(reply->payload);
+    ducknng_method_reply_release_body(reply);
     reply->type = type;
     reply->flags = flags;
     reply->payload = payload;
@@ -263,8 +272,23 @@ int ducknng_method_reply_set_payload(ducknng_method_reply *reply, uint8_t type, 
     return 1;
 }
 
+int ducknng_method_reply_set_prebuilt_message(ducknng_method_reply *reply,
+    uint8_t type, uint32_t flags, nng_msg *msg, size_t prefix_size,
+    size_t payload_len) {
+    if (!reply || !msg) return 0;
+    ducknng_method_reply_release_body(reply);
+    reply->type = type;
+    reply->flags = flags;
+    reply->prebuilt_msg = msg;
+    reply->payload_len = payload_len;
+    reply->prefix_size = prefix_size;
+    reply->status = DUCKNNG_STATUS_OK;
+    return 1;
+}
+
 int ducknng_method_reply_set_error(ducknng_method_reply *reply, int32_t status, const char *message) {
     if (!reply) return 0;
+    ducknng_method_reply_release_body(reply);
     if (reply->error) {
         duckdb_free(reply->error);
         reply->error = NULL;

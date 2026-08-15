@@ -21,6 +21,8 @@ if (DEFINED DUCKDB_EXTENSION_API_VERSION_UNSTABLE)
 endif()
 
 project(${EXTENSION_NAME} LANGUAGES C)
+set(DUCKNNG_DUCKDB_CAPI_DIR "${CMAKE_SOURCE_DIR}/duckdb_capi" CACHE PATH
+    "Directory containing the exact DuckDB C extension headers")
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -113,9 +115,12 @@ set(EXTENSION_SOURCES
     src/ducknng_duckdb_streaming_compat.c
     src/ducknng_registry.c
     src/ducknng_methods.c
+    src/ducknng_checked.c
+    src/ducknng_wire_core.c
     src/ducknng_wire.c
     src/ducknng_ipc_in.c
     src/ducknng_ipc_out.c
+    src/ducknng_quack_core.c
     src/ducknng_quack.c
     src/ducknng_transport.c
     src/ducknng_http_profile.c
@@ -177,7 +182,7 @@ endif()
 
 target_include_directories(${EXTENSION_NAME} PRIVATE
     src/include
-    duckdb_capi
+    "${DUCKNNG_DUCKDB_CAPI_DIR}"
     third_party/nng/include
     third_party/nanoarrow/src
     third_party/nanoarrow/thirdparty/flatcc/include
@@ -211,4 +216,16 @@ else()
     target_link_libraries(${EXTENSION_NAME} PRIVATE
         $<LINK_LIBRARY:WHOLE_ARCHIVE,nng>
         Threads::Threads)
+    if(APPLE)
+        target_link_options(${EXTENSION_NAME} PRIVATE
+            "-Wl,-exported_symbol,_ducknng_init_c_api")
+    elseif(UNIX)
+        set(DUCKNNG_EXPORT_MAP "${CMAKE_SOURCE_DIR}/cmake/ducknng.exports")
+        target_link_options(${EXTENSION_NAME} PRIVATE
+            "-Wl,--version-script=${DUCKNNG_EXPORT_MAP}"
+            "-Wl,--exclude-libs,ALL"
+            "-Wl,-Bsymbolic-functions")
+        set_property(TARGET ${EXTENSION_NAME} APPEND PROPERTY
+            LINK_DEPENDS "${DUCKNNG_EXPORT_MAP}")
+    endif()
 endif()

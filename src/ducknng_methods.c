@@ -743,6 +743,33 @@ static int ducknng_method_query_open_handler(ducknng_service *svc,
     return 0;
 }
 
+/* Assign one fetch row reply for the negotiated payload format. `extra_flags`
+ * adds end-of-stream on the terminal batch; everything else is identical
+ * between the batch and empty-result paths, which previously carried two
+ * copies of this branch. Takes ownership of prebuilt_msg on the Quack path. */
+static int ducknng_fetch_set_row_reply(ducknng_method_reply *reply,
+    int row_payload_format, uint32_t extra_flags, nng_msg *prebuilt_msg,
+    size_t reply_prefix_size, uint8_t *payload, size_t payload_len) {
+    if (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH) {
+        if (!ducknng_method_reply_set_prebuilt_message(reply,
+                DUCKNNG_RPC_RESULT,
+                DUCKNNG_RPC_FLAG_RESULT_ROWS |
+                    DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH | extra_flags,
+                prebuilt_msg, reply_prefix_size, payload_len)) {
+            nng_msg_free(prebuilt_msg);
+            ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+                "ducknng: failed to assign prebuilt fetch reply");
+            return -1;
+        }
+        return 0;
+    }
+    ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
+        DUCKNNG_RPC_FLAG_RESULT_ROWS |
+            DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM | extra_flags,
+        payload, payload_len);
+    return 0;
+}
+
 static int ducknng_method_fetch_handler(ducknng_service *svc,
     const ducknng_method_descriptor *method,
     const ducknng_request_context *req,
@@ -755,17 +782,24 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     int unauthorized = 0;
     ducknng_session *session;
     uint8_t *payload = NULL;
+    nng_msg *prebuilt_msg = NULL;
     size_t payload_len = 0;
+    size_t reply_prefix_size = 0;
     int has_batch = 0;
     char *result_handle = NULL;
     char *errmsg = NULL;
-    (void)method;
-    if (!svc || !req || !reply) {
+    if (!svc || !method || !req || !reply) {
         ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL, "ducknng: missing fetch context");
         return -1;
     }
     memset(&control_req, 0, sizeof(control_req));
     memset(&view, 0, sizeof(view));
+    if (ducknng_size_add(DUCKNNG_WIRE_HEADER_LEN, strlen(method->name),
+            &reply_prefix_size) != 0) {
+        ducknng_method_reply_set_error(reply, DUCKNNG_STATUS_INTERNAL,
+            "ducknng: fetch reply prefix size overflows");
+        return -1;
+    }
     if (ducknng_parse_session_control_request(req, "fetch", &control_req, reply) != 0) {
         return -1;
     }
@@ -832,9 +866,10 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
     row_payload_format = session->row_payload_format;
     if (!session->result_open ||
         (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
-            ? ducknng_result_next_chunks_to_quack_payload(session->result,
+            ? ducknng_result_next_chunks_to_quack_message(session->result,
                 session->fetch_batch_chunks, !session->row_schema_sent,
-                &payload, &payload_len, &has_batch, &errmsg)
+                reply_prefix_size, &prebuilt_msg, &payload_len, &has_batch,
+                &errmsg)
             : ducknng_result_next_chunks_to_ipc(session->result,
                 session->fetch_batch_chunks, &payload, &payload_len, &has_batch, &errmsg)) != 0) {
         ducknng_mutex_unlock(&session->mu);
@@ -864,18 +899,15 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_mutex_unlock(&session->mu);
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
-        ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
-            DUCKNNG_RPC_FLAG_RESULT_ROWS |
-                (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
-                    ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
-                    : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM),
-            payload, payload_len);
-        return 0;
+        return ducknng_fetch_set_row_reply(reply, row_payload_format, 0u,
+            prebuilt_msg, reply_prefix_size, payload, payload_len);
     }
     if (session->batch_no == 0) {
         if ((row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
-                ? ducknng_result_empty_quack_payload(session->result, &payload, &payload_len, &errmsg)
-                : ducknng_result_to_ipc_stream(NULL, session->result, &payload, &payload_len, &errmsg)) != 0) {
+                ? ducknng_result_empty_quack_message(session->result,
+                    reply_prefix_size, &prebuilt_msg, &payload_len, &errmsg)
+                : ducknng_result_to_ipc_stream(NULL, session->result,
+                    &payload, &payload_len, &errmsg)) != 0) {
             ducknng_mutex_unlock(&session->mu);
             ducknng_session_release(session);
             ducknng_session_control_request_reset(&control_req);
@@ -890,14 +922,9 @@ static int ducknng_method_fetch_handler(ducknng_service *svc,
         ducknng_session_release(session);
         ducknng_session_control_request_reset(&control_req);
         if (result_handle) duckdb_free(result_handle);
-        ducknng_method_reply_set_payload(reply, DUCKNNG_RPC_RESULT,
-            DUCKNNG_RPC_FLAG_RESULT_ROWS |
-                (row_payload_format == DUCKNNG_PAYLOAD_DUCKNNG_QUACK_BATCH
-                    ? DUCKNNG_RPC_FLAG_PAYLOAD_QUACK_BATCH
-                    : DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM) |
-                DUCKNNG_RPC_FLAG_END_OF_STREAM,
+        return ducknng_fetch_set_row_reply(reply, row_payload_format,
+            DUCKNNG_RPC_FLAG_END_OF_STREAM, prebuilt_msg, reply_prefix_size,
             payload, payload_len);
-        return 0;
     }
     session->eos = 1;
     batch_index = session->batch_no;

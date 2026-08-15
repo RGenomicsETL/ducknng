@@ -58,12 +58,13 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_request_socket` | table | `socket_id, payload, timeout_ms` | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)` | Perform a raw request through a previously dialed socket handle and return a structured result row. |
 | `ducknng_request_raw` | scalar | `url, payload, timeout_ms, tls_config_id` | `BLOB` | Perform a one-shot raw request and return the raw reply frame bytes. |
 | `ducknng_request_socket_raw` | scalar | `socket_id, payload, timeout_ms` | `BLOB` | Perform a raw request through a dialed socket handle and return the raw reply frame bytes. |
-| `ducknng_decode_frame` | table | `frame` | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns. |
+| `ducknng_decode_frame` | table | `frame` | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns. |
 | `ducknng_frame_payload` | scalar | `frame` | `BLOB` | Extract the payload bytes from one raw ducknng frame. |
 | `ducknng_frame_payload_text` | scalar | `frame` | `VARCHAR` | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload. |
 | `ducknng_frame_error_text` | scalar | `frame` | `VARCHAR` | Extract the protocol-level error text from a raw ducknng error frame. |
 | `ducknng_frame_version` | scalar | `frame` | `UTINYINT` | Extract the protocol version field from one raw ducknng frame. |
 | `ducknng_frame_type` | scalar | `frame` | `UTINYINT` | Extract the numeric reply type field from one raw ducknng frame. |
+| `ducknng_frame_status` | scalar | `frame` | `UTINYINT` | Extract the protocol status from one raw ducknng frame. |
 | `ducknng_frame_flags` | scalar | `frame` | `UINTEGER` | Extract the reply flags bitset from one raw ducknng frame. |
 | `ducknng_frame_type_name` | scalar | `frame` | `VARCHAR` | Extract the symbolic reply type name from one raw ducknng frame. |
 | `ducknng_frame_name` | scalar | `frame` | `VARCHAR` | Extract the method or reply name field from one raw ducknng frame. |
@@ -161,7 +162,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_aio_wait` | scalar | `aio_ids, wait_ms` | `BOOLEAN` | Wait until any requested aio handle reaches a terminal state without collecting or dropping it. |
 | `ducknng_aio_status` | table | `aio_id` | `TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)` | Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion. |
 | `ducknng_aio_collect` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB, nng_error INTEGER, nng_error_message VARCHAR)` | Wait for any requested aio handles to finish and return one row per newly collected terminal result. |
-| `ducknng_aio_collect_decoded` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)` | Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly. |
+| `ducknng_aio_collect_decoded` | table | `aio_ids, wait_ms` | `TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)` | Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly. |
 | `ducknng_aio_cancel` | scalar | `aio_id` | `BOOLEAN` | Request cancellation of a pending aio handle. |
 | `ducknng_aio_drop` | scalar | `aio_id` | `BOOLEAN` | Release a terminal aio handle from the runtime registry. |
 

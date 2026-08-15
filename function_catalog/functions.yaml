@@ -2004,7 +2004,7 @@
       "kind": "table",
       "category": "Async I/O",
       "signature": "ducknng_aio_collect_decoded(aio_ids, wait_ms)",
-      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)",
+      "returns": "TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly.",
@@ -2453,12 +2453,13 @@
       "kind": "table",
       "category": "Primitive Transport",
       "signature": "ducknng_decode_frame(frame)",
-      "returns": "TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)",
+      "returns": "TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)",
       "since": "0.1.0",
       "implemented": true,
       "description": "Decode a raw ducknng frame into envelope fields and extracted payload columns.",
       "notes": [
         "Useful after ducknng_request() or ducknng_request_raw() when inspecting wire replies from SQL.",
+        "status is zero for non-error frames, a documented protocol status for current error frames, and 255 (UNSPECIFIED) for legacy error frames whose status byte was zero.",
         "payload_text is populated only when the payload looks textual."
       ],
       "examples": [
@@ -2548,6 +2549,24 @@
       ],
       "examples": [
         "SELECT ducknng_frame_type(ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_sql0.ipc', 0::UBIGINT));"
+      ]
+    },
+    {
+      "name": "ducknng_frame_status",
+      "kind": "scalar",
+      "category": "Primitive Transport",
+      "signature": "ducknng_frame_status(frame)",
+      "returns": "UTINYINT",
+      "since": "0.1.3",
+      "implemented": true,
+      "description": "Extract the protocol status from one raw ducknng frame.",
+      "notes": [
+        "Returns NULL for invalid frames and zero for valid non-error frames.",
+        "Current error frames carry a documented nonzero status; legacy error frames with no assigned status decode as 255 (UNSPECIFIED).",
+        "This is a ducknng protocol status, not an NNG transport error code."
+      ],
+      "examples": [
+        "SELECT ducknng_frame_status(ducknng_request_raw('ipc:///tmp/ducknng_sql0.ipc', from_hex('00'), 1000, 0::UBIGINT));"
       ]
     },
     {

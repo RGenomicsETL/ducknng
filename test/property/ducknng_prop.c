@@ -5,6 +5,7 @@ DUCKDB_EXTENSION_GLOBAL
 #undef duckdb_vector_size
 
 #include "ducknng_quack.h"
+#include "ducknng_quack_core.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
 #include "ducknng_wire.h"
@@ -38,6 +39,7 @@ struct prop_bytes_env {
 struct prop_frame {
     size_t len;
     uint8_t type;
+    uint8_t status;
     uint32_t flags;
     uint32_t name_len;
     uint32_t error_len;
@@ -204,28 +206,34 @@ static enum theft_alloc_res
 prop_frame_alloc(struct theft *t, void *env, void **instance)
 {
     uint8_t type = (uint8_t)prop_random_bounded(t, 5);
-    uint32_t flags = (uint32_t)theft_random_bits(t, 16);
+    uint8_t status = type == DUCKNNG_RPC_ERROR
+        ? (uint8_t)prop_random_bounded(t, DUCKNNG_STATUS_DISABLED + 1u) : 0;
+    uint32_t flags = (uint32_t)theft_random_bits(t, 16) & DUCKNNG_RPC_FLAGS_MASK;
     uint32_t name_len = (uint32_t)prop_random_bounded(t, DUCKNNG_MAX_METHOD_NAME_LEN + 1u);
-    uint32_t error_len = (uint32_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_FRAME_ERROR + 1u);
+    uint32_t error_len = type == DUCKNNG_RPC_ERROR
+        ? 1u + (uint32_t)prop_random_bounded(t, DUCKNNG_PROP_MAX_FRAME_ERROR)
+        : 0u;
     uint64_t payload_len = prop_random_bounded(t, DUCKNNG_PROP_MAX_FRAME_PAYLOAD + 1u);
     size_t total;
     struct prop_frame *out;
     size_t i;
 
     (void)env;
-    if (type == DUCKNNG_RPC_CALL) error_len = 0;
     total = DUCKNNG_WIRE_HEADER_LEN + (size_t)name_len + (size_t)error_len + (size_t)payload_len;
     out = (struct prop_frame *)malloc(sizeof(*out) + total);
     if (!out) return THEFT_ALLOC_ERROR;
     out->len = total;
     out->type = type;
+    out->status = status ? status :
+        (type == DUCKNNG_RPC_ERROR ? DUCKNNG_STATUS_UNSPECIFIED : DUCKNNG_STATUS_OK);
     out->flags = flags;
     out->name_len = name_len;
     out->error_len = error_len;
     out->payload_len = payload_len;
     out->data[0] = DUCKNNG_WIRE_VERSION;
     out->data[1] = type;
-    prop_write_le32(out->data + 2, flags);
+    prop_write_le32(out->data + 2,
+        flags | ((uint32_t)status << DUCKNNG_RPC_STATUS_SHIFT));
     prop_write_le32(out->data + 6, name_len);
     prop_write_le32(out->data + 10, error_len);
     prop_write_le64(out->data + 14, payload_len);
@@ -249,9 +257,10 @@ prop_frame_print(FILE *f, const void *instance, void *env)
     const struct prop_frame *frame = (const struct prop_frame *)instance;
 
     (void)env;
-    fprintf(f, "type=%u flags=%" PRIu32 " name_len=%" PRIu32
+    fprintf(f, "type=%u status=%u flags=%" PRIu32 " name_len=%" PRIu32
         " error_len=%" PRIu32 " payload_len=%" PRIu64 "\n",
-        (unsigned int)frame->type, frame->flags, frame->name_len,
+        (unsigned int)frame->type, (unsigned int)frame->status,
+        frame->flags, frame->name_len,
         frame->error_len, frame->payload_len);
     prop_hexdump(f, frame->data, frame->len);
 }
@@ -355,6 +364,76 @@ prop_size_arith_invariants(struct theft *t, void *arg1)
     if (ducknng_grow_capacity(a, b, 256, &out) != 0) return THEFT_TRIAL_FAIL;
     if (out < a) return THEFT_TRIAL_FAIL;
 
+    return THEFT_TRIAL_PASS;
+}
+
+static enum theft_trial_res
+prop_qk_core_integer_roundtrip(struct theft *t, void *arg1)
+{
+    const struct prop_two_sizes *in = (const struct prop_two_sizes *)arg1;
+    static const uint8_t marker[] = {0x00u, 0x7fu, 0x80u, 0xffu};
+    ducknng_qk_writer writer;
+    ducknng_qk_reader reader;
+    uint8_t encoded[64];
+    uint8_t short_buffer[64];
+    uint64_t unsigned_value = in->a;
+    int64_t signed_value;
+    uint64_t decoded_unsigned = 0;
+    int64_t decoded_signed = 0;
+    const uint8_t *decoded_marker = NULL;
+    size_t decoded_marker_size = 0;
+    size_t required;
+    size_t cut;
+
+    (void)t;
+    memcpy(&signed_value, &in->b, sizeof(signed_value));
+    ducknng_qk_writer_init_measure(&writer);
+    if (ducknng_qk_write_uleb128(&writer, unsigned_value) != 0 ||
+        ducknng_qk_write_sleb128(&writer, signed_value) != 0 ||
+        ducknng_qk_write_counted(&writer, marker, sizeof(marker)) != 0 ||
+        ducknng_qk_writer_status(&writer) != DUCKNNG_QK_OK) {
+        return THEFT_TRIAL_FAIL;
+    }
+    required = ducknng_qk_writer_size(&writer);
+    if (required == 0 || required > sizeof(encoded)) return THEFT_TRIAL_FAIL;
+
+    memset(short_buffer, 0xa5, sizeof(short_buffer));
+    ducknng_qk_writer_init_fixed(&writer, short_buffer, required - 1u);
+    (void)ducknng_qk_write_uleb128(&writer, unsigned_value);
+    (void)ducknng_qk_write_sleb128(&writer, signed_value);
+    (void)ducknng_qk_write_counted(&writer, marker, sizeof(marker));
+    if (ducknng_qk_writer_status(&writer) != DUCKNNG_QK_NO_SPACE ||
+        ducknng_qk_writer_size(&writer) > required - 1u ||
+        short_buffer[required - 1u] != 0xa5u) return THEFT_TRIAL_FAIL;
+
+    ducknng_qk_writer_init_fixed(&writer, encoded, required);
+    if (ducknng_qk_write_uleb128(&writer, unsigned_value) != 0 ||
+        ducknng_qk_write_sleb128(&writer, signed_value) != 0 ||
+        ducknng_qk_write_counted(&writer, marker, sizeof(marker)) != 0 ||
+        ducknng_qk_writer_size(&writer) != required ||
+        ducknng_qk_writer_status(&writer) != DUCKNNG_QK_OK) {
+        return THEFT_TRIAL_FAIL;
+    }
+
+    for (cut = 0; cut < required; cut++) {
+        ducknng_qk_reader_init(&reader, encoded, cut);
+        if (ducknng_qk_read_uleb128(&reader, &decoded_unsigned) == 0 &&
+            ducknng_qk_read_sleb128(&reader, &decoded_signed) == 0 &&
+            ducknng_qk_read_counted(&reader, &decoded_marker,
+                &decoded_marker_size) == 0) return THEFT_TRIAL_FAIL;
+    }
+    ducknng_qk_reader_init(&reader, encoded, required);
+    if (ducknng_qk_read_uleb128(&reader, &decoded_unsigned) != 0 ||
+        ducknng_qk_read_sleb128(&reader, &decoded_signed) != 0 ||
+        ducknng_qk_read_counted(&reader, &decoded_marker,
+            &decoded_marker_size) != 0 ||
+        decoded_unsigned != unsigned_value || decoded_signed != signed_value ||
+        decoded_marker_size != sizeof(marker) ||
+        memcmp(decoded_marker, marker, sizeof(marker)) != 0 ||
+        ducknng_qk_reader_remaining(&reader) != 0 ||
+        ducknng_qk_reader_status(&reader) != DUCKNNG_QK_OK) {
+        return THEFT_TRIAL_FAIL;
+    }
     return THEFT_TRIAL_PASS;
 }
 
@@ -470,12 +549,20 @@ prop_wire_random_bytes(struct theft *t, void *arg1)
     rc = ducknng_decode_frame_bytes(bytes->data, bytes->len, &frame);
     if (rc != 0) return THEFT_TRIAL_PASS;
 
-    if (frame.version != DUCKNNG_WIRE_VERSION) return THEFT_TRIAL_FAIL;
+    if (frame.version != DUCKNNG_WIRE_VERSION || frame.type > DUCKNNG_RPC_EVENT) {
+        return THEFT_TRIAL_FAIL;
+    }
     if (frame.name_len > DUCKNNG_MAX_METHOD_NAME_LEN) return THEFT_TRIAL_FAIL;
-    if (frame.type == DUCKNNG_RPC_CALL && frame.error_len != 0) return THEFT_TRIAL_FAIL;
+    if (frame.type == DUCKNNG_RPC_ERROR) {
+        if (frame.error_len == 0 ||
+            (frame.status > DUCKNNG_STATUS_DISABLED &&
+             frame.status != DUCKNNG_STATUS_UNSPECIFIED)) return THEFT_TRIAL_FAIL;
+    } else if (frame.error_len != 0 || frame.status != DUCKNNG_STATUS_OK) {
+        return THEFT_TRIAL_FAIL;
+    }
     min_len = DUCKNNG_WIRE_HEADER_LEN + (size_t)frame.name_len + (size_t)frame.error_len;
     if (min_len > bytes->len) return THEFT_TRIAL_FAIL;
-    if (frame.payload_len > (uint64_t)(bytes->len - min_len)) return THEFT_TRIAL_FAIL;
+    if (frame.payload_len != (uint64_t)(bytes->len - min_len)) return THEFT_TRIAL_FAIL;
     if (frame.name != bytes->data + DUCKNNG_WIRE_HEADER_LEN) return THEFT_TRIAL_FAIL;
     if (frame.error != frame.name + frame.name_len) return THEFT_TRIAL_FAIL;
     if (frame.payload != frame.error + frame.error_len) return THEFT_TRIAL_FAIL;
@@ -497,7 +584,8 @@ prop_wire_valid_frame_decodes(struct theft *t, void *arg1)
         return THEFT_TRIAL_FAIL;
     }
     if (frame.version != DUCKNNG_WIRE_VERSION || frame.type != input->type ||
-        frame.flags != input->flags || frame.name_len != input->name_len ||
+        frame.status != input->status || frame.flags != input->flags ||
+        frame.name_len != input->name_len ||
         frame.error_len != input->error_len || frame.payload_len != input->payload_len) {
         return THEFT_TRIAL_FAIL;
     }
@@ -514,6 +602,16 @@ prop_wire_valid_frame_decodes(struct theft *t, void *arg1)
         if (ducknng_decode_frame_bytes(input->data, cut, &frame) == 0) {
             return THEFT_TRIAL_FAIL;
         }
+    }
+    {
+        uint8_t *with_suffix = (uint8_t *)malloc(input->len + 1u);
+        int rc;
+        if (!with_suffix) return THEFT_TRIAL_ERROR;
+        memcpy(with_suffix, input->data, input->len);
+        with_suffix[input->len] = 0xa5u;
+        rc = ducknng_decode_frame_bytes(with_suffix, input->len + 1u, &frame);
+        free(with_suffix);
+        if (rc == 0) return THEFT_TRIAL_FAIL;
     }
     return THEFT_TRIAL_PASS;
 }
@@ -594,15 +692,28 @@ prop_quack_random_payloads(struct theft *t, void *arg1)
  * schema and fuzz the recursive skip path without widening the public header. */
 #define PROP_QK_INTEGER 13
 #define PROP_QK_BIGINT  14
+#define PROP_QK_DECIMAL 21
 #define PROP_QK_VARCHAR 25
 #define PROP_QK_STRUCT  100
 #define PROP_QK_LIST    101
+#define PROP_QK_MAP     102
+#define PROP_QK_ENUM    104
+#define PROP_QK_ARRAY   108
 
 #define PROP_QK_FIELD_END          0xffffu
 #define PROP_QK_OUTER_RESULT_TYPES 1u
 #define PROP_QK_OUTER_RESULT_NAMES 2u
 #define PROP_QK_OUTER_RESULTS      4u
 #define PROP_QK_TYPE_ID            100u
+#define PROP_QK_TYPE_INFO          101u
+#define PROP_QK_EXTRA_INFO_KIND    100u
+#define PROP_QK_EXTRA_CHILD        200u
+#define PROP_QK_EXTRA_ARRAY_SIZE   201u
+#define PROP_QK_EXTRA_TYPE_DECIMAL   2u
+#define PROP_QK_EXTRA_TYPE_LIST      4u
+#define PROP_QK_EXTRA_TYPE_STRUCT    5u
+#define PROP_QK_EXTRA_TYPE_ENUM      6u
+#define PROP_QK_EXTRA_TYPE_ARRAY     9u
 #define PROP_QK_CHUNK_WRAPPER      300u
 #define PROP_QK_CHUNK_ROWS          100u
 #define PROP_QK_CHUNK_COLUMNS       102u
@@ -795,6 +906,28 @@ prop_quack_payload_sequence(struct prop_quack_buf *b)
 }
 
 static int
+prop_quack_payload_invalid_validity_boolean(struct prop_quack_buf *b)
+{
+    int64_t value = 42;
+    if (prop_qb_begin_one_col_result_vector(b, 1) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_HAS_VALIDITY) != 0 ||
+        prop_qb_byte(b, 2) != 0 ||
+        prop_qb_u16(b, PROP_QK_VECTOR_DATA) != 0 ||
+        prop_qb_blob(b, &value, sizeof(value)) != 0) return -1;
+    return prop_qb_finish_one_col_result_vector(b);
+}
+
+static int
+prop_quack_payload_invalid_chunk_boolean(struct prop_quack_buf *b)
+{
+    memset(b, 0, sizeof(*b));
+    return prop_qb_u16(b, PROP_QK_OUTER_RESULTS) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_byte(b, 2) != 0 ||
+        prop_qb_field_end(b) != 0 ? -1 : 0;
+}
+
+static int
 prop_quack_payload_fixed_width_overflow(struct prop_quack_buf *b)
 {
     memset(b, 0, sizeof(*b));
@@ -930,6 +1063,82 @@ prop_quack_build_one_col_named_schema(struct prop_quack_buf *b,
     return prop_qb_put(b, name, name_len);
 }
 
+static int
+prop_quack_schema_begin(struct prop_quack_buf *b, uint64_t logical_type,
+    uint8_t info_present)
+{
+    memset(b, 0, sizeof(*b));
+    return prop_qb_u16(b, PROP_QK_OUTER_RESULT_TYPES) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_u16(b, PROP_QK_TYPE_ID) != 0 ||
+        prop_qb_uleb(b, logical_type) != 0 ||
+        prop_qb_u16(b, PROP_QK_TYPE_INFO) != 0 ||
+        prop_qb_byte(b, info_present) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_schema_finish(struct prop_quack_buf *b)
+{
+    static const uint8_t name[] = {'x'};
+    return prop_qb_field_end(b) != 0 ||
+        prop_qb_u16(b, PROP_QK_OUTER_RESULT_NAMES) != 0 ||
+        prop_qb_uleb(b, 1) != 0 ||
+        prop_qb_blob(b, name, sizeof(name)) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_put_primitive_type(struct prop_quack_buf *b, uint64_t logical_type)
+{
+    return prop_qb_u16(b, PROP_QK_TYPE_ID) != 0 ||
+        prop_qb_uleb(b, logical_type) != 0 ||
+        prop_qb_field_end(b) != 0 ? -1 : 0;
+}
+
+static int
+prop_quack_schema_rejects(const struct prop_quack_buf *b)
+{
+    ducknng_quack_schema schema;
+    char *errmsg = NULL;
+    int rc;
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(b->data, b->len, &schema, &errmsg);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    return rc == 0 ? -1 : 0;
+}
+
+/* Reject and prove which check fired, so a regression that starts rejecting a
+ * payload for an unrelated reason still fails the test. */
+static int
+prop_quack_schema_rejects_with(const struct prop_quack_buf *b,
+    const char *expect_substring)
+{
+    ducknng_quack_schema schema;
+    char *errmsg = NULL;
+    int rc;
+    int matched;
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(b->data, b->len, &schema, &errmsg);
+    matched = rc != 0 && errmsg != NULL &&
+        strstr(errmsg, expect_substring) != NULL;
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    return matched ? 0 : -1;
+}
+
+static int
+prop_quack_schema_accepts(const struct prop_quack_buf *b)
+{
+    ducknng_quack_schema schema;
+    char *errmsg = NULL;
+    int rc;
+    memset(&schema, 0, sizeof(schema));
+    rc = ducknng_quack_payload_parse_schema(b->data, b->len, &schema, &errmsg);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    return rc == 0 ? 0 : -1;
+}
+
 /* The server upload append path parses an attacker-supplied quack header via
  * ducknng_quack_payload_parse_schema. Random bytes must reject cleanly or
  * parse a bounded schema, never crash, and never return success with an error
@@ -1031,6 +1240,250 @@ TEST wire_decodes_generated_valid_frames(void)
     PASS();
 }
 
+TEST wire_status_roundtrips_and_invalid_assignments_reject(void)
+{
+    static const uint8_t method[] = "method";
+    static const uint8_t message[] = "failure";
+    static const uint8_t payload[] = {0x00u, 0x7fu, 0xffu};
+    ducknng_frame_parts parts;
+    ducknng_frame frame;
+    uint8_t bytes[128];
+    size_t required = 0;
+    size_t written = 0;
+    int status;
+
+    memset(&parts, 0, sizeof(parts));
+    parts.type = DUCKNNG_RPC_ERROR;
+    parts.name = method;
+    parts.name_len = sizeof(method) - 1u;
+    parts.error = message;
+    parts.error_len = sizeof(message) - 1u;
+    parts.payload = payload;
+    parts.payload_len = sizeof(payload);
+    for (status = DUCKNNG_STATUS_INVALID;
+         status <= DUCKNNG_STATUS_DISABLED; status++) {
+        parts.status = status;
+        ASSERT_EQ(0, ducknng_frame_measure(&parts, &required));
+        ASSERT(required <= sizeof(bytes));
+        written = 0;
+        ASSERT_EQ(0, ducknng_encode_frame_bytes(&parts, bytes,
+            sizeof(bytes), &written));
+        ASSERT_EQ(required, written);
+        ASSERT_EQ(0, ducknng_decode_frame_bytes(bytes, written, &frame));
+        ASSERT_EQ(status, frame.status);
+        ASSERT_EQ((uint32_t)0, frame.flags);
+        ASSERT_EQ(sizeof(payload), (size_t)frame.payload_len);
+        ASSERT_MEM_EQ(payload, frame.payload, sizeof(payload));
+    }
+
+    /* A zero high status byte is accepted only as a legacy error frame and is
+     * represented explicitly rather than confused with success. */
+    parts.status = DUCKNNG_STATUS_INVALID;
+    ASSERT_EQ(0, ducknng_encode_frame_bytes(&parts, bytes,
+        sizeof(bytes), &written));
+    bytes[5] = 0;
+    ASSERT_EQ(0, ducknng_decode_frame_bytes(bytes, written, &frame));
+    ASSERT_EQ(DUCKNNG_STATUS_UNSPECIFIED, frame.status);
+
+    parts.status = DUCKNNG_STATUS_UNSPECIFIED;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.status = DUCKNNG_STATUS_DISABLED + 1;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.type = DUCKNNG_RPC_RESULT;
+    parts.status = DUCKNNG_STATUS_INVALID;
+    parts.error = NULL;
+    parts.error_len = 0;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+
+    /* The decoder rejects status bits on successful frames, unknown types,
+     * missing error text, and bytes after the counted payload. */
+    parts.status = DUCKNNG_STATUS_OK;
+    ASSERT_EQ(0, ducknng_encode_frame_bytes(&parts, bytes,
+        sizeof(bytes), &written));
+    bytes[5] = DUCKNNG_STATUS_INVALID;
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[5] = 0;
+    bytes[1] = 0xffu;
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[1] = DUCKNNG_RPC_ERROR;
+    prop_write_le32(bytes + 10, 0);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    PASS();
+}
+
+TEST wire_core_exercises_explicit_api_edges(void)
+{
+    static const uint8_t name[] = {'n'};
+    static const uint8_t error[] = {'e'};
+    static const uint8_t payload[] = {'p'};
+    ducknng_frame_parts parts;
+    ducknng_frame frame;
+    uint8_t bytes[64];
+    uint8_t prefix[16] = {0};
+    uint64_t session_id = 0;
+    const uint8_t *token = NULL;
+    size_t token_len = 0;
+    size_t quack_offset = 0;
+    size_t required = 0;
+    size_t written = 0;
+
+    ASSERT_EQ(-1, ducknng_frame_measure(NULL, &required));
+    memset(&parts, 0, sizeof(parts));
+    parts.type = DUCKNNG_RPC_RESULT;
+    parts.name = name;
+    parts.name_len = sizeof(name);
+    parts.payload = payload;
+    parts.payload_len = sizeof(payload);
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, NULL));
+
+    parts.type = 0xffu;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.type = DUCKNNG_RPC_RESULT;
+    parts.name_len = DUCKNNG_MAX_METHOD_NAME_LEN + 1u;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.name_len = sizeof(name);
+#if SIZE_MAX > UINT32_MAX
+    parts.type = DUCKNNG_RPC_ERROR;
+    parts.status = DUCKNNG_STATUS_INVALID;
+    parts.error = error;
+    parts.error_len = (size_t)UINT32_MAX + 1u;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.type = DUCKNNG_RPC_RESULT;
+    parts.status = DUCKNNG_STATUS_OK;
+    parts.error = NULL;
+    parts.error_len = 0;
+#endif
+    parts.flags = DUCKNNG_RPC_STATUS_MASK;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.flags = 0;
+    parts.name = NULL;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.name = name;
+    parts.payload = NULL;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.payload = payload;
+
+    parts.type = DUCKNNG_RPC_ERROR;
+    parts.status = DUCKNNG_STATUS_INVALID;
+    parts.error = NULL;
+    parts.error_len = sizeof(error);
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.error = error;
+    parts.error_len = 0;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.error_len = sizeof(error);
+    parts.status = DUCKNNG_STATUS_OK;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.status = DUCKNNG_STATUS_DISABLED + 1;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+
+    parts.type = DUCKNNG_RPC_RESULT;
+    parts.status = DUCKNNG_STATUS_OK;
+    parts.error = error;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.error = NULL;
+    parts.error_len = 0;
+    parts.payload_len = SIZE_MAX;
+    ASSERT_EQ(-1, ducknng_frame_measure(&parts, &required));
+    parts.payload_len = sizeof(payload);
+    ASSERT_EQ(0, ducknng_frame_measure(&parts, &required));
+    parts.payload = NULL;
+    ASSERT_EQ(-1, ducknng_encode_frame_prefix(&parts, bytes,
+        sizeof(bytes), NULL));
+    written = 0;
+    ASSERT_EQ(-1, ducknng_encode_frame_prefix(&parts, NULL, 0, &written));
+    ASSERT_EQ(DUCKNNG_WIRE_HEADER_LEN + sizeof(name), written);
+    ASSERT_EQ(-1, ducknng_encode_frame_prefix(&parts, bytes,
+        written - 1u, &written));
+    ASSERT_EQ(0, ducknng_encode_frame_prefix(&parts, bytes,
+        sizeof(bytes), &written));
+    ASSERT_EQ(DUCKNNG_WIRE_HEADER_LEN + sizeof(name), written);
+    parts.payload = payload;
+    parts.type = 0xffu;
+    ASSERT_EQ(-1, ducknng_encode_frame_bytes(&parts, bytes,
+        sizeof(bytes), &written));
+    parts.type = DUCKNNG_RPC_RESULT;
+    {
+        ducknng_frame_parts empty_parts;
+        memset(&empty_parts, 0, sizeof(empty_parts));
+        empty_parts.type = DUCKNNG_RPC_RESULT;
+        ASSERT_EQ(0, ducknng_frame_measure(&empty_parts, &required));
+    }
+    ASSERT_EQ(0, ducknng_frame_measure(&parts, &required));
+    ASSERT_EQ(-1, ducknng_encode_frame_bytes(&parts, bytes,
+        sizeof(bytes), NULL));
+    written = 0;
+    ASSERT_EQ(-1, ducknng_encode_frame_bytes(&parts, NULL, 0, &written));
+    ASSERT_EQ(required, written);
+    written = 0;
+    ASSERT_EQ(-1, ducknng_encode_frame_bytes(&parts, bytes,
+        required - 1u, &written));
+    ASSERT_EQ(required, written);
+    ASSERT_EQ(0, ducknng_encode_frame_bytes(&parts, bytes,
+        sizeof(bytes), &written));
+
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, NULL));
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(NULL, written, &frame));
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes,
+        DUCKNNG_WIRE_HEADER_LEN - 1u, &frame));
+    bytes[0] = 0;
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[0] = DUCKNNG_WIRE_VERSION;
+    bytes[1] = 0xffu;
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[1] = DUCKNNG_RPC_RESULT;
+    prop_write_le32(bytes + 6, DUCKNNG_MAX_METHOD_NAME_LEN + 1u);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    prop_write_le32(bytes + 6, sizeof(name));
+    prop_write_le32(bytes + 10, UINT32_MAX);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    prop_write_le32(bytes + 10, 0);
+    prop_write_le64(bytes + 14, 2);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    prop_write_le64(bytes + 14, sizeof(payload));
+    ASSERT_EQ(0, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[1] = DUCKNNG_RPC_ERROR;
+    prop_write_le32(bytes + 2,
+        (uint32_t)(DUCKNNG_STATUS_DISABLED + 1) << DUCKNNG_RPC_STATUS_SHIFT);
+    prop_write_le32(bytes + 10, 1);
+    prop_write_le64(bytes + 14, 0);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    bytes[1] = DUCKNNG_RPC_RESULT;
+    prop_write_le32(bytes + 2, 0);
+    ASSERT_EQ(-1, ducknng_decode_frame_bytes(bytes, written, &frame));
+    prop_write_le32(bytes + 10, 0);
+    prop_write_le64(bytes + 14, sizeof(payload));
+    ASSERT_EQ(0, ducknng_decode_frame_bytes(bytes, written, &frame));
+    ASSERT_EQ(0, ducknng_frame_name_equals(&frame, "x"));
+    ASSERT_EQ(1, ducknng_frame_name_equals(&frame, "n"));
+    ASSERT_EQ(0, ducknng_frame_name_equals(NULL, "n"));
+    ASSERT_EQ(0, ducknng_frame_name_equals(&frame, NULL));
+    ASSERT_EQ(0, ducknng_frame_name_equals(&frame, "long"));
+
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(NULL, 0,
+        &session_id, &token, &token_len, &quack_offset));
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(prefix, 9,
+        &session_id, &token, &token_len, &quack_offset));
+    prefix[8] = 0;
+    prefix[9] = 0;
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(prefix, 10,
+        &session_id, &token, &token_len, &quack_offset));
+    prefix[8] = 1;
+    prefix[9] = 1;
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(prefix, 10,
+        &session_id, &token, &token_len, &quack_offset));
+    prefix[8] = 2;
+    prefix[9] = 0;
+    ASSERT_EQ(-1, ducknng_upload_append_parse_prefix(prefix, 11,
+        &session_id, &token, &token_len, &quack_offset));
+    prefix[8] = 1;
+    prefix[9] = 0;
+    prefix[10] = 't';
+    ASSERT_EQ(0, ducknng_upload_append_parse_prefix(prefix, 11,
+        NULL, NULL, NULL, NULL));
+    PASS();
+}
+
 TEST transport_rejects_or_classifies_random_urls(void)
 {
     ASSERT_EQ(THEFT_RUN_PASS,
@@ -1107,6 +1560,99 @@ TEST quack_accepts_compressed_vector_fixtures(void)
     ASSERT_EQ((idx_t)5, row_count);
     ASSERT_EQ(NULL, errmsg);
     ducknng_quack_schema_reset(&schema);
+    PASS();
+}
+
+TEST quack_rejects_non_boolean_markers(void)
+{
+    struct prop_quack_buf payload;
+    ducknng_quack_schema schema;
+    idx_t row_count = 0;
+    char *errmsg = NULL;
+
+    ASSERT_EQ(0, prop_quack_build_one_col_schema(&schema, PROP_QK_BIGINT));
+    ASSERT_EQ(0, prop_quack_payload_invalid_validity_boolean(&payload));
+    ASSERT_NEQ(0, ducknng_quack_payload_read_row_count(payload.data,
+        payload.len, &schema, &row_count, &errmsg));
+    ASSERT(errmsg != NULL);
+    if (errmsg) free(errmsg);
+    errmsg = NULL;
+    row_count = 0;
+
+    ASSERT_EQ(0, prop_quack_payload_invalid_chunk_boolean(&payload));
+    ASSERT_NEQ(0, ducknng_quack_payload_read_row_count(payload.data,
+        payload.len, &schema, &row_count, &errmsg));
+    ASSERT(errmsg != NULL);
+    if (errmsg) free(errmsg);
+    ducknng_quack_schema_reset(&schema);
+    PASS();
+}
+
+TEST quack_rejects_malformed_type_info(void)
+{
+    struct prop_quack_buf payload;
+
+    /* Presence markers are strict booleans. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_INTEGER, 2));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* Nested and parameterized types require present, complete metadata. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_LIST, 0));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* The logical type and ExtraTypeInfo kind must agree. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_LIST, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_STRUCT));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* Decimal width is nonzero and scale may not exceed width. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_DECIMAL, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_DECIMAL));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 0));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 0));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* MAP requires the serialized LIST child to be STRUCT(key, value). */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_MAP, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_LIST));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_quack_put_primitive_type(&payload, PROP_QK_INTEGER));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* ARRAY requires exactly one child and a nonzero fixed size. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_ARRAY, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_ARRAY));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_quack_put_primitive_type(&payload, PROP_QK_INTEGER));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 0));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
+
+    /* Duplicate type-info fields are not last-write-wins. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_LIST, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_LIST));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_LIST));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects(&payload));
     PASS();
 }
 
@@ -1253,6 +1799,7 @@ TEST size_add_rejects_overflow_keeps_valid_sums(void)
 
     ASSERT_EQ(0, ducknng_size_add(10, 20, &out));
     ASSERT_EQ((size_t)30, out);
+    ASSERT_EQ(0, ducknng_size_add(10, 20, NULL));
 
     /* Exact boundary: sum equals SIZE_MAX is representable. */
     out = 0;
@@ -1276,6 +1823,7 @@ TEST size_mul_rejects_overflow_keeps_valid_products(void)
 
     ASSERT_EQ(0, ducknng_size_mul(6, 7, &out));
     ASSERT_EQ((size_t)42, out);
+    ASSERT_EQ(0, ducknng_size_mul(6, 7, NULL));
 
     /* Zero operand can never overflow. */
     out = 0xabcd;
@@ -1324,12 +1872,496 @@ TEST size_arith_invariants_hold_for_random_pairs(void)
     PASS();
 }
 
+/* The fixed-width variants back idx_t row and element math, which is uint64_t
+ * on every target regardless of size_t, so they need their own boundary cases
+ * rather than inheriting the size_t ones. */
+TEST u64_arith_rejects_overflow_keeps_valid_results(void)
+{
+    uint64_t out = 0;
+
+    ASSERT_EQ(0, ducknng_u64_add(10u, 20u, &out));
+    ASSERT_EQ((uint64_t)30u, out);
+    ASSERT_EQ(0, ducknng_u64_add(10u, 20u, NULL));
+
+    out = 0;
+    ASSERT_EQ(0, ducknng_u64_add(UINT64_MAX - 1u, 1u, &out));
+    ASSERT_EQ(UINT64_MAX, out);
+
+    out = 0xabcdu;
+    ASSERT_EQ(-1, ducknng_u64_add(UINT64_MAX, 1u, &out));
+    ASSERT_EQ((uint64_t)0xabcdu, out);
+
+    out = 0xabcdu;
+    ASSERT_EQ(-1, ducknng_u64_add(UINT64_MAX - 4u, 5u, &out));
+    ASSERT_EQ((uint64_t)0xabcdu, out);
+
+    out = 0;
+    ASSERT_EQ(0, ducknng_u64_mul(6u, 7u, &out));
+    ASSERT_EQ((uint64_t)42u, out);
+    ASSERT_EQ(0, ducknng_u64_mul(6u, 7u, NULL));
+
+    /* Zero short-circuits the divide guard in both operand positions. */
+    out = 0xabcdu;
+    ASSERT_EQ(0, ducknng_u64_mul(0u, UINT64_MAX, &out));
+    ASSERT_EQ((uint64_t)0u, out);
+    out = 0xabcdu;
+    ASSERT_EQ(0, ducknng_u64_mul(UINT64_MAX, 0u, &out));
+    ASSERT_EQ((uint64_t)0u, out);
+
+    out = 0;
+    ASSERT_EQ(0, ducknng_u64_mul(UINT64_MAX, 1u, &out));
+    ASSERT_EQ(UINT64_MAX, out);
+
+    out = 0xabcdu;
+    ASSERT_EQ(-1, ducknng_u64_mul(UINT64_MAX, 2u, &out));
+    ASSERT_EQ((uint64_t)0xabcdu, out);
+
+    out = 0xabcdu;
+    ASSERT_EQ(-1, ducknng_u64_mul((UINT64_MAX >> 1) + 1u, 2u, &out));
+    ASSERT_EQ((uint64_t)0xabcdu, out);
+    PASS();
+}
+
 SUITE(size_checked_properties)
 {
     RUN_TEST(size_add_rejects_overflow_keeps_valid_sums);
     RUN_TEST(size_mul_rejects_overflow_keeps_valid_products);
+    RUN_TEST(u64_arith_rejects_overflow_keeps_valid_results);
     RUN_TEST(grow_capacity_meets_need_without_overflow);
     RUN_TEST(size_arith_invariants_hold_for_random_pairs);
+}
+
+TEST qk_core_rejects_invalid_booleans_and_integers(void)
+{
+    static const uint8_t yes[] = {1u};
+    static const uint8_t invalid_bool[] = {2u};
+    static const uint8_t truncated_uleb[] = {0x80u};
+    static const uint8_t overflow_uleb[] = {
+        0x80u, 0x80u, 0x80u, 0x80u, 0x80u,
+        0x80u, 0x80u, 0x80u, 0x80u, 0x02u
+    };
+    ducknng_qk_reader reader;
+    ducknng_qk_writer writer;
+    uint8_t value = 0;
+    uint64_t integer = 0;
+
+    ducknng_qk_reader_init(&reader, yes, sizeof(yes));
+    ASSERT_EQ(0, ducknng_qk_read_boolean(&reader, &value));
+    ASSERT_EQ((uint8_t)1, value);
+    ASSERT_EQ((size_t)0, ducknng_qk_reader_remaining(&reader));
+
+    ducknng_qk_reader_init(&reader, invalid_bool, sizeof(invalid_bool));
+    ASSERT_EQ(-1, ducknng_qk_read_boolean(&reader, &value));
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_reader_status(&reader));
+
+    ducknng_qk_reader_init(&reader, truncated_uleb, sizeof(truncated_uleb));
+    ASSERT_EQ(-1, ducknng_qk_read_uleb128(&reader, &integer));
+    ASSERT_EQ(DUCKNNG_QK_TRUNCATED, ducknng_qk_reader_status(&reader));
+
+    ducknng_qk_reader_init(&reader, overflow_uleb, sizeof(overflow_uleb));
+    ASSERT_EQ(-1, ducknng_qk_read_uleb128(&reader, &integer));
+    ASSERT_EQ(DUCKNNG_QK_OVERFLOW, ducknng_qk_reader_status(&reader));
+
+    ducknng_qk_writer_init_fixed(&writer, NULL, 1);
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_writer_status(&writer));
+    ASSERT_EQ(-1, ducknng_qk_write_u8(&writer, 1));
+    PASS();
+}
+
+TEST qk_core_roundtrips_random_integers(void)
+{
+    ASSERT_EQ(THEFT_RUN_PASS,
+        prop_run_one("quack core integer roundtrip",
+            prop_qk_core_integer_roundtrip, &prop_two_sizes_info));
+    PASS();
+}
+
+TEST qk_core_exercises_explicit_api_edges(void)
+{
+    static const uint8_t sleb_minus_one[] = {0x7fu};
+    static const uint8_t leb_shift_overflow[] = {
+        0x80u, 0x80u, 0x80u, 0x80u, 0x80u,
+        0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x00u
+    };
+    static const uint8_t sleb_payload_overflow[] = {
+        0x80u, 0x80u, 0x80u, 0x80u, 0x80u,
+        0x80u, 0x80u, 0x80u, 0x80u, 0x01u
+    };
+    uint8_t bytes[32];
+    uint8_t value = 0;
+    uint16_t field = 0;
+    uint64_t unsigned_value = 0;
+    int64_t signed_value = 0;
+    const uint8_t *counted = NULL;
+    size_t counted_size = 0;
+    ducknng_qk_writer writer;
+    ducknng_qk_reader reader;
+
+    ducknng_qk_writer_init_measure(NULL);
+    ducknng_qk_writer_init_fixed(&writer, NULL, 0);
+    ASSERT_EQ(DUCKNNG_QK_OK, ducknng_qk_writer_status(&writer));
+    ASSERT_EQ((size_t)0, ducknng_qk_writer_size(NULL));
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_writer_status(NULL));
+    ASSERT_EQ(-1, ducknng_qk_write_u8(NULL, 1));
+
+    ducknng_qk_writer_init_measure(&writer);
+    ASSERT_EQ(0, ducknng_qk_write_bytes(&writer, NULL, 0));
+    ASSERT_EQ(-1, ducknng_qk_write_bytes(&writer, NULL, 1));
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_writer_status(&writer));
+    ASSERT_EQ(-1, ducknng_qk_write_u8(&writer, 1));
+
+    ducknng_qk_writer_init_measure(&writer);
+    writer.position = SIZE_MAX;
+    ASSERT_EQ(-1, ducknng_qk_write_u8(&writer, 1));
+    ASSERT_EQ(DUCKNNG_QK_OVERFLOW, ducknng_qk_writer_status(&writer));
+
+    memset(&writer, 0, sizeof(writer));
+    ASSERT_EQ(-1, ducknng_qk_write_u8(&writer, 1));
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_writer_status(&writer));
+
+    ducknng_qk_writer_init_fixed(&writer, bytes, sizeof(bytes));
+    ASSERT_EQ(0, ducknng_qk_write_u16le(&writer, 0x1234u));
+    ASSERT_EQ(0, ducknng_qk_write_field(&writer, 0xabcd));
+    ASSERT_EQ(0, ducknng_qk_write_sleb128(&writer, INT64_MIN));
+    ASSERT(ducknng_qk_writer_size(&writer) <= sizeof(bytes));
+
+    ducknng_qk_reader_init(NULL, NULL, 0);
+    ASSERT_EQ((size_t)0, ducknng_qk_reader_remaining(NULL));
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_reader_status(NULL));
+    ASSERT_EQ(-1, ducknng_qk_read_u8(NULL, &value));
+    ducknng_qk_reader_init(&reader, NULL, 1);
+    ASSERT_EQ(DUCKNNG_QK_INVALID, ducknng_qk_reader_status(&reader));
+    ASSERT_EQ(-1, ducknng_qk_read_u8(&reader, &value));
+
+    ducknng_qk_reader_init(&reader, bytes, 1);
+    reader.off = 2;
+    ASSERT_EQ((size_t)0, ducknng_qk_reader_remaining(&reader));
+    ASSERT_EQ(-1, ducknng_qk_skip(&reader, 0));
+    ASSERT_EQ(DUCKNNG_QK_TRUNCATED, ducknng_qk_reader_status(&reader));
+
+    { static const uint8_t two[] = {0x34u, 0x12u};
+      ducknng_qk_reader_init(&reader, two, sizeof(two));
+      ASSERT_EQ(0, ducknng_qk_peek_u16le(&reader, &field));
+      ASSERT_EQ((uint16_t)0x1234, field);
+      ASSERT_EQ(0, ducknng_qk_read_u16le(&reader, NULL));
+      ASSERT_EQ((size_t)0, ducknng_qk_reader_remaining(&reader)); }
+
+    ducknng_qk_reader_init(&reader, sleb_minus_one, sizeof(sleb_minus_one));
+    ASSERT_EQ(0, ducknng_qk_read_sleb128(&reader, &signed_value));
+    ASSERT_EQ((int64_t)-1, signed_value);
+
+    ducknng_qk_reader_init(&reader, leb_shift_overflow,
+        sizeof(leb_shift_overflow));
+    ASSERT_EQ(-1, ducknng_qk_read_uleb128(&reader, &unsigned_value));
+    ASSERT_EQ(DUCKNNG_QK_OVERFLOW, ducknng_qk_reader_status(&reader));
+    ducknng_qk_reader_init(&reader, leb_shift_overflow,
+        sizeof(leb_shift_overflow));
+    ASSERT_EQ(-1, ducknng_qk_read_sleb128(&reader, &signed_value));
+    ASSERT_EQ(DUCKNNG_QK_OVERFLOW, ducknng_qk_reader_status(&reader));
+    ducknng_qk_reader_init(&reader, sleb_payload_overflow,
+        sizeof(sleb_payload_overflow));
+    ASSERT_EQ(-1, ducknng_qk_read_sleb128(&reader, &signed_value));
+    ASSERT_EQ(DUCKNNG_QK_OVERFLOW, ducknng_qk_reader_status(&reader));
+
+    { static const uint8_t counted_value[] = {2u, 'o', 'k'};
+      ducknng_qk_reader_init(&reader, counted_value, sizeof(counted_value));
+      ASSERT_EQ(0, ducknng_qk_read_counted(&reader, NULL, NULL));
+      ASSERT_EQ((size_t)0, ducknng_qk_reader_remaining(&reader));
+      ducknng_qk_reader_init(&reader, counted_value, 2);
+      ASSERT_EQ(-1, ducknng_qk_read_counted(&reader, &counted, &counted_size));
+      ASSERT_EQ(DUCKNNG_QK_TRUNCATED, ducknng_qk_reader_status(&reader)); }
+    PASS();
+}
+
+TEST qk_type_core_exercises_structural_contracts(void)
+{
+    ducknng_quack_column_schema a;
+    ducknng_quack_column_schema b;
+    ducknng_quack_column_schema child;
+    ducknng_quack_column_schema tag;
+    ducknng_quack_column_schema entry;
+    ducknng_quack_column_schema value;
+    ducknng_quack_column_schema *one_child[1];
+    ducknng_quack_column_schema *two_children[2];
+    char *one_name[1];
+    char *two_names[2];
+    char *labels_a[2];
+    char *labels_b[2];
+    const char *message = NULL;
+
+    ASSERT_EQ((size_t)0, ducknng_qk_validity_bytes(0));
+    ASSERT_EQ((size_t)8, ducknng_qk_validity_bytes(1));
+    ASSERT_EQ((size_t)8, ducknng_qk_validity_bytes(64));
+    ASSERT_EQ((size_t)16, ducknng_qk_validity_bytes(65));
+    ASSERT_EQ(SIZE_MAX, ducknng_qk_validity_bytes(UINT64_MAX));
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&child, 0, sizeof(child));
+    memset(&tag, 0, sizeof(tag));
+    memset(&entry, 0, sizeof(entry));
+    memset(&value, 0, sizeof(value));
+    child.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    value.logical_type_id = DUCKNNG_QUACK_LOGICAL_VARCHAR;
+    tag.logical_type_id = DUCKNNG_QUACK_LOGICAL_UTINYINT;
+    one_child[0] = &child;
+    one_name[0] = "x";
+    two_children[0] = &tag;
+    two_children[1] = &child;
+    two_names[0] = "";
+    two_names[1] = "x";
+
+    ASSERT_EQ(0, ducknng_qk_type_is_nested(NULL));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_LIST;
+    ASSERT_EQ(1, ducknng_qk_type_is_nested(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_MAP;
+    ASSERT_EQ(1, ducknng_qk_type_is_nested(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_STRUCT;
+    ASSERT_EQ(1, ducknng_qk_type_is_nested(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_UNION;
+    ASSERT_EQ(1, ducknng_qk_type_is_nested(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_ARRAY;
+    ASSERT_EQ(1, ducknng_qk_type_is_nested(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ(0, ducknng_qk_type_is_nested(&a));
+
+    ASSERT_EQ(0, ducknng_qk_type_is_varlen(NULL));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_VARCHAR;
+    ASSERT_EQ(1, ducknng_qk_type_is_varlen(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_CHAR;
+    ASSERT_EQ(1, ducknng_qk_type_is_varlen(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_BLOB;
+    ASSERT_EQ(1, ducknng_qk_type_is_varlen(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ(0, ducknng_qk_type_is_varlen(&a));
+
+    ASSERT_EQ((size_t)0, ducknng_qk_type_fixed_width(NULL));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_BOOLEAN;
+    ASSERT_EQ((size_t)1, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_SMALLINT;
+    ASSERT_EQ((size_t)2, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ((size_t)4, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_BIGINT;
+    ASSERT_EQ((size_t)8, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_UUID;
+    ASSERT_EQ((size_t)16, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_DECIMAL;
+    a.decimal_width = 4;
+    ASSERT_EQ((size_t)2, ducknng_qk_type_fixed_width(&a));
+    a.decimal_width = 9;
+    ASSERT_EQ((size_t)4, ducknng_qk_type_fixed_width(&a));
+    a.decimal_width = 18;
+    ASSERT_EQ((size_t)8, ducknng_qk_type_fixed_width(&a));
+    a.decimal_width = 38;
+    ASSERT_EQ((size_t)16, ducknng_qk_type_fixed_width(&a));
+    a.decimal_width = 39;
+    ASSERT_EQ((size_t)0, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_ENUM;
+    a.enum_count = 0xffu;
+    ASSERT_EQ((size_t)1, ducknng_qk_type_fixed_width(&a));
+    a.enum_count = 0xffffu;
+    ASSERT_EQ((size_t)2, ducknng_qk_type_fixed_width(&a));
+    a.enum_count = 0x10000u;
+    ASSERT_EQ((size_t)4, ducknng_qk_type_fixed_width(&a));
+    a.logical_type_id = -1;
+    ASSERT_EQ((size_t)0, ducknng_qk_type_fixed_width(&a));
+
+    ASSERT_EQ(0, ducknng_qk_type_is_sequence_integer(NULL));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_TINYINT;
+    ASSERT_EQ(1, ducknng_qk_type_is_sequence_integer(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_UBIGINT;
+    ASSERT_EQ(1, ducknng_qk_type_is_sequence_integer(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_DOUBLE;
+    ASSERT_EQ(0, ducknng_qk_type_is_sequence_integer(&a));
+
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_DECIMAL,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_DECIMAL));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_LIST,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_LIST));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_LIST,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_MAP));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_STRUCT,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_STRUCT));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_STRUCT,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_UNION));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_ENUM,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_ENUM));
+    ASSERT_EQ(DUCKNNG_QUACK_EXTRA_TYPE_ARRAY,
+        ducknng_qk_type_expected_info_kind(DUCKNNG_QUACK_LOGICAL_ARRAY));
+    ASSERT_EQ(UINT64_MAX, ducknng_qk_type_expected_info_kind(-1));
+    ASSERT_EQ(0, ducknng_qk_type_needs_info(NULL));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_LIST;
+    ASSERT_EQ(1, ducknng_qk_type_needs_info(&a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ(0, ducknng_qk_type_needs_info(&a));
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    a.logical_type_id = b.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ(0, ducknng_qk_type_equal(NULL, &b));
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, NULL));
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    b.logical_type_id++;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b = a; b.decimal_width = 1;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b = a; b.decimal_scale = 1;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b = a; b.array_size = 1;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b = a; b.enum_count = 1;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b = a; b.nchildren = 1;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+
+    memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b));
+    labels_a[0] = "a"; labels_a[1] = NULL;
+    labels_b[0] = "a"; labels_b[1] = NULL;
+    a.logical_type_id = b.logical_type_id = DUCKNNG_QUACK_LOGICAL_ENUM;
+    a.enum_count = b.enum_count = 2;
+    a.enum_labels = labels_a;
+    b.enum_labels = labels_b;
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    a.enum_labels = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    a.enum_labels = labels_a; b.enum_labels = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b.enum_labels = labels_b; labels_b[0] = "b";
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    labels_b[0] = "a";
+
+    memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b));
+    a.logical_type_id = b.logical_type_id = DUCKNNG_QUACK_LOGICAL_STRUCT;
+    a.nchildren = b.nchildren = 1;
+    a.children = b.children = one_child;
+    a.child_names = b.child_names = one_name;
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    a.children = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    a.children = one_child; b.children = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b.children = one_child; a.child_names = NULL; b.child_names = NULL;
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    one_name[0] = NULL;
+    a.child_names = one_name; b.child_names = NULL;
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    a.child_names = NULL; b.child_names = one_name;
+    ASSERT_EQ(1, ducknng_qk_type_equal(&a, &b));
+    one_name[0] = "x";
+    a.child_names = one_name; b.child_names = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_equal(&a, &b));
+    b.child_names = one_name;
+
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(NULL, NULL));
+    memset(&a, 0, sizeof(a));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_DECIMAL;
+    a.decimal_width = 10; a.decimal_scale = 2;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.decimal_width = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.decimal_width = 39; a.decimal_scale = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.decimal_width = 10; a.decimal_scale = 11;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_LIST;
+    a.nchildren = 1; a.children = one_child;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 1; a.children = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.children = one_child; one_child[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    one_child[0] = &child;
+
+    entry.logical_type_id = DUCKNNG_QUACK_LOGICAL_STRUCT;
+    entry.nchildren = 2; entry.children = two_children;
+    one_child[0] = &entry;
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_MAP;
+    a.nchildren = 1; a.children = one_child;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    entry.children = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    entry.children = two_children; entry.nchildren = 1;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    entry.nchildren = 2; entry.logical_type_id = DUCKNNG_QUACK_LOGICAL_LIST;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    entry.logical_type_id = DUCKNNG_QUACK_LOGICAL_STRUCT;
+
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_STRUCT;
+    a.nchildren = 1; a.children = one_child; a.child_names = one_name;
+    one_child[0] = &child;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 1; a.children = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.children = one_child; a.child_names = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.child_names = one_name; one_child[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    one_child[0] = &child; one_name[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    one_name[0] = "x";
+
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_UNION;
+    a.nchildren = 2; a.children = two_children; a.child_names = two_names;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 1;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 2; a.children = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.children = two_children; a.child_names = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.child_names = two_names; two_children[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    two_children[0] = &child;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    two_children[0] = &tag;
+
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_ENUM;
+    a.enum_count = 0; a.enum_labels = NULL;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.enum_count = DUCKNNG_QUACK_MAX_ENUM_VALUES + 1u;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.enum_count = 1;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.enum_labels = labels_a; labels_a[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    labels_a[0] = "a";
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+
+    one_child[0] = &child;
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_ARRAY;
+    a.array_size = 3; a.nchildren = 1; a.children = one_child;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.array_size = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.array_size = 3; a.nchildren = 0;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.nchildren = 1; a.children = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    a.children = one_child; one_child[0] = NULL;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_VARCHAR;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.logical_type_id = DUCKNNG_QUACK_LOGICAL_INTEGER;
+    ASSERT_EQ(0, ducknng_qk_type_shape_validate(&a, &message));
+    a.logical_type_id = -1;
+    ASSERT_EQ(-1, ducknng_qk_type_shape_validate(&a, &message));
+    ASSERT(message != NULL);
+    PASS();
+}
+
+SUITE(quack_byte_core_properties)
+{
+    RUN_TEST(qk_core_rejects_invalid_booleans_and_integers);
+    RUN_TEST(qk_core_roundtrips_random_integers);
+    RUN_TEST(qk_core_exercises_explicit_api_edges);
+    RUN_TEST(qk_type_core_exercises_structural_contracts);
 }
 
 TEST join_dotted_path_handles_edges(void)
@@ -1510,6 +2542,8 @@ SUITE(wire_properties)
 {
     RUN_TEST(wire_rejects_or_decodes_random_bytes);
     RUN_TEST(wire_decodes_generated_valid_frames);
+    RUN_TEST(wire_status_roundtrips_and_invalid_assignments_reject);
+    RUN_TEST(wire_core_exercises_explicit_api_edges);
     RUN_TEST(upload_prefix_parses_valid_and_rejects_short);
     RUN_TEST(upload_prefix_rejects_random_bytes);
 }
@@ -1520,10 +2554,83 @@ SUITE(transport_properties)
     RUN_TEST(transport_rejects_or_classifies_random_urls);
 }
 
+/* Regression: ExtraTypeInfo fields 200 and 201 were accepted in either order.
+ * For ENUM that let field 201 allocate enum_labels for n=0 (comparing against
+ * a still-zero count) and field 200 then publish an enum_count of up to 2^24.
+ * Shape validation, ducknng_quack_node_free_contents, and
+ * duckdb_create_enum_type all walk enum_count entries of that one-slot array.
+ * The count is now published only where the labels are allocated, and the
+ * reversed order is rejected outright. */
+TEST quack_rejects_reordered_enum_type_info(void)
+{
+    struct prop_quack_buf payload;
+    static const char *const labels[2] = {"alpha", "beta"};
+    size_t i;
+
+    /* Field 201 first with zero values, then a large field 200 count. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_ENUM, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_ENUM));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 0));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 1000000));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects_with(&payload,
+        "field 201 precedes field 200"));
+
+    /* The ordering rule covers every type carrying both fields, not just ENUM. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_ARRAY, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_ARRAY));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 4));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_quack_put_primitive_type(&payload, PROP_QK_INTEGER));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects_with(&payload,
+        "field 201 precedes field 200"));
+
+    /* In serializer order the declared count must still match the labels. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_ENUM, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_ENUM));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 2));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 1));
+    ASSERT_EQ(0, prop_qb_blob(&payload, labels[0], strlen(labels[0])));
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_rejects_with(&payload,
+        "enum values disagree with count"));
+
+    /* A well-formed ENUM in serializer order still decodes. */
+    ASSERT_EQ(0, prop_quack_schema_begin(&payload, PROP_QK_ENUM, 1));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_INFO_KIND));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, PROP_QK_EXTRA_TYPE_ENUM));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_CHILD));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 2));
+    ASSERT_EQ(0, prop_qb_u16(&payload, PROP_QK_EXTRA_ARRAY_SIZE));
+    ASSERT_EQ(0, prop_qb_uleb(&payload, 2));
+    for (i = 0; i < 2; i++) {
+        ASSERT_EQ(0, prop_qb_blob(&payload, labels[i], strlen(labels[i])));
+    }
+    ASSERT_EQ(0, prop_qb_field_end(&payload));
+    ASSERT_EQ(0, prop_quack_schema_finish(&payload));
+    ASSERT_EQ(0, prop_quack_schema_accepts(&payload));
+    PASS();
+}
+
 SUITE(quack_properties)
 {
     RUN_TEST(quack_rejects_or_scans_random_zero_column_payloads);
     RUN_TEST(quack_accepts_compressed_vector_fixtures);
+    RUN_TEST(quack_rejects_non_boolean_markers);
+    RUN_TEST(quack_rejects_malformed_type_info);
+    RUN_TEST(quack_rejects_reordered_enum_type_info);
     RUN_TEST(quack_rejects_malformed_dictionary_fixture);
     RUN_TEST(quack_rejects_fixed_width_size_overflow_fixture);
     RUN_TEST(quack_rejects_blob_length_wraparound_fixture);
@@ -1541,6 +2648,7 @@ main(int argc, char **argv)
     prop_init_duckdb_api();
     GREATEST_MAIN_BEGIN();
     RUN_SUITE(size_checked_properties);
+    RUN_SUITE(quack_byte_core_properties);
     RUN_SUITE(string_path_properties);
     RUN_SUITE(json_subject_array_properties);
     RUN_SUITE(wire_properties);

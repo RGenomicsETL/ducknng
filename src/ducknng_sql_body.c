@@ -26,6 +26,7 @@ typedef struct {
     char *error;
     uint8_t version;
     uint8_t type;
+    uint8_t status;
     uint32_t flags;
     char *type_name;
     char *name;
@@ -376,6 +377,13 @@ static void ducknng_single_row_init(duckdb_init_info info) {
     duckdb_init_set_init_data(info, init, destroy_single_row_init_data);
 }
 
+/* ducknng_decode_frame() and the application/vnd.ducknng.frame body codec
+ * publish the same decoded envelope projection, so both go through one column
+ * declaration and one row emitter. */
+static void ducknng_body_parse_add_frame_columns(duckdb_bind_info info);
+static void ducknng_body_parse_emit_frame_row(duckdb_data_chunk output,
+    const ducknng_frame_decode_bind_data *frame);
+
 static void ducknng_decode_frame_bind(duckdb_bind_info info) {
     ducknng_frame_decode_bind_data *bind;
     duckdb_logical_type type;
@@ -405,6 +413,7 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
         bind->ok = frame.type != DUCKNNG_RPC_ERROR;
         bind->version = frame.version;
         bind->type = frame.type;
+        bind->status = frame.status;
         bind->flags = frame.flags;
         bind->type_name = ducknng_strdup(ducknng_rpc_type_name(frame.type));
         if (!bind->type_name) {
@@ -437,29 +446,7 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
         }
     }
     if (blob.data) duckdb_free(blob.data);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    duckdb_bind_add_result_column(info, "ok", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "error", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_UTINYINT);
-    duckdb_bind_add_result_column(info, "version", type);
-    duckdb_bind_add_result_column(info, "type", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
-    duckdb_bind_add_result_column(info, "flags", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "type_name", type);
-    duckdb_bind_add_result_column(info, "name", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    duckdb_bind_add_result_column(info, "payload", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "payload_text", type);
-    duckdb_destroy_logical_type(&type);
+    ducknng_body_parse_add_frame_columns(info);
     duckdb_bind_set_bind_data(info, bind, destroy_frame_decode_bind_data);
     duckdb_bind_set_cardinality(info, 1, true);
 }
@@ -467,32 +454,11 @@ static void ducknng_decode_frame_bind(duckdb_bind_info info) {
 static void ducknng_decode_frame_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_single_row_init_data *init = (ducknng_single_row_init_data *)duckdb_function_get_init_data(info);
     ducknng_frame_decode_bind_data *bind = (ducknng_frame_decode_bind_data *)duckdb_function_get_bind_data(info);
-    bool *ok_data;
-    uint8_t *version_data;
-    uint8_t *type_data;
-    uint32_t *flags_data;
     if (!init || !bind || init->emitted) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
-    version_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
-    type_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
-    flags_data = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
-    ok_data[0] = bind->ok;
-    if (bind->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->error, (idx_t)strlen(bind->error));
-    else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    version_data[0] = bind->version;
-    type_data[0] = bind->type;
-    flags_data[0] = bind->flags;
-    if (bind->type_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, bind->type_name, (idx_t)strlen(bind->type_name));
-    else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
-    if (bind->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), 0, bind->name, (idx_t)strlen(bind->name));
-    else set_null(duckdb_data_chunk_get_vector(output, 6), 0);
-    if (bind->payload) assign_blob(duckdb_data_chunk_get_vector(output, 7), 0, bind->payload, bind->payload_len);
-    else set_null(duckdb_data_chunk_get_vector(output, 7), 0);
-    if (bind->payload_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), 0, bind->payload_text, (idx_t)strlen(bind->payload_text));
-    else set_null(duckdb_data_chunk_get_vector(output, 8), 0);
+    ducknng_body_parse_emit_frame_row(output, bind);
     duckdb_data_chunk_set_size(output, 1);
     init->emitted = 1;
 }
@@ -515,6 +481,7 @@ static int ducknng_body_parse_frame_copy(const uint8_t *data, size_t len,
     out->ok = frame.type != DUCKNNG_RPC_ERROR;
     out->version = frame.version;
     out->type = frame.type;
+    out->status = frame.status;
     out->flags = frame.flags;
     out->type_name = ducknng_strdup(ducknng_rpc_type_name(frame.type));
     if (!out->type_name) {
@@ -674,6 +641,28 @@ static void ducknng_frame_type_scalar(duckdb_function_info info, duckdb_data_chu
     }
 }
 
+static void ducknng_frame_status_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    idx_t count = duckdb_data_chunk_get_size(input);
+    idx_t row;
+    duckdb_vector frame_vec = duckdb_data_chunk_get_vector(input, 0);
+    uint8_t *out = (uint8_t *)duckdb_vector_get_data(output);
+    (void)info;
+    for (row = 0; row < count; row++) {
+        ducknng_frame frame;
+        idx_t frame_len = 0;
+        uint8_t *frame_bytes = NULL;
+        if (ducknng_decode_frame_scalar_value(frame_vec, row, &frame,
+                &frame_bytes, &frame_len) != 0) {
+            if (frame_bytes) duckdb_free(frame_bytes);
+            set_null(output, row);
+            continue;
+        }
+        out[row] = frame.status;
+        duckdb_free(frame_bytes);
+    }
+}
+
 static void ducknng_frame_flags_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
     idx_t count = duckdb_data_chunk_get_size(input);
     idx_t row;
@@ -776,9 +765,13 @@ static void ducknng_body_parse_add_frame_columns(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "error", type);
     duckdb_destroy_logical_type(&type);
+    /* Envelope columns follow the wire order: version, type, status, flags.
+     * ducknng_aio_collect_decoded() emits the same order, so one client
+     * tuple-unpacking helper works against every decoded-frame projection. */
     type = duckdb_create_logical_type(DUCKDB_TYPE_UTINYINT);
     duckdb_bind_add_result_column(info, "version", type);
     duckdb_bind_add_result_column(info, "type", type);
+    duckdb_bind_add_result_column(info, "status", type);
     duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
     duckdb_bind_add_result_column(info, "flags", type);
@@ -799,21 +792,23 @@ static void ducknng_body_parse_emit_frame_row(duckdb_data_chunk output, const du
     bool *ok_data = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     uint8_t *version_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
     uint8_t *type_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
-    uint32_t *flags_data = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
+    uint8_t *status_data = (uint8_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
+    uint32_t *flags_data = (uint32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 5));
     ok_data[0] = frame ? frame->ok : false;
     if (frame && frame->error) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, frame->error, (idx_t)strlen(frame->error));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
     version_data[0] = frame ? frame->version : 0;
     type_data[0] = frame ? frame->type : 0;
+    status_data[0] = frame ? frame->status : 0;
     flags_data[0] = frame ? frame->flags : 0;
-    if (frame && frame->type_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 5), 0, frame->type_name, (idx_t)strlen(frame->type_name));
-    else set_null(duckdb_data_chunk_get_vector(output, 5), 0);
-    if (frame && frame->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), 0, frame->name, (idx_t)strlen(frame->name));
+    if (frame && frame->type_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 6), 0, frame->type_name, (idx_t)strlen(frame->type_name));
     else set_null(duckdb_data_chunk_get_vector(output, 6), 0);
-    if (frame && frame->payload) assign_blob(duckdb_data_chunk_get_vector(output, 7), 0, frame->payload, frame->payload_len);
+    if (frame && frame->name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 7), 0, frame->name, (idx_t)strlen(frame->name));
     else set_null(duckdb_data_chunk_get_vector(output, 7), 0);
-    if (frame && frame->payload_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 8), 0, frame->payload_text, (idx_t)strlen(frame->payload_text));
+    if (frame && frame->payload) assign_blob(duckdb_data_chunk_get_vector(output, 8), 0, frame->payload, frame->payload_len);
     else set_null(duckdb_data_chunk_get_vector(output, 8), 0);
+    if (frame && frame->payload_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 9), 0, frame->payload_text, (idx_t)strlen(frame->payload_text));
+    else set_null(duckdb_data_chunk_get_vector(output, 9), 0);
 }
 
 static int ducknng_body_parse_run_duckdb_reader(ducknng_sql_context *ctx,
@@ -2506,6 +2501,8 @@ int ducknng_register_sql_body(duckdb_connection con, ducknng_sql_context *ctx) {
             ducknng_frame_version_scalar, ctx, frame_types, DUCKDB_TYPE_UTINYINT)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_type", 1,
             ducknng_frame_type_scalar, ctx, frame_types, DUCKDB_TYPE_UTINYINT)) return 0;
+    if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_status", 1,
+            ducknng_frame_status_scalar, ctx, frame_types, DUCKDB_TYPE_UTINYINT)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_flags", 1,
             ducknng_frame_flags_scalar, ctx, frame_types, DUCKDB_TYPE_UINTEGER)) return 0;
     if (!DUCKNNG_REGISTER_SCALAR(con, "ducknng_frame_type_name", 1,

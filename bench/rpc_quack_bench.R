@@ -11,7 +11,7 @@ parse_mode <- function(args) {
   if (length(args) == 0L) {
     return(list(mode = "micro", args = args))
   }
-  if (args[[1]] %in% c("micro", "bulk_compare", "bulk-compare", "compare")) {
+  if (args[[1]] %in% c("micro", "direct", "bulk_compare", "bulk-compare", "compare")) {
     mode <- switch(args[[1]],
       "bulk-compare" = "bulk_compare",
       "compare" = "bulk_compare",
@@ -173,7 +173,10 @@ run_micro_bench <- function(args) {
     )
   }
 
-  ext_path <- normalizePath("build/release/ducknng.duckdb_extension")
+  ext_path <- normalizePath(Sys.getenv(
+    "DUCKNNG_BENCH_EXT_PATH",
+    unset = "build/release/ducknng.duckdb_extension"
+  ))
   ipc_path <- tempfile(pattern = "ducknng_bench_", tmpdir = "/tmp", fileext = ".ipc")
   ipc_url <- paste0("ipc://", ipc_path)
 
@@ -215,6 +218,25 @@ run_micro_bench <- function(args) {
     },
     iterations
   )
+  results[[length(results) + 1L]] <- bench_case(
+    "session_roundtrip_quack",
+    function() {
+      open <- rpc_roundtrip(sock, encode_query_open_request(
+        "SELECT 1 AS x",
+        serialization_mode = "ducknng_quack_batch"
+      ))
+      payload_text <- rawToChar(open$payload)
+      session_id <- json_get_number(payload_text, "session_id")
+      session_token <- json_get_string(payload_text, "session_token")
+      fetch <- rpc_roundtrip(sock, encode_session_control(
+        "fetch", session_id, session_token, "fetch-quack"
+      ))
+      stopifnot(fetch$type == 2L, bitwAnd(as.integer(fetch$flags), 256L) == 256L)
+      rpc_roundtrip(sock, encode_session_control("close", session_id, session_token, "close-quack"))
+      invisible(NULL)
+    },
+    iterations
+  )
   results[[length(results) + 1L]] <- bench_parallel_sessions(
     ipc_url,
     max(1L, iterations %/% max(1L, clients)),
@@ -222,6 +244,50 @@ run_micro_bench <- function(args) {
   )
 
   print(do.call(rbind, results), row.names = FALSE)
+}
+
+run_direct_bench <- function(args) {
+  source("bench/rpc_bulk_compare_support.R", local = TRUE)
+  repetitions <- if (length(args) >= 1L) as.integer(args[[1]]) else 5L
+  rows <- if (length(args) >= 2L) {
+    as.integer(strsplit(args[[2]], ",", fixed = TRUE)[[1]])
+  } else {
+    c(100000L, 1000000L)
+  }
+  db_path <- if (length(args) >= 3L) {
+    args[[3]]
+  } else {
+    file.path(tempdir(), "ducknng_quack_direct.duckdb")
+  }
+  transport <- Sys.getenv("DUCKNNG_BENCH_TRANSPORT", unset = "ipc")
+  ext_path <- ducknng_bench_find_ext_path()
+  required_sf <- max(1L, as.integer(ceiling(max(rows) / 6000000)))
+  dataset_name <- sprintf("tpch_sf%d.lineitem", required_sf)
+  ducknng_bench_ensure_tpch_db(db_path, required_sf, max(rows))
+  baseline_con <- ducknng_bench_open_duckdb(
+    db_path,
+    allow_unsigned_extensions = TRUE
+  )
+  on.exit(ducknng_bench_safe_disconnect(baseline_con), add = TRUE)
+  ducknng_bench_set_single_thread(baseline_con)
+  baselines <- setNames(
+    lapply(rows, function(n) ducknng_bench_local_baseline(baseline_con, n)),
+    as.character(rows)
+  )
+  result <- ducknng_bench_run_ducknng_rpc_transport(
+    transport = transport,
+    rows = rows,
+    repetitions = repetitions,
+    baselines = baselines,
+    db_path = db_path,
+    ext_path = ext_path,
+    dataset_name = dataset_name,
+    concurrent_rows = 0L,
+    concurrent_iterations = 0L,
+    concurrent_clients = 0L
+  )
+  print(ducknng_bench_machine_details(ext_path), row.names = FALSE)
+  print(result$rpc, row.names = FALSE)
 }
 
 run_bulk_compare <- function(args) {
@@ -247,5 +313,6 @@ run_bulk_compare <- function(args) {
 parsed <- parse_mode(commandArgs(trailingOnly = TRUE))
 switch(parsed$mode,
   micro = run_micro_bench(parsed$args),
+  direct = run_direct_bench(parsed$args),
   bulk_compare = run_bulk_compare(parsed$args)
 )

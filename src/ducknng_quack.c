@@ -1,5 +1,6 @@
 #include "ducknng_quack.h"
 #include "ducknng_duckdb_streaming_compat.h"
+#include "ducknng_quack_core.h"
 #include "ducknng_util.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -30,53 +31,12 @@ DUCKDB_EXTENSION_EXTERN
 #define DUCKNNG_QUACK_VECTOR_HAS_VALIDITY 100u
 #define DUCKNNG_QUACK_VECTOR_VALIDITY 101u
 #define DUCKNNG_QUACK_VECTOR_DATA 102u
-#define DUCKNNG_QUACK_EXTRA_TYPE_DECIMAL 2u
 #define DUCKNNG_QUACK_VECTOR_FLAT 0u
 #define DUCKNNG_QUACK_VECTOR_FSST 1u
 #define DUCKNNG_QUACK_VECTOR_CONSTANT 2u
 #define DUCKNNG_QUACK_VECTOR_DICTIONARY 3u
 #define DUCKNNG_QUACK_VECTOR_SEQUENCE 4u
 
-#define DUCKNNG_QUACK_LOGICAL_BOOLEAN 10
-#define DUCKNNG_QUACK_LOGICAL_TINYINT 11
-#define DUCKNNG_QUACK_LOGICAL_SMALLINT 12
-#define DUCKNNG_QUACK_LOGICAL_INTEGER 13
-#define DUCKNNG_QUACK_LOGICAL_BIGINT 14
-#define DUCKNNG_QUACK_LOGICAL_DATE 15
-#define DUCKNNG_QUACK_LOGICAL_TIME 16
-#define DUCKNNG_QUACK_LOGICAL_TIMESTAMP_SEC 17
-#define DUCKNNG_QUACK_LOGICAL_TIMESTAMP_MS 18
-#define DUCKNNG_QUACK_LOGICAL_TIMESTAMP 19
-#define DUCKNNG_QUACK_LOGICAL_TIMESTAMP_NS 20
-#define DUCKNNG_QUACK_LOGICAL_DECIMAL 21
-#define DUCKNNG_QUACK_LOGICAL_FLOAT 22
-#define DUCKNNG_QUACK_LOGICAL_DOUBLE 23
-#define DUCKNNG_QUACK_LOGICAL_CHAR 24
-#define DUCKNNG_QUACK_LOGICAL_VARCHAR 25
-#define DUCKNNG_QUACK_LOGICAL_BLOB 26
-#define DUCKNNG_QUACK_LOGICAL_INTERVAL 27
-#define DUCKNNG_QUACK_LOGICAL_UTINYINT 28
-#define DUCKNNG_QUACK_LOGICAL_USMALLINT 29
-#define DUCKNNG_QUACK_LOGICAL_UINTEGER 30
-#define DUCKNNG_QUACK_LOGICAL_UBIGINT 31
-#define DUCKNNG_QUACK_LOGICAL_TIMESTAMP_TZ 32
-#define DUCKNNG_QUACK_LOGICAL_TIME_TZ 34
-#define DUCKNNG_QUACK_LOGICAL_TIME_NS 35
-#define DUCKNNG_QUACK_LOGICAL_UHUGEINT 49
-#define DUCKNNG_QUACK_LOGICAL_HUGEINT 50
-#define DUCKNNG_QUACK_LOGICAL_UUID 54
-/* Nested logical type ids (DuckDB LogicalTypeId on the wire). */
-#define DUCKNNG_QUACK_LOGICAL_STRUCT 100
-#define DUCKNNG_QUACK_LOGICAL_LIST 101
-#define DUCKNNG_QUACK_LOGICAL_MAP 102
-#define DUCKNNG_QUACK_LOGICAL_ENUM 104
-#define DUCKNNG_QUACK_LOGICAL_UNION 107
-#define DUCKNNG_QUACK_LOGICAL_ARRAY 108
-/* ExtraTypeInfo kinds (field 100 of a type-info object). */
-#define DUCKNNG_QUACK_EXTRA_TYPE_LIST 4
-#define DUCKNNG_QUACK_EXTRA_TYPE_STRUCT 5
-#define DUCKNNG_QUACK_EXTRA_TYPE_ENUM 6
-#define DUCKNNG_QUACK_EXTRA_TYPE_ARRAY 9
 /* ExtraTypeInfo / nested vector field ids and bounds. */
 #define DUCKNNG_QUACK_EXTRA_CHILD 200
 #define DUCKNNG_QUACK_EXTRA_ARRAY_SIZE 201
@@ -93,23 +53,10 @@ DUCKDB_EXTENSION_EXTERN
 #define DUCKNNG_QUACK_VECTOR_ARRAY_CHILD 104
 #define DUCKNNG_QUACK_ENTRY_OFFSET 100
 #define DUCKNNG_QUACK_ENTRY_LENGTH 101
-#define DUCKNNG_QUACK_MAX_NESTING 64u
-#define DUCKNNG_QUACK_MAX_STRUCT_MEMBERS 65536u
-#define DUCKNNG_QUACK_MAX_ENUM_VALUES (1u << 24)
-#define DUCKNNG_QUACK_MAX_MATERIALIZED_VALUES (1u << 22)
 
-typedef struct ducknng_quack_writer {
-    uint8_t *data;
-    size_t len;
-    size_t cap;
-} ducknng_quack_writer;
+typedef ducknng_qk_writer ducknng_quack_writer;
 
-typedef struct ducknng_quack_reader {
-    const uint8_t *data;
-    size_t len;
-    size_t off;
-    uint64_t materialized_values;
-} ducknng_quack_reader;
+typedef ducknng_qk_reader ducknng_quack_reader;
 
 typedef struct ducknng_quack_type_meta {
     int logical_type_id;
@@ -117,9 +64,10 @@ typedef struct ducknng_quack_type_meta {
     uint8_t decimal_scale;
 } ducknng_quack_type_meta;
 
-/* Bytes a DuckDB validity mask occupies on the wire: ceil(rows/64) uint64 words. */
+/* Bytes a DuckDB validity mask occupies on the wire: ceil(rows/64) uint64 words.
+ * SIZE_MAX means the count cannot be represented safely. */
 static size_t ducknng_quack_validity_bytes(idx_t rows) {
-    return (size_t)(((uint64_t)rows + 63u) / 64u) * 8u;
+    return ducknng_qk_validity_bytes((uint64_t)rows);
 }
 
 /* Read a validity bit byte-wise so the wire blob need not be 8-byte aligned and
@@ -135,106 +83,89 @@ static void ducknng_quack_set_error(char **errmsg, const char *message) {
     *errmsg = ducknng_strdup(message ? message : "ducknng: quack codec error");
 }
 
-static int ducknng_quack_writer_reserve(ducknng_quack_writer *w, size_t add, char **errmsg) {
-    uint8_t *next;
-    size_t want;
-    size_t cap;
-    if (!w) {
-        ducknng_quack_set_error(errmsg, "ducknng: quack writer missing");
-        return -1;
-    }
-    if (ducknng_size_add(w->len, add, &want) != 0) {
+static int ducknng_quack_writer_result(int rc, ducknng_quack_writer *writer,
+    char **errmsg) {
+    if (rc == 0) return 0;
+    switch (ducknng_qk_writer_status(writer)) {
+    case DUCKNNG_QK_OVERFLOW:
         ducknng_quack_set_error(errmsg, "ducknng: quack payload size overflow");
-        return -1;
+        break;
+    case DUCKNNG_QK_NO_SPACE:
+        ducknng_quack_set_error(errmsg, "ducknng: measured quack output buffer is too small");
+        break;
+    default:
+        ducknng_quack_set_error(errmsg, "ducknng: invalid quack encoder input");
+        break;
     }
-    if (want <= w->cap) return 0;
-    if (ducknng_grow_capacity(want, w->cap, 256, &cap) != 0) {
-        ducknng_quack_set_error(errmsg, "ducknng: quack payload size overflow");
-        return -1;
-    }
-    next = (uint8_t *)duckdb_malloc(cap);
-    if (!next) {
-        ducknng_quack_set_error(errmsg, "ducknng: out of memory growing quack payload buffer");
-        return -1;
-    }
-    if (w->data && w->len) memcpy(next, w->data, w->len);
-    if (w->data) duckdb_free(w->data);
-    w->data = next;
-    w->cap = cap;
-    return 0;
+    return -1;
 }
 
-static int ducknng_quack_write_bytes(ducknng_quack_writer *w, const void *data, size_t len, char **errmsg) {
-    if (ducknng_quack_writer_reserve(w, len, errmsg) != 0) return -1;
-    if (len) memcpy(w->data + w->len, data, len);
-    w->len += len;
-    return 0;
+static int ducknng_quack_write_byte(ducknng_quack_writer *w,
+    uint8_t value, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_u8(w, value), w, errmsg);
 }
 
-static int ducknng_quack_write_byte(ducknng_quack_writer *w, uint8_t value, char **errmsg) {
-    return ducknng_quack_write_bytes(w, &value, 1, errmsg);
+static int ducknng_quack_write_field_id(ducknng_quack_writer *w,
+    uint16_t field_id, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_field(w, field_id), w, errmsg);
 }
 
-static int ducknng_quack_write_u16le(ducknng_quack_writer *w, uint16_t value, char **errmsg) {
-    uint8_t buf[2];
-    buf[0] = (uint8_t)(value & 0xffu);
-    buf[1] = (uint8_t)((value >> 8) & 0xffu);
-    return ducknng_quack_write_bytes(w, buf, sizeof(buf), errmsg);
-}
-
-static int ducknng_quack_write_field_id(ducknng_quack_writer *w, uint16_t field_id, char **errmsg) {
-    return ducknng_quack_write_u16le(w, field_id, errmsg);
-}
-
-static int ducknng_quack_write_field_end(ducknng_quack_writer *w, char **errmsg) {
+static int ducknng_quack_write_field_end(ducknng_quack_writer *w,
+    char **errmsg) {
     return ducknng_quack_write_field_id(w, DUCKNNG_QUACK_FIELD_END, errmsg);
 }
 
-static int ducknng_quack_write_uleb128(ducknng_quack_writer *w, uint64_t value, char **errmsg) {
-    do {
-        uint8_t byte = (uint8_t)(value & 0x7fu);
-        value >>= 7;
-        if (value != 0) byte |= 0x80u;
-        if (ducknng_quack_write_byte(w, byte, errmsg) != 0) return -1;
-    } while (value != 0);
-    return 0;
+static int ducknng_quack_write_uleb128(ducknng_quack_writer *w,
+    uint64_t value, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_uleb128(w, value), w, errmsg);
 }
 
-static int ducknng_quack_write_sleb128(ducknng_quack_writer *w, int64_t value, char **errmsg) {
-    int more = 1;
-    while (more) {
-        uint8_t byte = (uint8_t)(value & 0x7f);
-        int64_t next = value >> 7;
-        int sign = (byte & 0x40u) != 0;
-        more = !((next == 0 && !sign) || (next == -1 && sign));
-        if (more) byte |= 0x80u;
-        if (ducknng_quack_write_byte(w, byte, errmsg) != 0) return -1;
-        value = next;
-    }
-    return 0;
+static int ducknng_quack_write_sleb128(ducknng_quack_writer *w,
+    int64_t value, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_sleb128(w, value), w, errmsg);
 }
 
-static int ducknng_quack_write_string_len(ducknng_quack_writer *w, const uint8_t *data, size_t len, char **errmsg) {
-    if (ducknng_quack_write_uleb128(w, (uint64_t)len, errmsg) != 0) return -1;
-    return ducknng_quack_write_bytes(w, data, len, errmsg);
+static int ducknng_quack_write_string_len(ducknng_quack_writer *w,
+    const uint8_t *data, size_t len, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_counted(w, data, len), w, errmsg);
 }
 
-static int ducknng_quack_write_string(ducknng_quack_writer *w, const char *text, char **errmsg) {
+static int ducknng_quack_write_string(ducknng_quack_writer *w,
+    const char *text, char **errmsg) {
     size_t len = text ? strlen(text) : 0;
-    return ducknng_quack_write_string_len(w, (const uint8_t *)(text ? text : ""), len, errmsg);
+    return ducknng_quack_write_string_len(w,
+        (const uint8_t *)(text ? text : ""), len, errmsg);
 }
 
-static int ducknng_quack_write_blob(ducknng_quack_writer *w, const uint8_t *data, size_t len, char **errmsg) {
-    if (ducknng_quack_write_uleb128(w, (uint64_t)len, errmsg) != 0) return -1;
-    return ducknng_quack_write_bytes(w, data, len, errmsg);
+static int ducknng_quack_write_blob(ducknng_quack_writer *w,
+    const uint8_t *data, size_t len, char **errmsg) {
+    return ducknng_quack_writer_result(
+        ducknng_qk_write_counted(w, data, len), w, errmsg);
 }
 
-static int ducknng_quack_reader_need(ducknng_quack_reader *r, size_t n, char **errmsg) {
-    if (!r || r->off > r->len || n > r->len - r->off) {
+static int ducknng_quack_reader_result(int rc,
+    const ducknng_quack_reader *reader, const char *invalid_message,
+    char **errmsg) {
+    if (rc == 0) return 0;
+    switch (ducknng_qk_reader_status(reader)) {
+    case DUCKNNG_QK_TRUNCATED:
         ducknng_quack_set_error(errmsg, "ducknng: truncated quack payload");
-        return -1;
+        break;
+    case DUCKNNG_QK_OVERFLOW:
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack integer or byte length exceeds supported size");
+        break;
+    default:
+        ducknng_quack_set_error(errmsg, invalid_message ? invalid_message :
+            "ducknng: invalid quack payload");
+        break;
     }
-    return 0;
+    return -1;
 }
 
 static int ducknng_quack_uint64_to_idx(uint64_t value, idx_t *out,
@@ -253,59 +184,61 @@ static int ducknng_quack_size_to_idx(size_t value, idx_t *out,
     return ducknng_quack_uint64_to_idx((uint64_t)value, out, message, errmsg);
 }
 
+/* idx_t row/element math keeps its own entry points because it attaches a
+ * caller-supplied error message and narrows to idx_t, neither of which the
+ * plain checked helpers do. The overflow test itself is not restated here: it
+ * comes from ducknng_checked at the matching 64-bit width, so a fix there
+ * reaches this path too. */
+static int ducknng_quack_idx_narrow(uint64_t value, idx_t *out,
+    const char *message, char **errmsg) {
+    if ((uint64_t)(idx_t)value != value) {
+        ducknng_quack_set_error(errmsg, message ? message :
+            "ducknng: quack row count overflows supported size");
+        return -1;
+    }
+    if (out) *out = (idx_t)value;
+    return 0;
+}
+
 static int ducknng_quack_idx_add(idx_t a, idx_t b, idx_t *out,
     const char *message, char **errmsg) {
-    uint64_t av = (uint64_t)a;
-    uint64_t bv = (uint64_t)b;
     uint64_t sum;
-    if (bv > UINT64_MAX - av) {
-        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+    if (ducknng_u64_add((uint64_t)a, (uint64_t)b, &sum) != 0) {
+        ducknng_quack_set_error(errmsg, message ? message :
+            "ducknng: quack row count overflows supported size");
         return -1;
     }
-    sum = av + bv;
-    if ((uint64_t)(idx_t)sum != sum) {
-        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
-        return -1;
-    }
-    if (out) *out = (idx_t)sum;
-    return 0;
+    return ducknng_quack_idx_narrow(sum, out, message, errmsg);
 }
 
 static int ducknng_quack_idx_mul(idx_t a, idx_t b, idx_t *out,
     const char *message, char **errmsg) {
-    uint64_t av = (uint64_t)a;
-    uint64_t bv = (uint64_t)b;
     uint64_t product;
-    if (bv != 0 && av > UINT64_MAX / bv) {
-        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
+    if (ducknng_u64_mul((uint64_t)a, (uint64_t)b, &product) != 0) {
+        ducknng_quack_set_error(errmsg, message ? message :
+            "ducknng: quack row count overflows supported size");
         return -1;
     }
-    product = av * bv;
-    if ((uint64_t)(idx_t)product != product) {
-        ducknng_quack_set_error(errmsg, message ? message : "ducknng: quack row count overflows supported size");
-        return -1;
-    }
-    if (out) *out = (idx_t)product;
-    return 0;
+    return ducknng_quack_idx_narrow(product, out, message, errmsg);
 }
 
-static int ducknng_quack_read_byte(ducknng_quack_reader *r, uint8_t *out, char **errmsg) {
-    if (ducknng_quack_reader_need(r, 1, errmsg) != 0) return -1;
-    if (out) *out = r->data[r->off];
-    r->off++;
-    return 0;
+static int ducknng_quack_read_boolean(ducknng_quack_reader *r, uint8_t *out,
+    const char *message, char **errmsg) {
+    return ducknng_quack_reader_result(ducknng_qk_read_boolean(r, out), r,
+        message ? message : "ducknng: quack boolean field is not 0 or 1",
+        errmsg);
 }
 
-static int ducknng_quack_peek_u16le(ducknng_quack_reader *r, uint16_t *out, char **errmsg) {
-    if (ducknng_quack_reader_need(r, 2, errmsg) != 0) return -1;
-    if (out) *out = (uint16_t)r->data[r->off] | ((uint16_t)r->data[r->off + 1] << 8);
-    return 0;
+static int ducknng_quack_peek_u16le(ducknng_quack_reader *r,
+    uint16_t *out, char **errmsg) {
+    return ducknng_quack_reader_result(ducknng_qk_peek_u16le(r, out), r,
+        NULL, errmsg);
 }
 
-static int ducknng_quack_read_u16le(ducknng_quack_reader *r, uint16_t *out, char **errmsg) {
-    if (ducknng_quack_peek_u16le(r, out, errmsg) != 0) return -1;
-    r->off += 2;
-    return 0;
+static int ducknng_quack_read_u16le(ducknng_quack_reader *r,
+    uint16_t *out, char **errmsg) {
+    return ducknng_quack_reader_result(ducknng_qk_read_u16le(r, out), r,
+        NULL, errmsg);
 }
 
 static int ducknng_quack_read_expect_field(ducknng_quack_reader *r, uint16_t expected, char **errmsg) {
@@ -321,67 +254,23 @@ static int ducknng_quack_read_expect_field(ducknng_quack_reader *r, uint16_t exp
     return 0;
 }
 
-static int ducknng_quack_read_uleb128(ducknng_quack_reader *r, uint64_t *out, char **errmsg) {
-    uint64_t value = 0;
-    unsigned shift = 0;
-    while (1) {
-        uint8_t byte = 0;
-        if (shift >= 64) {
-            ducknng_quack_set_error(errmsg, "ducknng: invalid quack uleb128 integer");
-            return -1;
-        }
-        if (ducknng_quack_read_byte(r, &byte, errmsg) != 0) return -1;
-        /* The 10th byte (shift==63) may only carry bit 63; bits 0x7e would land
-         * past 64 bits and overflow. Reject rather than silently truncate. */
-        if (shift == 63 && (byte & 0x7eu) != 0) {
-            ducknng_quack_set_error(errmsg, "ducknng: quack uleb128 integer overflows 64 bits");
-            return -1;
-        }
-        value |= ((uint64_t)(byte & 0x7fu)) << shift;
-        if ((byte & 0x80u) == 0) break;
-        shift += 7;
-    }
-    if (out) *out = value;
-    return 0;
+static int ducknng_quack_read_uleb128(ducknng_quack_reader *r,
+    uint64_t *out, char **errmsg) {
+    return ducknng_quack_reader_result(ducknng_qk_read_uleb128(r, out), r,
+        "ducknng: invalid quack uleb128 integer", errmsg);
 }
 
-static int ducknng_quack_read_sleb128(ducknng_quack_reader *r, int64_t *out, char **errmsg) {
-    uint64_t bits = 0;
-    unsigned shift = 0;
-    uint8_t byte = 0;
-    for (;;) {
-        uint8_t payload;
-        if (shift >= 64 || ducknng_quack_read_byte(r, &byte, errmsg) != 0) {
-            if (shift >= 64) ducknng_quack_set_error(errmsg, "ducknng: invalid quack sleb128 integer");
-            return -1;
-        }
-        payload = (uint8_t)(byte & 0x7fu);
-        if (shift == 63 && payload != 0 && payload != 0x7fu) {
-            ducknng_quack_set_error(errmsg, "ducknng: quack sleb128 integer overflows 64 bits");
-            return -1;
-        }
-        bits |= ((uint64_t)payload) << shift;
-        if ((byte & 0x80u) == 0) break;
-        shift += 7;
-    }
-    if (shift < 63 && (byte & 0x40u) != 0) bits |= UINT64_MAX << (shift + 7);
-    if (out) memcpy(out, &bits, sizeof(bits));
-    return 0;
+static int ducknng_quack_read_sleb128(ducknng_quack_reader *r,
+    int64_t *out, char **errmsg) {
+    return ducknng_quack_reader_result(ducknng_qk_read_sleb128(r, out), r,
+        "ducknng: invalid quack sleb128 integer", errmsg);
 }
 
-static int ducknng_quack_read_blob_view(ducknng_quack_reader *r, const uint8_t **out_data,
-    size_t *out_len, char **errmsg) {
-    uint64_t len = 0;
-    if (ducknng_quack_read_uleb128(r, &len, errmsg) != 0) return -1;
-    if (len > (uint64_t)SIZE_MAX) {
-        ducknng_quack_set_error(errmsg, "ducknng: quack blob length exceeds supported size");
-        return -1;
-    }
-    if (ducknng_quack_reader_need(r, (size_t)len, errmsg) != 0) return -1;
-    if (out_data) *out_data = r->data + r->off;
-    if (out_len) *out_len = (size_t)len;
-    r->off += (size_t)len;
-    return 0;
+static int ducknng_quack_read_blob_view(ducknng_quack_reader *r,
+    const uint8_t **out_data, size_t *out_len, char **errmsg) {
+    return ducknng_quack_reader_result(
+        ducknng_qk_read_counted(r, out_data, out_len), r,
+        "ducknng: invalid quack counted byte field", errmsg);
 }
 
 static int ducknng_quack_read_string_dup(ducknng_quack_reader *r, char **out, char **errmsg) {
@@ -516,53 +405,6 @@ static int ducknng_quack_meta_to_duckdb_type(const ducknng_quack_type_meta *meta
     return 0;
 }
 
-static int ducknng_quack_meta_fixed_size(const ducknng_quack_type_meta *meta, size_t *out_size) {
-    size_t size = 0;
-    if (!meta || !out_size) return -1;
-    switch (meta->logical_type_id) {
-    case DUCKNNG_QUACK_LOGICAL_BOOLEAN:
-    case DUCKNNG_QUACK_LOGICAL_TINYINT:
-    case DUCKNNG_QUACK_LOGICAL_UTINYINT:
-        size = 1; break;
-    case DUCKNNG_QUACK_LOGICAL_SMALLINT:
-    case DUCKNNG_QUACK_LOGICAL_USMALLINT:
-        size = 2; break;
-    case DUCKNNG_QUACK_LOGICAL_INTEGER:
-    case DUCKNNG_QUACK_LOGICAL_UINTEGER:
-    case DUCKNNG_QUACK_LOGICAL_DATE:
-    case DUCKNNG_QUACK_LOGICAL_FLOAT:
-        size = 4; break;
-    case DUCKNNG_QUACK_LOGICAL_BIGINT:
-    case DUCKNNG_QUACK_LOGICAL_UBIGINT:
-    case DUCKNNG_QUACK_LOGICAL_TIME:
-    case DUCKNNG_QUACK_LOGICAL_TIMESTAMP_SEC:
-    case DUCKNNG_QUACK_LOGICAL_TIMESTAMP_MS:
-    case DUCKNNG_QUACK_LOGICAL_TIMESTAMP:
-    case DUCKNNG_QUACK_LOGICAL_TIMESTAMP_NS:
-    case DUCKNNG_QUACK_LOGICAL_TIMESTAMP_TZ:
-    case DUCKNNG_QUACK_LOGICAL_TIME_TZ:
-    case DUCKNNG_QUACK_LOGICAL_TIME_NS:
-    case DUCKNNG_QUACK_LOGICAL_DOUBLE:
-        size = 8; break;
-    case DUCKNNG_QUACK_LOGICAL_INTERVAL:
-    case DUCKNNG_QUACK_LOGICAL_HUGEINT:
-    case DUCKNNG_QUACK_LOGICAL_UHUGEINT:
-    case DUCKNNG_QUACK_LOGICAL_UUID:
-        size = 16; break;
-    case DUCKNNG_QUACK_LOGICAL_DECIMAL:
-        if (meta->decimal_width <= 4) size = 2;
-        else if (meta->decimal_width <= 9) size = 4;
-        else if (meta->decimal_width <= 18) size = 8;
-        else if (meta->decimal_width <= 38) size = 16;
-        else return -1;
-        break;
-    default:
-        return -1;
-    }
-    *out_size = size;
-    return 0;
-}
-
 /* ===== Nested type-node codec (recursive; ported from Rducks quack_core.c) ===== */
 
 static void ducknng_quack_node_free(ducknng_quack_column_schema *node);
@@ -610,79 +452,30 @@ static int ducknng_quack_node_add_child(ducknng_quack_column_schema *node,
     return 0;
 }
 
-static int ducknng_quack_node_is_nested(const ducknng_quack_column_schema *node) {
-    if (!node) return 0;
-    switch (node->logical_type_id) {
-    case DUCKNNG_QUACK_LOGICAL_LIST:
-    case DUCKNNG_QUACK_LOGICAL_MAP:
-    case DUCKNNG_QUACK_LOGICAL_STRUCT:
-    case DUCKNNG_QUACK_LOGICAL_UNION:
-    case DUCKNNG_QUACK_LOGICAL_ARRAY:
-        return 1;
-    default:
-        return 0;
-    }
+static int ducknng_quack_node_is_nested(
+    const ducknng_quack_column_schema *node) {
+    return ducknng_qk_type_is_nested(node);
 }
 
-static int ducknng_quack_node_is_varlen(const ducknng_quack_column_schema *node) {
-    return node && (node->logical_type_id == DUCKNNG_QUACK_LOGICAL_VARCHAR ||
-        node->logical_type_id == DUCKNNG_QUACK_LOGICAL_CHAR ||
-        node->logical_type_id == DUCKNNG_QUACK_LOGICAL_BLOB);
+static int ducknng_quack_node_is_varlen(
+    const ducknng_quack_column_schema *node) {
+    return ducknng_qk_type_is_varlen(node);
 }
 
-/* Fixed physical width in bytes for a fixed-width leaf (0 if not fixed-width). */
-static size_t ducknng_quack_node_fixed_width(const ducknng_quack_column_schema *node) {
-    ducknng_quack_type_meta meta;
-    size_t size = 0;
-    if (!node) return 0;
-    if (node->logical_type_id == DUCKNNG_QUACK_LOGICAL_ENUM) {
-        if (node->enum_count <= 0xffu) return 1;
-        if (node->enum_count <= 0xffffu) return 2;
-        return 4;
-    }
-    memset(&meta, 0, sizeof(meta));
-    meta.logical_type_id = node->logical_type_id;
-    meta.decimal_width = node->decimal_width;
-    if (ducknng_quack_meta_fixed_size(&meta, &size) != 0) return 0;
-    return size;
+static size_t ducknng_quack_node_fixed_width(
+    const ducknng_quack_column_schema *node) {
+    return ducknng_qk_type_fixed_width(node);
 }
 
-static int ducknng_quack_node_is_sequence_integer(const ducknng_quack_column_schema *node) {
-    if (!node) return 0;
-    switch (node->logical_type_id) {
-    case DUCKNNG_QUACK_LOGICAL_TINYINT:
-    case DUCKNNG_QUACK_LOGICAL_SMALLINT:
-    case DUCKNNG_QUACK_LOGICAL_INTEGER:
-    case DUCKNNG_QUACK_LOGICAL_BIGINT:
-    case DUCKNNG_QUACK_LOGICAL_UTINYINT:
-    case DUCKNNG_QUACK_LOGICAL_USMALLINT:
-    case DUCKNNG_QUACK_LOGICAL_UINTEGER:
-    case DUCKNNG_QUACK_LOGICAL_UBIGINT:
-        return 1;
-    default:
-        return 0;
-    }
+static int ducknng_quack_node_is_sequence_integer(
+    const ducknng_quack_column_schema *node) {
+    return ducknng_qk_type_is_sequence_integer(node);
 }
 
-static int ducknng_quack_node_type_equal(const ducknng_quack_column_schema *a,
+static int ducknng_quack_node_type_equal(
+    const ducknng_quack_column_schema *a,
     const ducknng_quack_column_schema *b) {
-    uint32_t i;
-    if (!a || !b || a->logical_type_id != b->logical_type_id ||
-        a->decimal_width != b->decimal_width || a->decimal_scale != b->decimal_scale ||
-        a->array_size != b->array_size || a->enum_count != b->enum_count ||
-        a->nchildren != b->nchildren) return 0;
-    for (i = 0; i < a->enum_count; i++) {
-        const char *al = a->enum_labels && a->enum_labels[i] ? a->enum_labels[i] : "";
-        const char *bl = b->enum_labels && b->enum_labels[i] ? b->enum_labels[i] : "";
-        if (strcmp(al, bl) != 0) return 0;
-    }
-    for (i = 0; i < a->nchildren; i++) {
-        const char *an = a->child_names && a->child_names[i] ? a->child_names[i] : "";
-        const char *bn = b->child_names && b->child_names[i] ? b->child_names[i] : "";
-        if (strcmp(an, bn) != 0 || !a->children || !b->children ||
-            !ducknng_quack_node_type_equal(a->children[i], b->children[i])) return 0;
-    }
-    return 1;
+    return ducknng_qk_type_equal(a, b);
 }
 
 static int ducknng_quack_write_type_meta(ducknng_quack_writer *w,
@@ -724,7 +517,9 @@ static int ducknng_quack_read_type_meta(ducknng_quack_reader *r,
         uint8_t present = 0;
         uint64_t kind = 0;
         if (ducknng_quack_read_u16le(r, &field_id, errmsg) != 0 ||
-            ducknng_quack_read_byte(r, &present, errmsg) != 0) return -1;
+            ducknng_quack_read_boolean(r, &present,
+                "ducknng: quack type-info presence flag is not boolean",
+                errmsg) != 0) return -1;
         if (present) {
             if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_EXTRA_INFO_KIND, errmsg) != 0 ||
                 ducknng_quack_read_uleb128(r, &kind, errmsg) != 0) return -1;
@@ -997,19 +792,23 @@ static int ducknng_quack_node_to_duckdb(const ducknng_quack_column_schema *node,
     return 0;
 }
 
-static int ducknng_quack_type_needs_info(const ducknng_quack_column_schema *node) {
-    switch (node->logical_type_id) {
-    case DUCKNNG_QUACK_LOGICAL_DECIMAL:
-    case DUCKNNG_QUACK_LOGICAL_LIST:
-    case DUCKNNG_QUACK_LOGICAL_MAP:
-    case DUCKNNG_QUACK_LOGICAL_STRUCT:
-    case DUCKNNG_QUACK_LOGICAL_UNION:
-    case DUCKNNG_QUACK_LOGICAL_ENUM:
-    case DUCKNNG_QUACK_LOGICAL_ARRAY:
-        return 1;
-    default:
-        return 0;
+static uint64_t ducknng_quack_expected_info_kind(int logical_type_id) {
+    return ducknng_qk_type_expected_info_kind(logical_type_id);
+}
+
+static int ducknng_quack_type_needs_info(
+    const ducknng_quack_column_schema *node) {
+    return ducknng_qk_type_needs_info(node);
+}
+
+static int ducknng_quack_validate_type_shape(
+    const ducknng_quack_column_schema *node, char **errmsg) {
+    const char *message = NULL;
+    if (ducknng_qk_type_shape_validate(node, &message) != 0) {
+        ducknng_quack_set_error(errmsg, message);
+        return -1;
     }
+    return 0;
 }
 
 static int ducknng_quack_write_child_pair(ducknng_quack_writer *w, const char *name,
@@ -1133,112 +932,234 @@ fail:
     return -1;
 }
 
-static int ducknng_quack_read_type_info(ducknng_quack_reader *r, ducknng_quack_column_schema *t,
-    unsigned depth, char **errmsg) {
+static int ducknng_quack_read_type_info(ducknng_quack_reader *r,
+    ducknng_quack_column_schema *t, unsigned depth, char **errmsg) {
     uint16_t field = 0;
     uint64_t value = 0;
     uint64_t i, count;
     uint32_t seen = 0;
+    /* Field 200 only records how many enum labels the payload claims. The
+     * count is copied into the node in the field 201 branch, once an array of
+     * exactly that many slots exists, so t->enum_count can never exceed the
+     * allocation that ducknng_quack_node_free_contents later walks. */
+    uint64_t declared_enum_count = 0;
     for (;;) {
         if (ducknng_quack_read_u16le(r, &field, errmsg) != 0) return -1;
-        if (field == DUCKNNG_QUACK_FIELD_END) return 0;
-        if (field == 100 || field == 101 || field == 103 || field == 200 || field == 201) {
-            uint32_t bit = (field < 200) ? (1u << (field - 100)) : (1u << (field - 200 + 5));
-            if (seen & bit) { ducknng_quack_set_error(errmsg, "ducknng: duplicate field in quack type info"); return -1; }
+        if (field == DUCKNNG_QUACK_FIELD_END) {
+            uint32_t required = 1u; /* field 100: extra-info kind */
+            switch (t->logical_type_id) {
+            case DUCKNNG_QUACK_LOGICAL_DECIMAL:
+            case DUCKNNG_QUACK_LOGICAL_LIST:
+            case DUCKNNG_QUACK_LOGICAL_MAP:
+            case DUCKNNG_QUACK_LOGICAL_STRUCT:
+            case DUCKNNG_QUACK_LOGICAL_UNION:
+                required |= 1u << 5; /* field 200 */
+                break;
+            case DUCKNNG_QUACK_LOGICAL_ENUM:
+            case DUCKNNG_QUACK_LOGICAL_ARRAY:
+                required |= (1u << 5) | (1u << 6); /* fields 200 and 201 */
+                break;
+            default:
+                break;
+            }
+            if ((seen & required) != required) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: quack type info is missing required fields");
+                return -1;
+            }
+            return ducknng_quack_validate_type_shape(t, errmsg);
+        }
+        if (field == 100 || field == 101 || field == 103 ||
+            field == 200 || field == 201) {
+            uint32_t bit = (field < 200)
+                ? (1u << (field - 100)) : (1u << (field - 200 + 5));
+            if (seen & bit) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: duplicate field in quack type info");
+                return -1;
+            }
             seen |= bit;
         }
         switch (field) {
-        case 100: /* extra-info kind (validated by the logical id below) */
+        case 100: /* extra-info kind */
             if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) return -1;
+            if (value != ducknng_quack_expected_info_kind(t->logical_type_id)) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: quack logical type and extra-info kind disagree");
+                return -1;
+            }
             break;
         case 101: /* alias */
             if (ducknng_quack_skip_string(r, errmsg) != 0) return -1;
             break;
         case 103: { /* extension info pointer */
             uint8_t present = 0;
-            if (ducknng_quack_read_byte(r, &present, errmsg) != 0) return -1;
-            if (present) { ducknng_quack_set_error(errmsg, "ducknng: extension type info is not supported"); return -1; }
+            if (ducknng_quack_read_boolean(r, &present,
+                    "ducknng: quack extension-info presence flag is not boolean",
+                    errmsg) != 0) return -1;
+            if (present) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: extension type info is not supported");
+                return -1;
+            }
             break;
         }
         case DUCKNNG_QUACK_EXTRA_CHILD: /* 200 */
             switch (t->logical_type_id) {
             case DUCKNNG_QUACK_LOGICAL_DECIMAL:
                 if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) return -1;
-                if (value > 38) { ducknng_quack_set_error(errmsg, "ducknng: quack decimal width exceeds 38"); return -1; }
+                if (value == 0 || value > 38) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack decimal width must be between 1 and 38");
+                    return -1;
+                }
                 t->decimal_width = (uint8_t)value;
                 break;
             case DUCKNNG_QUACK_LOGICAL_LIST:
             case DUCKNNG_QUACK_LOGICAL_MAP:
             case DUCKNNG_QUACK_LOGICAL_ARRAY: {
                 ducknng_quack_column_schema *child = NULL;
-                if (ducknng_quack_read_type_node(r, depth + 1, &child, errmsg) != 0) return -1;
+                if (ducknng_quack_read_type_node(r, depth + 1,
+                        &child, errmsg) != 0) return -1;
                 if (ducknng_quack_node_add_child(t, child, "") != 0) {
                     ducknng_quack_node_free(child);
-                    ducknng_quack_set_error(errmsg, "ducknng: out of memory decoding nested quack type");
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: out of memory decoding nested quack type");
                     return -1;
                 }
                 break;
             }
             case DUCKNNG_QUACK_LOGICAL_STRUCT:
-            case DUCKNNG_QUACK_LOGICAL_UNION:
+            case DUCKNNG_QUACK_LOGICAL_UNION: {
+                size_t children_bytes = 0;
+                size_t names_bytes = 0;
                 if (ducknng_quack_read_uleb128(r, &count, errmsg) != 0) return -1;
-                if (count > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS) { ducknng_quack_set_error(errmsg, "ducknng: quack struct member count exceeds limit"); return -1; }
+                if (count > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS ||
+                    count > (uint64_t)ducknng_qk_reader_remaining(r) ||
+                    count > SIZE_MAX) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack struct member count exceeds its payload bound");
+                    return -1;
+                }
+                if (ducknng_size_mul(sizeof(*t->children), (size_t)count,
+                        &children_bytes) != 0 ||
+                    ducknng_size_mul(sizeof(*t->child_names), (size_t)count,
+                        &names_bytes) != 0) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack struct member allocation overflows");
+                    return -1;
+                }
+                if (count > 0) {
+                    t->children = (ducknng_quack_column_schema **)
+                        duckdb_malloc(children_bytes);
+                    t->child_names = (char **)duckdb_malloc(names_bytes);
+                    if (!t->children || !t->child_names) {
+                        ducknng_quack_set_error(errmsg,
+                            "ducknng: out of memory decoding quack struct members");
+                        return -1;
+                    }
+                    memset(t->children, 0, children_bytes);
+                    memset(t->child_names, 0, names_bytes);
+                }
                 for (i = 0; i < count; i++) {
                     char *name = NULL;
                     ducknng_quack_column_schema *child = NULL;
-                    if (ducknng_quack_read_child_pair(r, &name, &child, depth + 1, errmsg) != 0) return -1;
-                    if (ducknng_quack_node_add_child(t, child, name) != 0) {
-                        if (name) duckdb_free(name);
-                        ducknng_quack_node_free(child);
-                        ducknng_quack_set_error(errmsg, "ducknng: out of memory decoding quack struct members");
-                        return -1;
-                    }
-                    if (name) duckdb_free(name);
+                    if (ducknng_quack_read_child_pair(r, &name, &child,
+                            depth + 1, errmsg) != 0) return -1;
+                    t->children[i] = child;
+                    t->child_names[i] = name;
+                    t->nchildren++;
                 }
                 break;
+            }
             case DUCKNNG_QUACK_LOGICAL_ENUM:
                 if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) return -1;
-                if (value > DUCKNNG_QUACK_MAX_ENUM_VALUES) { ducknng_quack_set_error(errmsg, "ducknng: quack enum size exceeds limit"); return -1; }
-                t->enum_count = (uint32_t)value;
+                if (value > DUCKNNG_QUACK_MAX_ENUM_VALUES) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack enum size exceeds limit");
+                    return -1;
+                }
+                declared_enum_count = value;
                 break;
             default:
-                ducknng_quack_set_error(errmsg, "ducknng: unexpected field 200 in quack type info");
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: unexpected field 200 in quack type info");
                 return -1;
             }
             break;
         case DUCKNNG_QUACK_EXTRA_ARRAY_SIZE: /* 201 */
+            /* DuckDB's serializer emits field 200 before field 201, and every
+             * type carrying both reads 201 against state established by 200.
+             * Reject the reverse order rather than validating against a
+             * default-initialized count. */
+            if (!(seen & (1u << 5))) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: quack type info field 201 precedes field 200");
+                return -1;
+            }
             switch (t->logical_type_id) {
             case DUCKNNG_QUACK_LOGICAL_DECIMAL:
                 if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) return -1;
-                if (value > 38) { ducknng_quack_set_error(errmsg, "ducknng: quack decimal scale exceeds 38"); return -1; }
+                if (value > 38) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack decimal scale exceeds 38");
+                    return -1;
+                }
                 t->decimal_scale = (uint8_t)value;
                 break;
             case DUCKNNG_QUACK_LOGICAL_ARRAY:
                 if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) return -1;
-                if (value > 0xffffffffu) { ducknng_quack_set_error(errmsg, "ducknng: quack array size exceeds limit"); return -1; }
+                if (value == 0 || value > UINT32_MAX) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack array size is invalid");
+                    return -1;
+                }
                 t->array_size = (uint32_t)value;
                 break;
             case DUCKNNG_QUACK_LOGICAL_ENUM: {
                 uint64_t n = 0;
+                size_t labels_bytes = 0;
                 if (ducknng_quack_read_uleb128(r, &n, errmsg) != 0) return -1;
-                if (t->enum_count && n != t->enum_count) { ducknng_quack_set_error(errmsg, "ducknng: quack enum values disagree with count"); return -1; }
-                if (n > DUCKNNG_QUACK_MAX_ENUM_VALUES) { ducknng_quack_set_error(errmsg, "ducknng: quack enum size exceeds limit"); return -1; }
+                if (n != declared_enum_count) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack enum values disagree with count");
+                    return -1;
+                }
+                if (n > DUCKNNG_QUACK_MAX_ENUM_VALUES ||
+                    n > (uint64_t)ducknng_qk_reader_remaining(r) ||
+                    n > SIZE_MAX ||
+                    ducknng_size_mul(sizeof(*t->enum_labels),
+                        n ? (size_t)n : 1u, &labels_bytes) != 0) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: quack enum size exceeds its payload bound");
+                    return -1;
+                }
+                t->enum_labels = (char **)duckdb_malloc(labels_bytes);
+                if (!t->enum_labels) {
+                    ducknng_quack_set_error(errmsg,
+                        "ducknng: out of memory decoding quack enum labels");
+                    return -1;
+                }
+                memset(t->enum_labels, 0, labels_bytes);
+                /* Publish the count only now that enum_labels holds exactly
+                 * this many zeroed slots. A later label-read failure leaves the
+                 * unfilled tail NULL, which the free path skips. */
                 t->enum_count = (uint32_t)n;
-                t->enum_labels = (char **)duckdb_malloc(sizeof(char *) * (n ? (size_t)n : 1));
-                if (!t->enum_labels) { ducknng_quack_set_error(errmsg, "ducknng: out of memory decoding quack enum labels"); return -1; }
-                memset(t->enum_labels, 0, sizeof(char *) * (n ? (size_t)n : 1));
                 for (i = 0; i < n; i++) {
-                    if (ducknng_quack_read_string_dup(r, &t->enum_labels[i], errmsg) != 0) return -1;
+                    if (ducknng_quack_read_string_dup(r,
+                            &t->enum_labels[i], errmsg) != 0) return -1;
                 }
                 break;
             }
             default:
-                ducknng_quack_set_error(errmsg, "ducknng: unexpected field 201 in quack type info");
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: unexpected field 201 in quack type info");
                 return -1;
             }
             break;
         default:
-            ducknng_quack_set_error(errmsg, "ducknng: unknown field in quack type info");
+            ducknng_quack_set_error(errmsg,
+                "ducknng: unknown field in quack type info");
             return -1;
         }
     }
@@ -1249,39 +1170,82 @@ static int ducknng_quack_read_type_node(ducknng_quack_reader *r, unsigned depth,
     ducknng_quack_column_schema *t = NULL;
     uint16_t field = 0;
     uint64_t value = 0;
-    int seen_id = 0, seen_info = 0;
+    int seen_id = 0, seen_info = 0, info_present = 0;
     if (out) *out = NULL;
     if (depth > DUCKNNG_QUACK_MAX_NESTING) {
-        ducknng_quack_set_error(errmsg, "ducknng: quack type nesting exceeds supported depth");
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack type nesting exceeds supported depth");
         return -1;
     }
     t = ducknng_quack_node_new(0);
-    if (!t) { ducknng_quack_set_error(errmsg, "ducknng: out of memory decoding quack type"); return -1; }
+    if (!t) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: out of memory decoding quack type");
+        return -1;
+    }
     for (;;) {
         if (ducknng_quack_read_u16le(r, &field, errmsg) != 0) goto fail;
         if (field == DUCKNNG_QUACK_FIELD_END) break;
         switch (field) {
         case DUCKNNG_QUACK_TYPE_ID: /* 100 */
-            if (seen_id) { ducknng_quack_set_error(errmsg, "ducknng: duplicate type id in quack logical type"); goto fail; }
+            if (seen_id) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: duplicate type id in quack logical type");
+                goto fail;
+            }
             if (ducknng_quack_read_uleb128(r, &value, errmsg) != 0) goto fail;
+            if (value > INT32_MAX) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: quack logical type id exceeds supported range");
+                goto fail;
+            }
             t->logical_type_id = (int)value;
             seen_id = 1;
             break;
         case DUCKNNG_QUACK_TYPE_INFO: { /* 101 */
             uint8_t present = 0;
-            if (!seen_id) { ducknng_quack_set_error(errmsg, "ducknng: quack type info precedes its id"); goto fail; }
-            if (seen_info) { ducknng_quack_set_error(errmsg, "ducknng: duplicate type info in quack logical type"); goto fail; }
+            if (!seen_id) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: quack type info precedes its id");
+                goto fail;
+            }
+            if (seen_info) {
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: duplicate type info in quack logical type");
+                goto fail;
+            }
             seen_info = 1;
-            if (ducknng_quack_read_byte(r, &present, errmsg) != 0) goto fail;
-            if (present && ducknng_quack_read_type_info(r, t, depth, errmsg) != 0) goto fail;
+            if (ducknng_quack_read_boolean(r, &present,
+                    "ducknng: quack type-info presence flag is not boolean",
+                    errmsg) != 0) goto fail;
+            info_present = present != 0;
+            if (info_present &&
+                ducknng_quack_read_type_info(r, t, depth, errmsg) != 0) goto fail;
             break;
         }
         default:
-            ducknng_quack_set_error(errmsg, "ducknng: unknown field in quack logical type");
+            ducknng_quack_set_error(errmsg,
+                "ducknng: unknown field in quack logical type");
             goto fail;
         }
     }
-    if (!seen_id) { ducknng_quack_set_error(errmsg, "ducknng: quack logical type missing its id"); goto fail; }
+    if (!seen_id) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack logical type missing its id");
+        goto fail;
+    }
+    if (ducknng_quack_type_needs_info(t) && (!seen_info || !info_present)) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: nested or parameterized quack type is missing its type info");
+        goto fail;
+    }
+    /* ducknng_quack_read_type_info already validated the shape, and the node is
+     * unmodified since. Only a type with no type-info still needs the check,
+     * which keeps struct member and enum label arrays from being walked twice
+     * on every schema decode. */
+    if (!info_present && ducknng_quack_validate_type_shape(t, errmsg) != 0) {
+        goto fail;
+    }
     *out = t;
     return 0;
 fail:
@@ -1291,8 +1255,15 @@ fail:
 
 static int ducknng_quack_encode_validity_blob(ducknng_quack_writer *w,
     const uint64_t *validity, idx_t rows, char **errmsg) {
-    size_t n_words = (size_t)((rows + 63) / 64);
-    return ducknng_quack_write_blob(w, (const uint8_t *)validity, n_words * sizeof(uint64_t), errmsg);
+    /* Same overflow-checked sizing the decode path compares against, so encode
+     * and decode cannot disagree about a mask's byte length. */
+    size_t validity_len = ducknng_quack_validity_bytes(rows);
+    if (validity_len == SIZE_MAX) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack validity mask length overflows");
+        return -1;
+    }
+    return ducknng_quack_write_blob(w, (const uint8_t *)validity, validity_len, errmsg);
 }
 
 static int ducknng_quack_encode_vector(ducknng_quack_writer *w, duckdb_vector vec,
@@ -1461,60 +1432,143 @@ done:
     return rc;
 }
 
-static int ducknng_quack_encode_result_payload(duckdb_result result,
+static int ducknng_quack_encode_result_payload_pass(
+    ducknng_quack_writer *writer, duckdb_result result,
     duckdb_data_chunk *chunks, idx_t chunk_count, int include_schema,
-    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
-    ducknng_quack_writer w;
+    char **errmsg) {
     idx_t ncols = duckdb_column_count(&result);
     idx_t col;
     idx_t chunk_idx;
-    memset(&w, 0, sizeof(w));
-    if (!out_bytes || !out_len) {
-        ducknng_quack_set_error(errmsg, "ducknng: missing quack payload output pointers");
-        return -1;
-    }
     if ((uint64_t)ncols > DUCKNNG_QUACK_MAX_STRUCT_MEMBERS) {
-        ducknng_quack_set_error(errmsg, "ducknng: quack column count exceeds supported limit");
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack column count exceeds supported limit");
         return -1;
     }
     if (include_schema) {
-        if (ducknng_quack_write_field_id(&w, DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
-            ducknng_quack_write_uleb128(&w, (uint64_t)ncols, errmsg) != 0) goto fail;
+        if (ducknng_quack_write_field_id(writer,
+                DUCKNNG_QUACK_OUTER_RESULT_TYPES, errmsg) != 0 ||
+            ducknng_quack_write_uleb128(writer, (uint64_t)ncols,
+                errmsg) != 0) return -1;
         for (col = 0; col < ncols; col++) {
-            duckdb_logical_type logical_type = duckdb_column_logical_type(&result, col);
+            duckdb_logical_type logical_type =
+                duckdb_column_logical_type(&result, col);
             ducknng_quack_column_schema *node = NULL;
-            int rc = ducknng_quack_node_from_duckdb(logical_type, 0, &node, errmsg);
+            int rc = ducknng_quack_node_from_duckdb(logical_type, 0,
+                &node, errmsg);
             if (logical_type) duckdb_destroy_logical_type(&logical_type);
-            if (rc != 0) goto fail;
-            rc = ducknng_quack_write_type_node(&w, node, 0, errmsg);
+            if (rc != 0) return -1;
+            rc = ducknng_quack_write_type_node(writer, node, 0, errmsg);
             ducknng_quack_node_free(node);
-            if (rc != 0) goto fail;
+            if (rc != 0) return -1;
         }
-        if (ducknng_quack_write_field_id(&w, DUCKNNG_QUACK_OUTER_RESULT_NAMES, errmsg) != 0 ||
-            ducknng_quack_write_uleb128(&w, (uint64_t)ncols, errmsg) != 0) goto fail;
+        if (ducknng_quack_write_field_id(writer,
+                DUCKNNG_QUACK_OUTER_RESULT_NAMES, errmsg) != 0 ||
+            ducknng_quack_write_uleb128(writer, (uint64_t)ncols,
+                errmsg) != 0) return -1;
         for (col = 0; col < ncols; col++) {
-            if (ducknng_quack_write_string(&w, duckdb_column_name(&result, col), errmsg) != 0) goto fail;
+            if (ducknng_quack_write_string(writer,
+                    duckdb_column_name(&result, col), errmsg) != 0) return -1;
         }
     }
     if (chunk_count > 0) {
-        if (ducknng_quack_write_field_id(&w, DUCKNNG_QUACK_OUTER_RESULTS, errmsg) != 0 ||
-            ducknng_quack_write_uleb128(&w, (uint64_t)chunk_count, errmsg) != 0) goto fail;
+        if (ducknng_quack_write_field_id(writer,
+                DUCKNNG_QUACK_OUTER_RESULTS, errmsg) != 0 ||
+            ducknng_quack_write_uleb128(writer, (uint64_t)chunk_count,
+                errmsg) != 0) return -1;
         for (chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             if (!chunks[chunk_idx]) {
-                ducknng_quack_set_error(errmsg, "ducknng: missing quack chunk while encoding");
-                goto fail;
+                ducknng_quack_set_error(errmsg,
+                    "ducknng: missing quack chunk while encoding");
+                return -1;
             }
-            if (ducknng_quack_encode_one_chunk(&w, chunks[chunk_idx], ncols, errmsg) != 0) goto fail;
+            if (ducknng_quack_encode_one_chunk(writer, chunks[chunk_idx],
+                    ncols, errmsg) != 0) return -1;
         }
     }
-    if (ducknng_quack_write_field_end(&w, errmsg) != 0) goto fail;
-    *out_bytes = w.data;
-    *out_len = w.len;
-    return 0;
-fail:
-    if (w.data) duckdb_free(w.data);
-    return -1;
+    return ducknng_quack_write_field_end(writer, errmsg);
 }
+
+static int ducknng_quack_encode_result_payload(duckdb_result result,
+    duckdb_data_chunk *chunks, idx_t chunk_count, int include_schema,
+    uint8_t **out_bytes, size_t *out_len, char **errmsg) {
+    ducknng_quack_writer writer;
+    uint8_t *bytes;
+    size_t required;
+    if (out_bytes) *out_bytes = NULL;
+    if (out_len) *out_len = 0;
+    if (!out_bytes || !out_len) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: missing quack payload output pointers");
+        return -1;
+    }
+    ducknng_qk_writer_init_measure(&writer);
+    if (ducknng_quack_encode_result_payload_pass(&writer, result, chunks,
+            chunk_count, include_schema, errmsg) != 0) return -1;
+    required = ducknng_qk_writer_size(&writer);
+    bytes = (uint8_t *)duckdb_malloc(required ? required : 1u);
+    if (!bytes) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: out of memory allocating measured quack payload");
+        return -1;
+    }
+    ducknng_qk_writer_init_fixed(&writer, bytes, required);
+    if (ducknng_quack_encode_result_payload_pass(&writer, result, chunks,
+            chunk_count, include_schema, errmsg) != 0 ||
+        ducknng_qk_writer_size(&writer) != required) {
+        duckdb_free(bytes);
+        return -1;
+    }
+    *out_bytes = bytes;
+    *out_len = required;
+    return 0;
+}
+
+#ifndef DUCKNNG_CORE_ONLY
+static int ducknng_quack_encode_result_message(duckdb_result result,
+    duckdb_data_chunk *chunks, idx_t chunk_count, int include_schema,
+    size_t prefix_size, nng_msg **out_msg, size_t *out_payload_len,
+    char **errmsg) {
+    ducknng_quack_writer writer;
+    nng_msg *msg = NULL;
+    uint8_t *payload;
+    size_t payload_len;
+    size_t message_len;
+    int rv;
+    if (out_msg) *out_msg = NULL;
+    if (out_payload_len) *out_payload_len = 0;
+    if (!out_msg || !out_payload_len) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: missing quack message output pointers");
+        return -1;
+    }
+    ducknng_qk_writer_init_measure(&writer);
+    if (ducknng_quack_encode_result_payload_pass(&writer, result, chunks,
+            chunk_count, include_schema, errmsg) != 0) return -1;
+    payload_len = ducknng_qk_writer_size(&writer);
+    if (ducknng_size_add(prefix_size, payload_len, &message_len) != 0) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: measured quack message size overflows supported size");
+        return -1;
+    }
+    rv = nng_msg_alloc(&msg, message_len);
+    if (rv != 0) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: out of memory allocating final quack message");
+        return -1;
+    }
+    payload = (uint8_t *)nng_msg_body(msg) + prefix_size;
+    ducknng_qk_writer_init_fixed(&writer, payload, payload_len);
+    if (ducknng_quack_encode_result_payload_pass(&writer, result, chunks,
+            chunk_count, include_schema, errmsg) != 0 ||
+        ducknng_qk_writer_size(&writer) != payload_len) {
+        nng_msg_free(msg);
+        return -1;
+    }
+    *out_msg = msg;
+    *out_payload_len = payload_len;
+    return 0;
+}
+#endif
 
 /* Read a Vector object's optional field-90 type. Flat is the explicit default
  * when the field is absent. Compressed vectors carry their own fields and do
@@ -1542,7 +1596,9 @@ static int ducknng_quack_read_flat_vector_prologue(ducknng_quack_reader *r,
     if (out_validity) *out_validity = NULL;
     if (out_validity_len) *out_validity_len = 0;
     if (ducknng_quack_read_expect_field(r, DUCKNNG_QUACK_VECTOR_HAS_VALIDITY, errmsg) != 0 ||
-        ducknng_quack_read_byte(r, &has_validity, errmsg) != 0) return -1;
+        ducknng_quack_read_boolean(r, &has_validity,
+            "ducknng: quack validity presence flag is not boolean",
+            errmsg) != 0) return -1;
     if (has_validity) {
         const uint8_t *blob = NULL;
         size_t blob_len = 0;
@@ -2232,39 +2288,124 @@ void ducknng_quack_schema_reset(ducknng_quack_schema *schema) {
     memset(schema, 0, sizeof(*schema));
 }
 
+typedef struct ducknng_quack_chunk_set {
+    duckdb_data_chunk *chunks;
+    idx_t count;
+} ducknng_quack_chunk_set;
+
+static void ducknng_quack_chunk_set_reset(ducknng_quack_chunk_set *set) {
+    idx_t i;
+    if (!set) return;
+    if (set->chunks) {
+        for (i = 0; i < set->count; i++) {
+            if (set->chunks[i]) duckdb_destroy_data_chunk(&set->chunks[i]);
+        }
+        duckdb_free(set->chunks);
+    }
+    memset(set, 0, sizeof(*set));
+}
+
+/* Allocate and zero a chunk array holding *inout_max_chunks entries,
+ * normalizing a zero request to one. The streaming collector and the
+ * materialized-result path size their arrays identically and differ only in
+ * how they fill them, so the checked sizing lives here once. */
+static int ducknng_quack_alloc_chunk_array(uint64_t *inout_max_chunks,
+    duckdb_data_chunk **out_chunks, char **errmsg) {
+    size_t allocation_size;
+    if (!inout_max_chunks || !out_chunks) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: missing quack chunk array output");
+        return -1;
+    }
+    *out_chunks = NULL;
+    if (*inout_max_chunks == 0) *inout_max_chunks = 1;
+#if SIZE_MAX < UINT64_MAX
+    if (*inout_max_chunks > SIZE_MAX) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack chunk collection size overflows supported size");
+        return -1;
+    }
+#endif
+    if (ducknng_size_mul(sizeof(**out_chunks), (size_t)*inout_max_chunks,
+            &allocation_size) != 0) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: quack chunk collection size overflows supported size");
+        return -1;
+    }
+    *out_chunks = (duckdb_data_chunk *)duckdb_malloc(allocation_size);
+    if (!*out_chunks) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: out of memory collecting quack chunks");
+        return -1;
+    }
+    memset(*out_chunks, 0, allocation_size);
+    return 0;
+}
+
+static int ducknng_quack_collect_next_chunks(duckdb_result result,
+    uint64_t max_chunks, ducknng_quack_chunk_set *out, char **errmsg) {
+    uint64_t i;
+    if (!out) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack chunk set output");
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    if (ducknng_quack_alloc_chunk_array(&max_chunks, &out->chunks,
+            errmsg) != 0) return -1;
+    for (i = 0; i < max_chunks; i++) {
+        out->chunks[out->count] = ducknng_result_fetch_session_chunk(result);
+        if (!out->chunks[out->count]) break;
+        out->count++;
+    }
+    return 0;
+}
+
 int ducknng_result_next_chunks_to_quack_payload(duckdb_result result,
     uint64_t max_chunks, int include_schema, uint8_t **out_bytes, size_t *out_len,
     int *has_chunk, char **errmsg) {
-    duckdb_data_chunk *chunks = NULL;
-    idx_t chunk_count = 0;
-    uint64_t i;
+    ducknng_quack_chunk_set set;
     int rc;
     if (has_chunk) *has_chunk = 0;
-    if (max_chunks == 0) max_chunks = 1;
-    chunks = (duckdb_data_chunk *)duckdb_malloc(sizeof(*chunks) * (size_t)max_chunks);
-    if (!chunks) {
-        ducknng_quack_set_error(errmsg, "ducknng: out of memory collecting quack chunks");
-        return -1;
-    }
-    memset(chunks, 0, sizeof(*chunks) * (size_t)max_chunks);
-    for (i = 0; i < max_chunks; i++) {
-        chunks[chunk_count] = ducknng_result_fetch_session_chunk(result);
-        if (!chunks[chunk_count]) break;
-        chunk_count++;
-    }
-    if (chunk_count == 0) {
-        duckdb_free(chunks);
+    if (ducknng_quack_collect_next_chunks(result, max_chunks, &set,
+            errmsg) != 0) return -1;
+    if (set.count == 0) {
+        ducknng_quack_chunk_set_reset(&set);
         return 0;
     }
-    rc = ducknng_quack_encode_result_payload(result, chunks, chunk_count, include_schema,
-        out_bytes, out_len, errmsg);
-    for (i = 0; i < (uint64_t)chunk_count; i++) {
-        if (chunks[i]) duckdb_destroy_data_chunk(&chunks[i]);
-    }
-    duckdb_free(chunks);
+    rc = ducknng_quack_encode_result_payload(result, set.chunks, set.count,
+        include_schema, out_bytes, out_len, errmsg);
+    ducknng_quack_chunk_set_reset(&set);
     if (rc == 0 && has_chunk) *has_chunk = 1;
     return rc;
 }
+
+#ifndef DUCKNNG_CORE_ONLY
+int ducknng_result_next_chunks_to_quack_message(duckdb_result result,
+    uint64_t max_chunks, int include_schema, size_t prefix_size,
+    nng_msg **out_msg, size_t *out_payload_len, int *has_chunk, char **errmsg) {
+    ducknng_quack_chunk_set set;
+    int rc;
+    if (out_msg) *out_msg = NULL;
+    if (out_payload_len) *out_payload_len = 0;
+    if (has_chunk) *has_chunk = 0;
+    if (!out_msg || !out_payload_len) {
+        ducknng_quack_set_error(errmsg,
+            "ducknng: missing quack message output pointers");
+        return -1;
+    }
+    if (ducknng_quack_collect_next_chunks(result, max_chunks, &set,
+            errmsg) != 0) return -1;
+    if (set.count == 0) {
+        ducknng_quack_chunk_set_reset(&set);
+        return 0;
+    }
+    rc = ducknng_quack_encode_result_message(result, set.chunks, set.count,
+        include_schema, prefix_size, out_msg, out_payload_len, errmsg);
+    ducknng_quack_chunk_set_reset(&set);
+    if (rc == 0 && has_chunk) *has_chunk = 1;
+    return rc;
+}
+#endif
 
 /* Materialized-result variant of the above: encodes up to max_chunks starting at
  * *inout_chunk_index using the non-deprecated duckdb_result_get_chunk /
@@ -2286,14 +2427,10 @@ int ducknng_result_materialized_chunks_to_quack_payload(duckdb_result result,
         ducknng_quack_set_error(errmsg, "ducknng: missing quack chunk index");
         return -1;
     }
-    if (max_chunks == 0) max_chunks = 1;
     if (*inout_chunk_index >= total) return 0; /* exhausted */
-    chunks = (duckdb_data_chunk *)duckdb_malloc(sizeof(*chunks) * (size_t)max_chunks);
-    if (!chunks) {
-        ducknng_quack_set_error(errmsg, "ducknng: out of memory collecting quack chunks");
+    if (ducknng_quack_alloc_chunk_array(&max_chunks, &chunks, errmsg) != 0) {
         return -1;
     }
-    memset(chunks, 0, sizeof(*chunks) * (size_t)max_chunks);
     for (i = 0; i < max_chunks && *inout_chunk_index < total; i++) {
         chunks[chunk_count] = duckdb_result_get_chunk(result, *inout_chunk_index);
         (*inout_chunk_index)++;
@@ -2322,8 +2459,18 @@ int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
 
 int ducknng_result_empty_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, char **errmsg) {
-    return ducknng_quack_encode_result_payload(result, NULL, 0, 1, out_bytes, out_len, errmsg);
+    return ducknng_quack_encode_result_payload(result, NULL, 0, 1,
+        out_bytes, out_len, errmsg);
 }
+
+#ifndef DUCKNNG_CORE_ONLY
+int ducknng_result_empty_quack_message(duckdb_result result,
+    size_t prefix_size, nng_msg **out_msg, size_t *out_payload_len,
+    char **errmsg) {
+    return ducknng_quack_encode_result_message(result, NULL, 0, 1,
+        prefix_size, out_msg, out_payload_len, errmsg);
+}
+#endif
 
 /* Parse the OUTER_RESULT_TYPES + OUTER_RESULT_NAMES sections into out_schema,
  * advancing the reader to the start of the results section. Shared by the
@@ -2415,7 +2562,9 @@ static int ducknng_quack_reader_validate_results(ducknng_quack_reader *r,
         for (chunk_idx = 0; chunk_idx < n_results; chunk_idx++) {
             uint8_t present = 0;
             idx_t chunk_rows = 0;
-            if (ducknng_quack_read_byte(r, &present, errmsg) != 0) return -1;
+            if (ducknng_quack_read_boolean(r, &present,
+                    "ducknng: quack chunk presence flag is not boolean",
+                    errmsg) != 0) return -1;
             if (!present) {
                 ducknng_quack_set_error(errmsg, "ducknng: quack payload contained a NULL chunk pointer");
                 return -1;
@@ -2738,7 +2887,9 @@ int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_
     for (chunk_idx = 0; chunk_idx < n_results; chunk_idx++) {
         uint8_t present = 0;
         idx_t chunk_rows = 0;
-        if (ducknng_quack_read_byte(&r, &present, errmsg) != 0 || !present ||
+        if (ducknng_quack_read_boolean(&r, &present,
+                "ducknng: quack chunk presence flag is not boolean",
+                errmsg) != 0 || !present ||
             ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
             ducknng_quack_skip_data_chunk(&r, schema, &chunk_rows, errmsg) != 0 ||
             ducknng_quack_consume_chunk_wrapper_end(&r, chunk_idx + 1 < n_results,
@@ -2873,7 +3024,9 @@ int ducknng_quack_payload_scan_next(duckdb_data_chunk output,
     r.data = payload;
     r.len = payload_len;
     r.off = *inout_offset;
-    if (ducknng_quack_read_byte(&r, &present, errmsg) != 0 || !present ||
+    if (ducknng_quack_read_boolean(&r, &present,
+            "ducknng: quack chunk presence flag is not boolean",
+            errmsg) != 0 || !present ||
         ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0 ||
         ducknng_quack_decode_data_chunk_slice(&r, output, schema, 0, &chunk_rows, errmsg) != 0 ||
         ducknng_quack_consume_chunk_wrapper_end(&r, *inout_remaining > 1, errmsg) != 0) return -1;
@@ -2923,7 +3076,9 @@ int ducknng_quack_payload_scan(duckdb_data_chunk output,
         idx_t local_offset;
         idx_t next_seen = 0;
         idx_t next_offset = 0;
-        if (ducknng_quack_read_byte(&r, &present, errmsg) != 0 || !present ||
+        if (ducknng_quack_read_boolean(&r, &present,
+                "ducknng: quack chunk presence flag is not boolean",
+                errmsg) != 0 || !present ||
             ducknng_quack_read_expect_field(&r, DUCKNNG_QUACK_CHUNK_WRAPPER, errmsg) != 0) return -1;
         if (global_offset >= seen_rows) local_offset = global_offset - seen_rows;
         else local_offset = 0;

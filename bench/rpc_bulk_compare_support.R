@@ -565,7 +565,9 @@ ducknng_bench_machine_details <- function(ext_path) {
 }
 
 ducknng_bench_find_ext_path <- function() {
+  override <- Sys.getenv("DUCKNNG_BENCH_EXT_PATH", unset = "")
   candidates <- c(
+    if (nzchar(override)) override,
     "build/release/ducknng.duckdb_extension",
     "../build/release/ducknng.duckdb_extension"
   )

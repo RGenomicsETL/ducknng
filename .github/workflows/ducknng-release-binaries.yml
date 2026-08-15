@@ -166,6 +166,24 @@ jobs:
             make release -j2
           fi
 
+      - name: Audit native dynamic exports
+        if: matrix.kind == 'native' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            actual=$(nm -D --defined-only build/release/libducknng.so | awk '{print $3}')
+            expected=ducknng_init_c_api
+          else
+            actual=$(nm -gU build/release/libducknng.dylib | awk '{print $NF}')
+            expected=_ducknng_init_c_api
+          fi
+          if [ "$actual" != "$expected" ]; then
+            printf 'unexpected dynamic exports:\n%s\n' "$actual" >&2
+            exit 1
+          fi
+          printf 'dynamic exports: %s\n' "$actual"
+
       - name: Smoke test matching DuckDB runtime
         if: matrix.smoke
         shell: bash

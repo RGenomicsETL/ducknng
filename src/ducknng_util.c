@@ -202,18 +202,6 @@ static int ducknng_hex_value(int c) {
     return -1;
 }
 
-int ducknng_size_add(size_t a, size_t b, size_t *out) {
-    if (b > SIZE_MAX - a) return -1;
-    if (out) *out = a + b;
-    return 0;
-}
-
-int ducknng_size_mul(size_t a, size_t b, size_t *out) {
-    if (a != 0 && b > SIZE_MAX / a) return -1;
-    if (out) *out = a * b;
-    return 0;
-}
-
 int ducknng_grow_capacity(size_t need, size_t current_cap, size_t min_cap, size_t *out_cap) {
     size_t cap;
     if (!out_cap) return -1;

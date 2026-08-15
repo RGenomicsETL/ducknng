@@ -1,30 +1,12 @@
 #pragma once
 #include "duckdb_extension.h"
+#include "ducknng_quack_core.h"
+#include <nng/nng.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/*
- * A column type node. Scalar columns use only name + logical_type_id (+ decimal
- * width/scale). Nested columns (LIST/ARRAY/STRUCT/UNION/MAP/ENUM) additionally
- * use the recursive fields: a LIST/ARRAY has one child; a STRUCT/UNION has
- * `nchildren` children with `child_names`; a MAP is modeled as a LIST whose
- * single child is a STRUCT(key,value); an ENUM carries `enum_count`/`enum_labels`.
- * Top-level columns live in `ducknng_quack_schema.cols` as a flat array (the
- * public API is unchanged); only child trees are separately heap-allocated.
- */
-typedef struct ducknng_quack_column_schema {
-    char *name;
-    int logical_type_id;
-    uint8_t decimal_width;
-    uint8_t decimal_scale;
-    uint32_t array_size;
-    uint32_t enum_count;
-    char **enum_labels;
-    uint32_t nchildren;
-    struct ducknng_quack_column_schema **children;
-    char **child_names;
-} ducknng_quack_column_schema;
-
+/* Type-tree nodes are dependency-free and owned by ducknng_quack_core.h.
+ * Top-level columns remain a DuckDB-sized flat array in this adapter schema. */
 typedef struct ducknng_quack_schema {
     idx_t ncols;
     ducknng_quack_column_schema *cols;
@@ -37,6 +19,11 @@ int ducknng_result_next_chunk_to_quack_payload(duckdb_result result,
 int ducknng_result_next_chunks_to_quack_payload(duckdb_result result,
     uint64_t max_chunks, int include_schema, uint8_t **out_bytes, size_t *out_len,
     int *has_chunk, char **errmsg);
+/* Allocate one final NNG message with prefix_size bytes reserved before the
+ * Quack payload and encode directly into its body. The caller owns *out_msg. */
+int ducknng_result_next_chunks_to_quack_message(duckdb_result result,
+    uint64_t max_chunks, int include_schema, size_t prefix_size,
+    nng_msg **out_msg, size_t *out_payload_len, int *has_chunk, char **errmsg);
 /* Materialized-result variant of ducknng_result_next_chunks_to_quack_payload:
  * encodes up to max_chunks batches starting at *inout_chunk_index (advancing it)
  * using duckdb_result_get_chunk, for results produced by duckdb_query. */
@@ -45,6 +32,9 @@ int ducknng_result_materialized_chunks_to_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, int *has_chunk, char **errmsg);
 int ducknng_result_empty_quack_payload(duckdb_result result,
     uint8_t **out_bytes, size_t *out_len, char **errmsg);
+int ducknng_result_empty_quack_message(duckdb_result result,
+    size_t prefix_size, nng_msg **out_msg, size_t *out_payload_len,
+    char **errmsg);
 
 /* Parse the self-describing type + name header of a quack batch into a schema
  * without a bind_info. Fills *out_schema (caller frees with

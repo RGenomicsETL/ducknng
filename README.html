@@ -1575,7 +1575,7 @@ raw reply frame bytes.</td>
 <td><code>ducknng_decode_frame</code></td>
 <td>table</td>
 <td><code>frame</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)</code></td>
+<td><code>TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)</code></td>
 <td>Decode a raw ducknng frame into envelope fields and extracted
 payload columns.</td>
 </tr>
@@ -1618,13 +1618,20 @@ frame.</td>
 frame.</td>
 </tr>
 <tr class="even">
+<td><code>ducknng_frame_status</code></td>
+<td>scalar</td>
+<td><code>frame</code></td>
+<td><code>UTINYINT</code></td>
+<td>Extract the protocol status from one raw ducknng frame.</td>
+</tr>
+<tr class="odd">
 <td><code>ducknng_frame_flags</code></td>
 <td>scalar</td>
 <td><code>frame</code></td>
 <td><code>UINTEGER</code></td>
 <td>Extract the reply flags bitset from one raw ducknng frame.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_frame_type_name</code></td>
 <td>scalar</td>
 <td><code>frame</code></td>
@@ -1632,7 +1639,7 @@ frame.</td>
 <td>Extract the symbolic reply type name from one raw ducknng
 frame.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>ducknng_frame_name</code></td>
 <td>scalar</td>
 <td><code>frame</code></td>
@@ -1640,7 +1647,7 @@ frame.</td>
 <td>Extract the method or reply name field from one raw ducknng
 frame.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>ducknng_frame_end_of_stream</code></td>
 <td>scalar</td>
 <td><code>frame</code></td>
@@ -2249,7 +2256,7 @@ newly collected terminal result.</td>
 <td><code>ducknng_aio_collect_decoded</code></td>
 <td>table</td>
 <td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)</code></td>
+<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)</code></td>
 <td>Wait for framed aio handles, collect their terminal frame rows, and
 project the decoded envelope columns directly.</td>
 </tr>
@@ -2993,8 +3000,10 @@ type, and a text/raw fallback.</p>
 <span id="cb24-28"><a href="#cb24-28" tabindex="-1"></a><span class="op">+</span><span class="co">---+---+</span></span></code></pre></div>
 <h3 id="raw-frame-helpers">Raw frame helpers</h3>
 <p>The raw scalar forms return reply bytes as BLOBs.
-<code>ducknng_decode_frame(...)</code> projects all envelope fields plus
-the text payload.</p>
+<code>ducknng_decode_frame(...)</code> projects all envelope fields,
+including the protocol status, plus the text payload.
+<code>ducknng_frame_status(...)</code> returns that status directly; it
+is distinct from an NNG transport error code.</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode sql"><code class="sourceCode sql"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a><span class="co">-- Raw bytes from a socket-scoped request (show first 14 bytes as hex).</span></span>
 <span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a><span class="kw">SET</span> VARIABLE req2 <span class="op">=</span> (ducknng_open_socket(<span class="st">&#39;req&#39;</span>)).socket_id;</span>
 <span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a><span class="kw">SET</span> VARIABLE dialed2 <span class="op">=</span> (ducknng_dial_socket(</span>
@@ -3011,29 +3020,38 @@ the text payload.</p>
 <span id="cb25-14"><a href="#cb25-14" tabindex="-1"></a>  <span class="dv">1</span>, <span class="dv">28</span></span>
 <span id="cb25-15"><a href="#cb25-15" tabindex="-1"></a>) <span class="kw">AS</span> first_14_bytes_hex;</span>
 <span id="cb25-16"><a href="#cb25-16" tabindex="-1"></a><span class="co">-- Decode a manifest reply directly.</span></span>
-<span id="cb25-17"><a href="#cb25-17" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, name,</span>
+<span id="cb25-17"><a href="#cb25-17" tabindex="-1"></a><span class="kw">SELECT</span> ok, version, type_name, status, name,</span>
 <span id="cb25-18"><a href="#cb25-18" tabindex="-1"></a>       position(<span class="st">&#39;&quot;name&quot;:&quot;exec&quot;&#39;</span> <span class="kw">IN</span> payload_text) <span class="op">&gt;</span> <span class="dv">0</span> <span class="kw">AS</span> has_exec</span>
 <span id="cb25-19"><a href="#cb25-19" tabindex="-1"></a><span class="kw">FROM</span> ducknng_decode_frame(</span>
 <span id="cb25-20"><a href="#cb25-20" tabindex="-1"></a>  ducknng_get_rpc_manifest_raw(<span class="st">&#39;ipc:///tmp/ducknng_readme_rpc.ipc&#39;</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span>)</span>
 <span id="cb25-21"><a href="#cb25-21" tabindex="-1"></a>);</span>
-<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="kw">SELECT</span> (ducknng_close_socket(getvariable(<span class="st">&#39;req2&#39;</span>):<span class="ch">:UBIGINT</span>)).ok <span class="kw">AS</span> closed;</span>
-<span id="cb25-23"><a href="#cb25-23" tabindex="-1"></a></span>
-<span id="cb25-24"><a href="#cb25-24" tabindex="-1"></a></span>
-<span id="cb25-25"><a href="#cb25-25" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------+</span></span>
-<span id="cb25-26"><a href="#cb25-26" tabindex="-1"></a>|      first_14_bytes_hex      |</span>
-<span id="cb25-27"><a href="#cb25-27" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------+</span></span>
-<span id="cb25-28"><a href="#cb25-28" tabindex="-1"></a>| <span class="dv">0102040000000800000000000000</span> |</span>
+<span id="cb25-22"><a href="#cb25-22" tabindex="-1"></a><span class="co">-- A malformed request returns an INVALID protocol status in its error frame.</span></span>
+<span id="cb25-23"><a href="#cb25-23" tabindex="-1"></a><span class="kw">SELECT</span> ducknng_frame_status(ducknng_request_raw(</span>
+<span id="cb25-24"><a href="#cb25-24" tabindex="-1"></a>  <span class="st">&#39;ipc:///tmp/ducknng_readme_rpc.ipc&#39;</span>, from_hex(<span class="st">&#39;00&#39;</span>), <span class="dv">1000</span>, <span class="dv">0</span>:<span class="ch">:UBIGINT</span></span>
+<span id="cb25-25"><a href="#cb25-25" tabindex="-1"></a>)) <span class="kw">AS</span> invalid_status;</span>
+<span id="cb25-26"><a href="#cb25-26" tabindex="-1"></a><span class="kw">SELECT</span> (ducknng_close_socket(getvariable(<span class="st">&#39;req2&#39;</span>):<span class="ch">:UBIGINT</span>)).ok <span class="kw">AS</span> closed;</span>
+<span id="cb25-27"><a href="#cb25-27" tabindex="-1"></a></span>
+<span id="cb25-28"><a href="#cb25-28" tabindex="-1"></a></span>
 <span id="cb25-29"><a href="#cb25-29" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------+</span></span>
-<span id="cb25-30"><a href="#cb25-30" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+----------+----------+</span></span>
-<span id="cb25-31"><a href="#cb25-31" tabindex="-1"></a>|  ok  | version | type_name |   name   | has_exec |</span>
-<span id="cb25-32"><a href="#cb25-32" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+----------+----------+</span></span>
-<span id="cb25-33"><a href="#cb25-33" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">1</span>       | result    | manifest | <span class="kw">true</span>     |</span>
-<span id="cb25-34"><a href="#cb25-34" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+----------+----------+</span></span>
-<span id="cb25-35"><a href="#cb25-35" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
-<span id="cb25-36"><a href="#cb25-36" tabindex="-1"></a>| closed |</span>
-<span id="cb25-37"><a href="#cb25-37" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
-<span id="cb25-38"><a href="#cb25-38" tabindex="-1"></a>| <span class="kw">true</span>   |</span>
-<span id="cb25-39"><a href="#cb25-39" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span></code></pre></div>
+<span id="cb25-30"><a href="#cb25-30" tabindex="-1"></a>|      first_14_bytes_hex      |</span>
+<span id="cb25-31"><a href="#cb25-31" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------+</span></span>
+<span id="cb25-32"><a href="#cb25-32" tabindex="-1"></a>| <span class="dv">0102040000000800000000000000</span> |</span>
+<span id="cb25-33"><a href="#cb25-33" tabindex="-1"></a><span class="op">+</span><span class="co">------------------------------+</span></span>
+<span id="cb25-34"><a href="#cb25-34" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+--------+----------+----------+</span></span>
+<span id="cb25-35"><a href="#cb25-35" tabindex="-1"></a>|  ok  | version | type_name | status |   name   | has_exec |</span>
+<span id="cb25-36"><a href="#cb25-36" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+--------+----------+----------+</span></span>
+<span id="cb25-37"><a href="#cb25-37" tabindex="-1"></a>| <span class="kw">true</span> | <span class="dv">1</span>       | result    | <span class="dv">0</span>      | manifest | <span class="kw">true</span>     |</span>
+<span id="cb25-38"><a href="#cb25-38" tabindex="-1"></a><span class="op">+</span><span class="co">------+---------+-----------+--------+----------+----------+</span></span>
+<span id="cb25-39"><a href="#cb25-39" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+</span></span>
+<span id="cb25-40"><a href="#cb25-40" tabindex="-1"></a>| invalid_status |</span>
+<span id="cb25-41"><a href="#cb25-41" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+</span></span>
+<span id="cb25-42"><a href="#cb25-42" tabindex="-1"></a>| <span class="dv">1</span>              |</span>
+<span id="cb25-43"><a href="#cb25-43" tabindex="-1"></a><span class="op">+</span><span class="co">----------------+</span></span>
+<span id="cb25-44"><a href="#cb25-44" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
+<span id="cb25-45"><a href="#cb25-45" tabindex="-1"></a>| closed |</span>
+<span id="cb25-46"><a href="#cb25-46" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span>
+<span id="cb25-47"><a href="#cb25-47" tabindex="-1"></a>| <span class="kw">true</span>   |</span>
+<span id="cb25-48"><a href="#cb25-48" tabindex="-1"></a><span class="op">+</span><span class="co">--------+</span></span></code></pre></div>
 <h3 id="aio-helpers">AIO helpers</h3>
 <p><code>ducknng_request_raw_aio(...)</code> and
 <code>ducknng_get_rpc_manifest_raw_aio(...)</code> return integer AIO
