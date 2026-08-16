@@ -34,8 +34,12 @@ jobs:
       - name: Install site renderer
         run: Rscript -e 'install.packages("litedown")'
 
+      # Invoked directly rather than through `make site`: the top-level Makefile
+      # includes extension-ci-tools/makefiles/c_api_extensions/c_cpp.Makefile,
+      # so `make` anything would need that submodule checked out. Rendering
+      # markdown has no use for the C build toolchain.
       - name: Build curated documentation site
-        run: make site
+        run: Rscript scripts/build_docs_site.R
 
       # Publishes to the gh-pages root. keep_files preserves the wasm/ subtree
       # that ducknng-wasm-pages.yml owns; without it this publish would delete

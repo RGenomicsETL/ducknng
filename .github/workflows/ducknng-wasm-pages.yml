@@ -151,12 +151,26 @@ jobs:
           path: duckdb-wasm-release
           if-no-files-found: error
 
+      # The ref is moved through the API rather than `git push -f`. GITHUB_TOKEN
+      # is refused any push whose commit touches .github/workflows/**, so a
+      # commit that adds or edits a workflow file made the tag push fail with
+      # "refusing to allow a GitHub App to create or update workflow ...".
+      # Pointing a ref at an already-pushed SHA is not subject to that rule.
       - name: Move rolling demo release tag
         if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git tag -f "${DUCKNNG_WASM_RELEASE_TAG}" "${GITHUB_SHA}"
-          git push -f origin "refs/tags/${DUCKNNG_WASM_RELEASE_TAG}"
+          ref="repos/${GITHUB_REPOSITORY}/git/refs/tags/${DUCKNNG_WASM_RELEASE_TAG}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${DUCKNNG_WASM_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh api -X PATCH "$ref" -f sha="${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${DUCKNNG_WASM_RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" >/dev/null
+          fi
+          echo "rolling tag ${DUCKNNG_WASM_RELEASE_TAG} -> ${GITHUB_SHA}"
 
       - name: Publish rolling demo release assets
         if: github.event_name != 'pull_request'
