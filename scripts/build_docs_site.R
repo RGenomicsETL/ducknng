@@ -10,7 +10,7 @@ if (!requireNamespace("litedown", quietly = TRUE)) {
 }
 
 pages <- c(
-  index = "README.md",
+  index = "docs/landing.md",
   protocol = "docs/protocol.md",
   reference = "docs/function_reference.md",
   types = "docs/types.md",
@@ -47,13 +47,13 @@ invisible(file.create(file.path(site_dir, ".nojekyll")))
 css <- normalizePath("tools/site.css", winslash = "/", mustWork = TRUE)
 header <- normalizePath("tools/site-header.html", winslash = "/", mustWork = TRUE)
 
-build_metadata <- function(include_before) {
+build_metadata <- function(include_before, toc = TRUE) {
   c(
     "---",
     "output:",
     "  html:",
     "    options:",
-    "      toc: true",
+    paste0("      toc: ", if (isTRUE(toc)) "true" else "false"),
     "    meta:",
     paste0(
       "      css: [\"@default@1.14.69\", \"@article@1.14.69\", ",
@@ -68,95 +68,19 @@ build_metadata <- function(include_before) {
   )
 }
 
-# The landing page leads with a hero and a card grid instead of the README's
-# plain heading. This lives here rather than in README.md so the GitHub view of
-# the README stays clean markdown. It is appended to the nav header and injected
-# through include_before, which places it above litedown's table of contents;
-# passing it as markdown put the whole TOC ahead of the hero.
-hero <- c(
-  "<div class=\"hero-wrap\">",
-  "<div class=\"hero\">",
-  "<p class=\"eyebrow\">DuckDB extension &middot; pure C</p>",
-  "<h1>DuckDB, on the network.</h1>",
-  "<p class=\"lede\">ducknng binds the <a href=\"https://nng.nanomsg.org/\">NNG</a>",
-  "scalability protocols into DuckDB: framed RPC with Arrow and Quack payloads,",
-  "query sessions, mTLS and policy admission in C, and an HTTP carrier &mdash;",
-  "so one DuckDB session can serve or call another.</p>",
-  "<p class=\"hero-actions\">",
-  "<a class=\"button primary\" href=\"protocol.html\">Read the protocol</a>",
-  "<a class=\"button\" href=\"reference.html\">SQL reference</a>",
-  "<a class=\"button\" href=\"https://github.com/RGenomicsETL/ducknng\">GitHub</a>",
-  "</p>",
-  "<p class=\"transport-strip\">",
-  paste0(
-    "<code>inproc://</code> <code>ipc://</code> <code>tcp://</code> ",
-    "<code>tls+tcp://</code> <code>ws://</code> <code>wss://</code> ",
-    "<code>http://</code> <code>https://</code>"
-  ),
-  "</p>",
-  "</div>",
-  "",
-  "<div class=\"feature-grid\">",
-  "<a class=\"feature\" href=\"protocol.html\">",
-  "<strong>Framed RPC</strong>",
-  "<span>A small versioned envelope carrying Arrow IPC or JSON, with an",
-  "explicit status byte and a fixed four-method query session.</span></a>",
-  "<a class=\"feature\" href=\"reference.html\">",
-  "<strong>SQL surface</strong>",
-  "<span>Servers, sockets, AIO futures, TLS configs, codecs, and HTTP routes,",
-  "all managed from SQL as explicit handles.</span></a>",
-  "<a class=\"feature\" href=\"types.html\">",
-  "<strong>Quack payloads</strong>",
-  "<span>DuckDB's own BinarySerializer batch format alongside Arrow IPC,",
-  "carrying nested types and compressed vectors.</span></a>",
-  "<a class=\"feature\" href=\"security.html\">",
-  "<strong>Admission in C</strong>",
-  "<span>mTLS, exact peer-identity and CIDR allowlists, per-principal limits,",
-  "and an optional SQL authorizer at the request boundary.</span></a>",
-  "<a class=\"feature\" href=\"transports.html\">",
-  "<strong>Transport by URL</strong>",
-  "<span>The scheme picks the carrier. The method contract does not change",
-  "between inproc, IPC, TCP, TLS, WebSocket, and HTTP.</span></a>",
-  "<a class=\"feature\" href=\"browser.html\">",
-  "<strong>Browser clients</strong>",
-  "<span>A duckdb-wasm side module speaking the same protocol over HTTPS and",
-  "WSS, with capability negotiation rather than simulation.</span></a>",
-  "</div>",
-  "</div>"
-)
-
-# The index gets the nav plus the hero; every other page gets the nav alone.
-index_header <- file.path(tempdir(), "ducknng-site-index-header.html")
-writeLines(
-  c(readLines(header, warn = FALSE, encoding = "UTF-8"), hero),
-  index_header
-)
-
-read_page <- function(name, source) {
-  markdown <- readLines(source, warn = FALSE, encoding = "UTF-8")
-  if (name != "index") {
-    return(markdown)
-  }
-  # Drop the duckknit provenance comment and the leading "# ducknng" heading;
-  # the hero supplies the title on this page.
-  markdown <- markdown[!grepl("^<!-- README\\.md is generated", markdown)]
-  first_heading <- which(grepl("^# ", markdown))[1]
-  if (!is.na(first_heading)) {
-    markdown <- markdown[-first_heading]
-  }
-  while (length(markdown) > 0L && !nzchar(trimws(markdown[1]))) {
-    markdown <- markdown[-1]
-  }
-  markdown
-}
+# docs/landing.md is a purpose-built landing page rather than the README: it
+# carries a hero, an SVG topology diagram, numbered steps, and card grids that
+# would render poorly in a plain-text README. README.md stays the full
+# GitHub-facing document. The landing page is short and already structured, so
+# it renders without a table of contents; every other page keeps the sidebar.
 
 for (name in names(pages)) {
   source <- pages[[name]]
   destination <- file.path(site_dir, paste0(name, ".html"))
-  include_before <- if (name == "index") index_header else header
+  markdown <- readLines(source, warn = FALSE, encoding = "UTF-8")
   message("rendering ", source, " -> ", destination)
   litedown::mark(
-    text = c(build_metadata(include_before), read_page(name, source)),
+    text = c(build_metadata(header, toc = name != "index"), markdown),
     output = destination,
     meta = list("plain-title" = titles[[name]])
   )
