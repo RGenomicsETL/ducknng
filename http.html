@@ -19,6 +19,7 @@
   --dn-teal-dark: #063f49;
   --dn-gold: #f5c542;
   --dn-code: #0d1726;
+  --dn-toc-width: 250px;
 }
 
 html {
@@ -302,6 +303,63 @@ pre > code .token.punctuation {
   color: #334155 !important;
 }
 
+/* Sticky left-hand contents column, the reading layout litedown's book format
+ * uses. litedown gets it by floating #TOC into the page margin, which needs
+ * --side-width plus --side-gap of free space on both sides and therefore a
+ * ~800px body (hence its 1264.02px breakpoint). This site runs wider and has
+ * no right-margin footnotes, so the TOC gets its own grid column instead.
+ * The #TOC rule matches the specificity of article.min.css's own
+ * `body:not(.pagesjs) #TOC` block so it wins on load order rather than
+ * !important. Below the breakpoint the TOC returns to normal flow. */
+@media (min-width: 1080px) {
+  body {
+    max-width: 1340px;
+  }
+
+  .body {
+    align-items: start;
+    column-gap: clamp(1.5rem, 3vw, 3rem);
+    display: grid;
+    grid-template-columns: var(--dn-toc-width) minmax(0, 1fr);
+  }
+
+  .body > * {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  body:not(.pagesjs) #TOC {
+    border: 0;
+    border-right: 1px solid var(--dn-line);
+    border-radius: 0;
+    float: none;
+    font-size: 0.87rem;
+    grid-column: 1;
+    grid-row: 1 / -1;
+    line-height: 1.45;
+    margin: 0;
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+    padding: 0 1.1rem 0 0;
+    position: sticky;
+    top: 1.5rem;
+    width: auto;
+  }
+
+  #TOC a {
+    color: var(--dn-muted);
+  }
+
+  #TOC a:hover,
+  #TOC a.active {
+    color: var(--dn-teal);
+  }
+
+  #TOC a.active {
+    font-weight: 700;
+  }
+}
+
 #TOC,
 #TOC ul,
 #TOC li {
@@ -562,6 +620,7 @@ ducknng_http_binary(status, body)
 <p>Additional HTTP-carrier WebSocket application APIs, application-level SSE/NDJSON parsers, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG <code>ws://</code> and <code>wss://</code> transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.</p>
 <p>The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching plus small request-accessor and response-builder helpers. Richer web-toolkit features are still deferred. Static asset serving, route-local authentication policy, HTTP-carrier WebSocket/SSE/NDJSON work, worker lifecycle management, and application gateway products must remain additive layers beside the frame carrier. They must not mint method copies such as <code>http_exec</code>, <code>http_query_open</code>, or <code>http_fetch</code>, and they must not change the frame endpoint’s <code>POST application/vnd.ducknng.frame</code> contract.</p>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
 </body>

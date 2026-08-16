@@ -19,6 +19,7 @@
   --dn-teal-dark: #063f49;
   --dn-gold: #f5c542;
   --dn-code: #0d1726;
+  --dn-toc-width: 250px;
 }
 
 html {
@@ -302,6 +303,63 @@ pre > code .token.punctuation {
   color: #334155 !important;
 }
 
+/* Sticky left-hand contents column, the reading layout litedown's book format
+ * uses. litedown gets it by floating #TOC into the page margin, which needs
+ * --side-width plus --side-gap of free space on both sides and therefore a
+ * ~800px body (hence its 1264.02px breakpoint). This site runs wider and has
+ * no right-margin footnotes, so the TOC gets its own grid column instead.
+ * The #TOC rule matches the specificity of article.min.css's own
+ * `body:not(.pagesjs) #TOC` block so it wins on load order rather than
+ * !important. Below the breakpoint the TOC returns to normal flow. */
+@media (min-width: 1080px) {
+  body {
+    max-width: 1340px;
+  }
+
+  .body {
+    align-items: start;
+    column-gap: clamp(1.5rem, 3vw, 3rem);
+    display: grid;
+    grid-template-columns: var(--dn-toc-width) minmax(0, 1fr);
+  }
+
+  .body > * {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  body:not(.pagesjs) #TOC {
+    border: 0;
+    border-right: 1px solid var(--dn-line);
+    border-radius: 0;
+    float: none;
+    font-size: 0.87rem;
+    grid-column: 1;
+    grid-row: 1 / -1;
+    line-height: 1.45;
+    margin: 0;
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+    padding: 0 1.1rem 0 0;
+    position: sticky;
+    top: 1.5rem;
+    width: auto;
+  }
+
+  #TOC a {
+    color: var(--dn-muted);
+  }
+
+  #TOC a:hover,
+  #TOC a.active {
+    color: var(--dn-teal);
+  }
+
+  #TOC a.active {
+    font-weight: 700;
+  }
+}
+
 #TOC,
 #TOC ul,
 #TOC li {
@@ -460,5 +518,6 @@ tbody td:first-child code {
 <h2 id="sec:implementation-checklist">Implementation checklist</h2>
 <p>A change to <code>ducknng</code> is considered security-reviewed only when the conditions relevant to that change hold. Already-enforced baseline checks include envelope version validation, bounded wire lengths, descriptor-based request flag validation, method lookup through the registry, per-method request/reply size validation, TLS configuration rejection on incompatible URL schemes, descriptor-level method auth including optional manifest protection, session-aware unregistration refusal while sessions are open, session owner-token checks, optional mTLS owner-identity checks, idle session pruning, and safe internal SQL construction for extension-generated queries. Remaining hardening work includes explicit owner/pipe-level resource quotas, optional convenience helpers for documented deployment profiles, and any future richer pre-authentication discovery policy. PUB/SUB, when introduced, must carry only fanout-safe payloads. This document is updated when any of the above changes, because the checklist is the contract.</p>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>
