@@ -161,35 +161,69 @@ EOF
 touch "${SITE_ROOT}/.nojekyll"
 printf '%s\n' '<!doctype html><title>ducknng</title>' > "${SITE_ROOT}/favicon.ico"
 
+# The demo pages share the documentation site's stylesheet so the two halves of
+# the published site look like one project. It is copied in rather than linked
+# from the docs root: the demo runs cross-origin isolated, and a same-origin
+# copy keeps it independent of whether the docs workflow has published yet.
+cp -f "${ROOT_DIR}/tools/site.css" "${SITE_ROOT}/site.css"
+
 cat > "${SITE_ROOT}/index.html" <<'EOF'
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ducknng browser wasm demo</title>
+  <title>Browser demo · ducknng</title>
+  <link rel="stylesheet" href="site.css">
   <style>
-    body { margin: 0; font-family: system-ui, sans-serif; background: #f3efe4; color: #1a1a1a; }
-    main { max-width: 760px; margin: 0 auto; padding: 40px 20px; }
-    a.button { display: inline-block; margin: 12px 0; padding: 10px 16px; border-radius: 999px; background: #0f766e; color: white; text-decoration: none; }
-    code { background: rgba(15, 118, 110, 0.08); padding: 1px 5px; border-radius: 6px; }
+    body { font-family: sans-serif; line-height: 1.5; margin: auto; padding: 0; }
+    .body { padding: var(--dn-pad); }
   </style>
 </head>
 <body>
-  <main>
-    <h1>ducknng browser wasm demo</h1>
-    <p>
-      This static site loads the ducknng DuckDB extension as a duckdb-wasm side module
-      and runs the browser smoke page. The current public demo proves extension load,
-      codec/registry calls, and the <code>inproc://</code> AIO RPC manifest path when
-      the pthread runtime has cross-origin isolation.
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="../" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="../">Home</a>
+    <a href="../protocol.html">Protocol</a>
+    <a href="../reference.html">Reference</a>
+    <a href="../types.html">Types</a>
+    <a href="../transports.html">Transports</a>
+    <a href="../http.html">HTTP</a>
+    <a href="../browser.html">Browser</a>
+    <a href="../security.html">Security</a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">&#8599;</span></a>
+  </p>
+</nav>
+<div class="hero-wrap">
+  <div class="hero">
+    <p class="eyebrow">duckdb-wasm side module</p>
+    <h1>ducknng in the browser.</h1>
+    <p class="lede">
+      This static site loads the ducknng DuckDB extension as a duckdb-wasm side
+      module and runs the browser smoke page in your own tab &mdash; no server,
+      no install.
     </p>
-    <p>
-      It does not claim browser support for <code>ipc://</code>, raw <code>tcp://</code>,
-      native <code>tls+tcp://</code>, HTTP, or WebSocket transports.
+    <p class="hero-actions">
+      <a class="button primary" href="scripts/duckdb-wasm-local-test.html">Open the smoke page</a>
+      <a class="button" href="../browser.html">Browser support contract</a>
     </p>
-    <p><a class="button" href="scripts/duckdb-wasm-local-test.html">Open the smoke page</a></p>
-  </main>
+  </div>
+  <div class="feature-grid">
+    <a class="feature" href="scripts/duckdb-wasm-local-test.html">
+      <strong>What it proves</strong>
+      <span>Extension load, codec and registry calls, and the <code>inproc://</code>
+      AIO RPC manifest path when the pthread runtime has cross-origin isolation.</span></a>
+    <a class="feature" href="../browser.html">
+      <strong>What it does not claim</strong>
+      <span>No browser support for <code>ipc://</code>, raw <code>tcp://</code>, or
+      native <code>tls+tcp://</code>. Capabilities are negotiated, never simulated.</span></a>
+    <a class="feature" href="../transports.html">
+      <strong>Supported carriers</strong>
+      <span>HTTP and HTTPS, plus framed RPC over <code>ws://</code> and
+      <code>wss://</code>, using the browser trust store.</span></a>
+  </div>
+</div>
 </body>
 </html>
 EOF

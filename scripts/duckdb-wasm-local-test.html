@@ -3,34 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ducknng browser wasm demo</title>
+  <title>Browser smoke page · ducknng</title>
+  <link rel="stylesheet" href="../site.css">
   <style>
+    /* The component styles below are driven entirely by these variables, so
+     * pointing them at the documentation site's palette (tools/site.css) makes
+     * the demo match the rest of the published site without restyling each
+     * control. Keep these names in sync with the --dn-* tokens. */
     :root {
       color-scheme: light;
-      --bg: #f3efe4;
-      --panel: #fffdf7;
-      --ink: #1a1a1a;
-      --muted: #6a665c;
-      --accent: #0f766e;
-      --accent-2: #b45309;
-      --border: #d6cfbf;
-      --code: rgba(15, 118, 110, 0.08);
-      --danger: #b91c1c;
+      --bg: #f5f8fa;
+      --panel: #ffffff;
+      --ink: #14202b;
+      --muted: #5c6a76;
+      --accent: #0b6b7a;
+      --accent-2: #8a5a00;
+      --border: #d7dee6;
+      --code: rgba(11, 107, 122, 0.08);
+      --danger: #9b1c1c;
       --ok: #15803d;
     }
     body {
       margin: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      max-width: none;
+      font-family: sans-serif;
       background:
-        radial-gradient(circle at top right, rgba(15, 118, 110, 0.10), transparent 35%),
-        radial-gradient(circle at bottom left, rgba(180, 83, 9, 0.10), transparent 30%),
-        var(--bg);
+        radial-gradient(circle at top right, rgba(245, 197, 66, 0.16), transparent 32%),
+        linear-gradient(180deg, #f2fafc 0%, var(--bg) 40%);
       color: var(--ink);
     }
-    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }
-    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.2; }
-    h2 { margin: 0 0 10px; font-size: 20px; }
+    main { max-width: 1340px; margin: 0 auto; padding: var(--dn-pad) var(--dn-pad) 3rem; }
+    h1 { margin: 0 0 8px; color: var(--dn-teal-dark); font-size: clamp(1.9rem, 4vw, 2.6rem); letter-spacing: -0.03em; line-height: 1.15; }
+    h2 { margin: 0 0 10px; color: var(--dn-teal-dark); font-size: 20px; }
+    textarea, pre, code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     p { margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
+    /* The page is wide for the two-column tool panes; prose is capped so the
+     * intro does not run to ~180 characters a line. */
+    main > p, .banner { max-width: 92ch; }
     .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
     @media (min-width: 960px) {
       .grid { grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); align-items: start; }
@@ -38,7 +47,7 @@
     .card {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: 0.75rem;
       padding: 18px;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
       margin-bottom: 16px;
@@ -52,11 +61,13 @@
     }
     button, select {
       border: 1px solid transparent;
-      border-radius: 999px;
+      border-radius: 0.5rem;
       background: var(--accent);
       color: white;
+      font-weight: 700;
       padding: 10px 16px;
-      font: inherit;
+      font-family: inherit;
+      font-size: inherit;
     }
     select { background: #fff; color: var(--ink); border-color: var(--border); }
     button.secondary { background: #fff; color: var(--ink); border-color: var(--border); }
@@ -120,6 +131,21 @@
   </style>
 </head>
 <body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="../../" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="../../">Home</a>
+    <a href="../../protocol.html">Protocol</a>
+    <a href="../../reference.html">Reference</a>
+    <a href="../../types.html">Types</a>
+    <a href="../../transports.html">Transports</a>
+    <a href="../../http.html">HTTP</a>
+    <a href="../../browser.html">Browser</a>
+    <a href="../../security.html">Security</a>
+    <a href="../">Demo</a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">&#8599;</span></a>
+  </p>
+</nav>
   <main>
     <h1>ducknng browser wasm demo</h1>
     <p>
