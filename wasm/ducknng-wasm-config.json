@@ -8,6 +8,6 @@
   "duckdbWasmNpmVersion": "1.33.1-dev55.0",
   "duckdbVersion": "v1.5.3",
   "nngInprocOnly": 1,
-  "sourceCommit": "f2ca4d73f2e8843a7c716e044e1c1a57ad4d9ed6",
+  "sourceCommit": "2155d2564780e7f29fc2cc54905661e26e139a76",
   "extensionReleaseUrl": "https://github.com/RGenomicsETL/ducknng/releases/download/ducknng-wasm-demo-latest/ducknng-wasm_threads.duckdb_extension.wasm"
 }
