@@ -91,6 +91,17 @@ body {
   margin-bottom: 0.55em;
 }
 
+/* The hero and card grid are injected ahead of litedown's .body wrapper so they
+ * sit above the table of contents rather than below it. That puts them outside
+ * .body's padding, which this restores. */
+.hero-wrap {
+  padding: clamp(1rem, 3vw, 2.75rem) clamp(1rem, 3vw, 2.75rem) 0;
+}
+
+.hero-wrap .feature-grid {
+  margin-bottom: 0;
+}
+
 .hero {
   background:
     radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
@@ -355,6 +366,7 @@ tbody td:first-child code {
 <nav class="site-nav" aria-label="Project">
   <p>
     <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="./">Home</a>
     <a href="protocol.html">Protocol</a>
     <a href="reference.html">Reference</a>
     <a href="types.html">Types</a>
@@ -366,20 +378,60 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
+<div class="hero-wrap">
+<div class="hero">
+<p class="eyebrow">DuckDB extension &middot; pure C</p>
+<h1>DuckDB, on the network.</h1>
+<p class="lede">ducknng binds the <a href="https://nng.nanomsg.org/">NNG</a>
+scalability protocols into DuckDB: framed RPC with Arrow and Quack payloads,
+query sessions, mTLS and policy admission in C, and an HTTP carrier &mdash;
+so one DuckDB session can serve or call another.</p>
+<p class="hero-actions">
+<a class="button primary" href="protocol.html">Read the protocol</a>
+<a class="button" href="reference.html">SQL reference</a>
+<a class="button" href="https://github.com/RGenomicsETL/ducknng">GitHub</a>
+</p>
+<p class="transport-strip">
+<code>inproc://</code> <code>ipc://</code> <code>tcp://</code> <code>tls+tcp://</code> <code>ws://</code> <code>wss://</code> <code>http://</code> <code>https://</code>
+</p>
+</div>
+<div class="feature-grid">
+<a class="feature" href="protocol.html">
+<strong>Framed RPC</strong>
+<span>A small versioned envelope carrying Arrow IPC or JSON, with an
+explicit status byte and a fixed four-method query session.</span></a>
+<a class="feature" href="reference.html">
+<strong>SQL surface</strong>
+<span>Servers, sockets, AIO futures, TLS configs, codecs, and HTTP routes,
+all managed from SQL as explicit handles.</span></a>
+<a class="feature" href="types.html">
+<strong>Quack payloads</strong>
+<span>DuckDB's own BinarySerializer batch format alongside Arrow IPC,
+carrying nested types and compressed vectors.</span></a>
+<a class="feature" href="security.html">
+<strong>Admission in C</strong>
+<span>mTLS, exact peer-identity and CIDR allowlists, per-principal limits,
+and an optional SQL authorizer at the request boundary.</span></a>
+<a class="feature" href="transports.html">
+<strong>Transport by URL</strong>
+<span>The scheme picks the carrier. The method contract does not change
+between inproc, IPC, TCP, TLS, WebSocket, and HTTP.</span></a>
+<a class="feature" href="browser.html">
+<strong>Browser clients</strong>
+<span>A duckdb-wasm side module speaking the same protocol over HTTPS and
+WSS, with capability negotiation rather than simulation.</span></a>
+</div>
+</div>
 <div class="frontmatter">
 </div>
 <div class="body">
 <div id="TOC">
-<ul>
-<li><a href="#chp:duckdb-on-the-network">DuckDB, on the network.</a>
 <ul>
 <li><a href="#sec:layer-map">Layer map</a></li>
 <li><a href="#sec:quick-tour">Quick tour</a></li>
 <li><a href="#sec:development">Development</a></li>
 <li><a href="#sec:lifetime-and-manual-cleanup">Lifetime and manual cleanup</a></li>
 <li><a href="#sec:function-catalog">Function catalog</a></li>
-</ul>
-</li>
 <li><a href="#chp:function-catalog">Function Catalog</a>
 <ul>
 <li><a href="#sec:service-control">Service Control</a></li>
@@ -444,48 +496,6 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
-<div class="hero">
-<p class="eyebrow">DuckDB extension &middot; pure C</p>
-<h1 id="chp:duckdb-on-the-network">DuckDB, on the network.</h1>
-<p class="lede">ducknng binds the <a href="https://nng.nanomsg.org/">NNG</a>
-scalability protocols into DuckDB: framed RPC with Arrow and Quack payloads,
-query sessions, mTLS and policy admission in C, and an HTTP carrier &mdash;
-so one DuckDB session can serve or call another.</p>
-<p class="hero-actions">
-<a class="button primary" href="protocol.html">Read the protocol</a>
-<a class="button" href="reference.html">SQL reference</a>
-<a class="button" href="https://github.com/RGenomicsETL/ducknng">GitHub</a>
-</p>
-<p class="transport-strip">
-<code>inproc://</code> <code>ipc://</code> <code>tcp://</code> <code>tls+tcp://</code> <code>ws://</code> <code>wss://</code> <code>http://</code> <code>https://</code>
-</p>
-</div>
-<div class="feature-grid">
-<a class="feature" href="protocol.html">
-<strong>Framed RPC</strong>
-<span>A small versioned envelope carrying Arrow IPC or JSON, with an
-explicit status byte and a fixed four-method query session.</span></a>
-<a class="feature" href="reference.html">
-<strong>SQL surface</strong>
-<span>Servers, sockets, AIO futures, TLS configs, codecs, and HTTP routes,
-all managed from SQL as explicit handles.</span></a>
-<a class="feature" href="types.html">
-<strong>Quack payloads</strong>
-<span>DuckDB's own BinarySerializer batch format alongside Arrow IPC,
-carrying nested types and compressed vectors.</span></a>
-<a class="feature" href="security.html">
-<strong>Admission in C</strong>
-<span>mTLS, exact peer-identity and CIDR allowlists, per-principal limits,
-and an optional SQL authorizer at the request boundary.</span></a>
-<a class="feature" href="transports.html">
-<strong>Transport by URL</strong>
-<span>The scheme picks the carrier. The method contract does not change
-between inproc, IPC, TCP, TLS, WebSocket, and HTTP.</span></a>
-<a class="feature" href="browser.html">
-<strong>Browser clients</strong>
-<span>A duckdb-wasm side module speaking the same protocol over HTTPS and
-WSS, with capability negotiation rather than simulation.</span></a>
 </div>
 <p><code>ducknng</code> is a pure C DuckDB extension providing a binding to the
 <a href="https://nng.nanomsg.org/">NNG</a> scalability protocols. It is inspired by
