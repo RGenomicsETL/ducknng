@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>Browser support · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<div id="TOC">
+<ul>
+<li><a href="#chp:browser-support-contract">Browser support contract</a>
+<ul>
+<li><a href="#sec:network-backend">Network backend</a></li>
+<li><a href="#sec:asynchronous-completion">Asynchronous completion</a></li>
+<li><a href="#sec:frame-carriers">Frame carriers</a></li>
+<li><a href="#sec:conformance-gate">Conformance gate</a></li>
+<li><a href="#sec:incremental-http-bodies">Incremental HTTP bodies</a></li>
+<li><a href="#sec:hosting-and-artifacts">Hosting and artifacts</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h1 id="chp:browser-support-contract">Browser support contract</h1>
+<p><code>ducknng</code> supports browser clients through the <code>duckdb-wasm</code> <code>wasm_eh</code> side-module target. Support is capability-driven: the active network backend reports one compiled descriptor through <code>ducknng_transport_capabilities()</code> and <code>ducknng_list_transport_capabilities()</code>, and the Chromium conformance runner executes every capability reported as <code>supported</code>. A capability reported as <code>unsupported</code> is skipped rather than simulated. <code>experimental</code> capabilities run as non-gating diagnostics.</p>
+<p>The release-supported browser client scope is extension loading, scalar SQL, whole-response HTTP and HTTPS, real asynchronous unary Fetch with timeout and cancellation, body-codec table helpers, framed RPC and query sessions over HTTP, and asynchronous ducknng-frame-over-WebSocket RPC over <code>ws://</code> and <code>wss://</code>. Browser HTTPS and WSS use the browser trust store. Supplying a ducknng TLS handle is rejected rather than silently ignored.</p>
+<p>Incremental HTTP response bodies, browser listeners, generic browser socket handles, <code>ipc://</code>, raw <code>tcp://</code>, and native POSIX-style <code>tls+tcp://</code> are unsupported. The pthread <code>wasm_threads</code> <code>inproc://</code> path is experimental and does not gate a release. webR is a separate runtime and artifact contract; duckdb-wasm evidence does not establish webR support.</p>
+<h2 id="sec:network-backend">Network backend</h2>
+<p>Shared SQL, RPC, and AIO code calls <code>ducknng_net_backend</code>. Target selection happens once at build time. Native code binds that interface to NNG HTTP and socket operations. Browser code binds it to synchronous XHR for the synchronous whole-response client, Fetch for asynchronous HTTP, and the browser WebSocket frame carrier for asynchronous WS/WSS RPC.</p>
+<p>The descriptor records three-state support for HTTP, HTTPS, incremental response streams, inproc, TCP, IPC, TLS-over-TCP, and WebSocket. It also records whether AIO is genuinely asynchronous, whether timeout and cancellation are honored, and whether TLS is native or browser-managed. <code>make wasm_matrix</code> renders the descriptor into <code>docs/wasm.md</code>; generated matrix prose is not a second authority.</p>
+<p>No <code>__EMSCRIPTEN__</code> transport choice belongs in the method registry or RPC method implementation. Browser-specific bridge code remains in the network adapter and wasm bridge translation units. The manifest and method state machines remain carrier-independent.</p>
+<h2 id="sec:asynchronous-completion">Asynchronous completion</h2>
+<p>Browser HTTP AIO uses <code>fetch()</code> plus <code>AbortController</code>. JavaScript records pending operations in a runtime-owned table; the C runtime pumps settled operations through the same SQL-visible AIO state machine used by native operations. Timeout and cancellation abort the fetch. Because the DuckDB wasm worker event loop runs between queries, SQL wait operations poll rather than block the worker waiting for a callback that cannot run.</p>
+<p>Browser WebSocket AIO uses the same operation table. One persistent <code>WebSocket</code> actor is retained per URL. Requests and replies are correlated FIFO because the server processes one frame at a time per connection and the version-1 ducknng frame has no transport request identifier. Cancelling or timing out one request closes that actor and fails every outstanding request on it, preventing a late reply from being assigned to the wrong operation. Abnormal closes become terminal AIO errors.</p>
+<p>The browser Fetch, XHR, and WebSocket paths enforce the embedding host’s hard hostname allowlist. Browser WebSocket does not expose arbitrary handshake-header control, so configured HTTP headers do not apply to WS/WSS. Cookies and browser credentials remain subject to browser policy.</p>
+<h2 id="sec:frame-carriers">Frame carriers</h2>
+<p>HTTP carries one <code>application/vnd.ducknng.frame</code> request and one framed response per POST. The browser WebSocket carrier sends one binary ducknng frame per WebSocket message and receives one binary reply message.</p>
+<p>The server half of the browser WebSocket carrier lives in <code>src/ducknng_ws_frame.c</code>. An HTTP or HTTPS ducknng service starts a raw-WebSocket sibling endpoint at <code>&lt;mount&gt;/ws</code>, using <code>ws://</code> or <code>wss://</code> respectively. Each frame passes through <code>ducknng_service_authorize_and_dispatch_frame()</code>, the same admission, authorization, accounting, execution-subject, and session checks as the HTTP frame endpoint.</p>
+<p>This browser carrier is not NNG SP-over-WebSocket. Native <code>ws://</code> and <code>wss://</code> continue to use NNG’s SP transport. Browsers use ducknng-frame-over-WebSocket because the JavaScript WebSocket API cannot reproduce NNG’s SP handshake and stream framing. Synchronous browser WS/WSS helpers reject the operation and direct callers to the raw AIO helper family.</p>
+<h2 id="sec:conformance-gate">Conformance gate</h2>
+<p><code>node test/browser/run_smoke.mjs &lt;site&gt; --probes=conformance</code> first compares the scalar capability JSON with the active row returned by the capability table function. It then applies the three-state policy to each carrier probe.</p>
+<p>The <code>wasm_eh</code> gate covers:</p>
+<ul>
+<li>extension loading and scalar SQL;</li>
+<li>same-origin HTTP GET/POST, headers, status-as-data, invalid input, and CORS failures;</li>
+<li>asynchronous Fetch pending, collect, cancellation, timeout, and cleanup;</li>
+<li>JSON, text, and CSV table decoding;</li>
+<li>HTTPS/CORS and explicit TLS-handle rejection;</li>
+<li>raw, structured, AIO, and session RPC over HTTP;</li>
+<li>WS and WSS framed RPC, persistent actor reuse, cancellation, timeout, abnormal close, synchronous-call rejection, and explicit WSS TLS-handle rejection.</li>
+</ul>
+<p>The Pages workflow runs this conformance gate against the CI-built <code>wasm_eh</code> artifact before publishing any demo artifact. The <code>wasm_threads</code> build remains a report-only load check because repeated browser runs still expose runtime load and NNG pthread progress instability.</p>
+<h2 id="sec:incremental-http-bodies">Incremental HTTP bodies</h2>
+<p>The capability descriptor reports browser response streaming as <code>unsupported</code>. Future implementation should follow the direction of <a href="https://github.com/r-lib/nanonext/issues/329"><code>r-lib/nanonext#329</code></a>: open an HTTP session that returns status and headers, then receive body chunks through the ordinary AIO receive model, with a zero-length chunk marking EOF. Browser <code>ReadableStream.getReader()</code> can implement that transport later. Do not expand the public API with another browser-specific streaming method family.</p>
+<h2 id="sec:hosting-and-artifacts">Hosting and artifacts</h2>
+<p>The local harness serves COOP/COEP and no-cache headers. GitHub Pages uses a same-origin mirror of the CI-built side module because direct release assets may not provide the CORS/CORP response headers required by a cross-origin-isolated threaded runtime. The rolling Pages artifact is demo provenance, not a stable binary release channel.</p>
+<p>The detailed build commands, target matrix, and evidence log are in <code>docs/wasm.md</code>. <code>docs/wasm_browser_transport_checklist.md</code> records the completed browser-client scope and explicit non-goals. <code>test/browser/README.md</code> documents the executable probes.</p>
+</div>
+</body>
+</html>

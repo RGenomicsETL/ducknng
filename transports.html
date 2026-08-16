@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>Transports · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<h1 id="chp:ducknng-transport-adapters-and-carrier-boundaries">ducknng transport adapters and carrier boundaries</h1>
+<p>This document defines the transport-family boundary for <code>ducknng</code>. It is intentionally narrower than <code>docs/protocol.md</code>: the protocol document defines the manifest methods, session lifecycle, and payload rules, while this document defines how those same contracts are carried over concrete transport adapters.</p>
+<p>The core rule is simple. Transport adapters may change how bytes move, but they do not change what the bytes mean. The <code>ducknng</code> envelope remains the method layer, Arrow IPC remains the tabular payload layer, JSON remains the control-metadata layer, and the manifest remains the source of truth for public RPC methods. A new transport adapter is therefore not a license to mint parallel method names or alternate session semantics.</p>
+<p>Today <code>ducknng</code> has two implemented transport families. The NNG family covers <code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, and <code>wss://</code>, all of which resolve into the NNG adapter layer isolated in <code>src/ducknng_nng_compat.c</code>. The HTTP family covers <code>http://</code> and <code>https://</code> through the separate adapter in <code>src/ducknng_http_compat.c</code>; native builds use NNG’s supplemental HTTP APIs rather than NNG protocol sockets, while browser wasm builds route client requests through the browser-safe HTTP bridge behind the same adapter boundary. The transport-family parser that classifies URL schemes lives separately in <code>src/ducknng_transport.c</code> so the SQL layer can pick one family cleanly before handing control to the appropriate adapter.</p>
+<p>The stable scheme matrix is:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Accepted schemes</th>
+<th>TLS handle accepted on</th>
+<th>Explicitly rejected</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ducknng_start_server(...)</code></td>
+<td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>, <code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
+<td>unknown schemes; TLS handles on non-TLS schemes</td>
+</tr>
+<tr>
+<td>generic socket API (<code>ducknng_dial_socket</code>, <code>ducknng_listen_socket</code>)</td>
+<td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code></td>
+<td><code>http://</code>, <code>https://</code></td>
+</tr>
+<tr>
+<td>synchronous RPC/session helpers (<code>ducknng_request</code>, <code>ducknng_get_rpc_manifest</code>, <code>ducknng_run_rpc[_params]</code>, <code>ducknng_query_rpc[_params]</code>, <code>ducknng_prepare_query[_params]</code>, and explicit open/fetch/close/cancel helpers)</td>
+<td>NNG schemes plus <code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
+<td>unknown schemes; TLS handles on non-TLS schemes</td>
+</tr>
+<tr>
+<td>synchronous raw RPC/session helpers (<code>ducknng_get_rpc_manifest_raw</code>, <code>ducknng_run_rpc_raw</code>, <code>ducknng_open_query_raw</code>, <code>ducknng_fetch_query_raw</code>, <code>ducknng_close_query_raw</code>, <code>ducknng_cancel_query_raw</code>, <code>ducknng_request_raw</code>)</td>
+<td>NNG schemes plus <code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
+<td>unknown schemes; TLS handles on non-TLS schemes</td>
+</tr>
+<tr>
+<td>raw RPC/session AIO helpers (<code>ducknng_request_raw_aio</code>, <code>ducknng_get_rpc_manifest_raw_aio</code>, <code>ducknng_run_rpc_raw_aio</code>, <code>ducknng_open_query_raw_aio</code>, <code>ducknng_fetch_query_raw_aio</code>, <code>ducknng_close_query_raw_aio</code>, <code>ducknng_cancel_query_raw_aio</code>)</td>
+<td>NNG schemes plus <code>http://</code>, <code>https://</code></td>
+<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
+<td>unknown schemes; TLS handles on non-TLS schemes</td>
+</tr>
+<tr>
+<td>HTTP client helpers (<code>ducknng_ncurl</code>, <code>ducknng_ncurl_aio</code>, <code>ducknng_ncurl_stream_open_aio</code>, <code>ducknng_ncurl_stream_recv_aio</code>, <code>ducknng_ncurl_table</code>)</td>
+<td><code>http://</code>, <code>https://</code></td>
+<td><code>https://</code></td>
+<td>NNG schemes, unknown schemes, TLS handles on <code>http://</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>tls_config_id = 0</code> means no TLS handle. Supplying a non-zero TLS handle on a non-TLS URL is rejected rather than silently ignored. This is part of the security contract: if an operator supplied TLS material, the connection must either use a TLS-capable scheme or fail before dialing/listening. For TLS-capable client URLs (<code>tls+tcp://</code>, <code>wss://</code>, and <code>https://</code>), a TLS handle with <code>auth_mode = 0</code> still verifies the server certificate by default; the <code>auth_mode = 0</code> no-client-certificate behavior applies to server/listener mode only.</p>
+<p>The generic socket API reports expected failures in-band. Its synchronous helpers return a struct with <code>ok</code>, <code>error</code>, nullable <code>nng_error</code>, nullable <code>nng_error_message</code>, <code>socket_id</code>, <code>payload</code>, and <code>url</code>. NNG-returned failures use the numeric NNG error and <code>nng_strerror()</code> text; ducknng validation failures, such as trying to dial <code>https://</code> through the NNG socket layer, keep those NNG fields NULL.</p>
+<p>HTTP is not just a spelling of NNG <code>tcp://</code>, and HTTPS is not just a spelling of NNG <code>tls+tcp://</code>. They share lower network layers, but their application framing is different. NNG <code>tcp://</code> and <code>tls+tcp://</code> carry NNG scalability-protocol frames directly over streams. HTTP/HTTPS carries HTTP requests and responses with methods, paths, headers, status codes, and bodies; <code>ducknng</code> places exactly one framed RPC envelope in that HTTP body. Likewise, NNG <code>ws://</code> and <code>wss://</code> use an HTTP/WebSocket handshake but then carry the NNG WebSocket mapping for scalability protocols, so they remain in the NNG family rather than becoming HTTP carrier routes.</p>
+<p>The HTTP and HTTPS family surfaces through the same primary server helper as the NNG family: <code>ducknng_start_server(...)</code> chooses the carrier from the URL scheme, and <code>http://</code> / <code>https://</code> listeners use <code>contexts = 1</code> because the HTTP carrier does not expose the NNG REP-context model. <code>ducknng_ncurl(...)</code> and unary <code>ducknng_ncurl_aio(...)</code> remain low-level whole-response HTTP primitives. The additive ncurl stream open/receive/close family exposes response headers before body completion and de-frames incremental body reads without changing the unary contract. Open operations resolve scoped credential profiles inside the same client path. SQL scalar helpers that perform transport or lifecycle effects are <code>VOLATILE</code>. Dynamic-schema table functions have no C API volatility flag, so helpers such as <code>ducknng_ncurl_table(...)</code> and <code>ducknng_query_rpc(...)</code> are not per-row retry or mutation primitives. The route helpers remain local configuration, not manifest methods. The manifest describes <code>manifest</code>, <code>handshake</code>, <code>query_prepare</code>, <code>exec</code>, <code>query_open</code>, <code>fetch</code>, <code>close</code>, and <code>cancel</code> once regardless of carrier; <code>docs/http.md</code> pins the framed carrier and <code>docs/http_server_framework.md</code> the companion route layer.</p>
+<p>Sessions, authentication, and execution policy are carrier-neutral. <code>query_open</code> accepts the same Arrow row with SQL, optional controls, and optional parameter tuple over every carrier; fetch/close/cancel retain the same session token and JSON control contract. Required mTLS attaches the same verified identity to session ownership over NNG and HTTP families. Peer/IP admission, service limits, SQL authorization, execution model, and monitor telemetry also retain their meaning when the outer carrier changes.</p>
+<p>The same rule holds for Arrow record batches. The HTTP adapter does not reinterpret row batches as ad hoc JSON arrays or text serialization just because the outer transport is HTTP. When a method returns Arrow IPC or <code>ducknng_quack_batch</code> over NNG, it returns the same row payload over HTTP. When a method returns JSON control metadata over NNG, it returns JSON control metadata over HTTP. Content headers may help a client understand the body, but they do not replace the method contract.</p>
+<p>The intended code boundary is therefore three-way. Transport-family parsing belongs in transport-neutral code such as <code>ducknng_transport.c</code>. NNG-specific socket, listener, TLS, peer-identity extraction from NNG pipes, and aio details belong in <code>ducknng_nng_compat.c</code>. HTTP-specific client/server details and peer-identity extraction from HTTP connections belong in <code>ducknng_http_compat.c</code>. The SQL layer should choose a transport family once from the URL scheme and then hand off to the appropriate adapter instead of scattering scheme-specific branches through session, wire, or Arrow code.</p>
+<p>Because this transport-family split is explicit, <code>http://</code> and <code>https://</code> URLs are rejected by the generic NNG socket layer rather than being silently passed into NNG operations. At the same time, the synchronous request, RPC, and session helpers now route over those schemes through the HTTP adapter, while the unary and incremental ncurl families remain the low-level HTTP/HTTPS transport primitives. <code>ws://</code> and <code>wss://</code> stay on the NNG side of the boundary on native builds: they are NNG transports (SP-over-WebSocket), not aliases for the HTTP carrier. The one exception is the browser (wasm) backend, which has no NNG socket at all: there <code>ws://</code>/<code>wss://</code> route through an async <em>ducknng-frame-over-WebSocket</em> carrier (issue #11) that talks to the server’s raw-WebSocket frame endpoint beside the HTTP mount, and the synchronous helpers reject them (no synchronous WebSocket receive) in favor of the AIO helpers. This routing is data-driven via <code>ducknng_net_backend_carrier_scheme()</code>, which reports <code>ws</code>/<code>wss</code> as carrier schemes only on a backend with no NNG transport, so the native SP behavior is unchanged.</p>
+</div>
+</body>
+</html>

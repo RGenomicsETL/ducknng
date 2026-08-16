@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>HTTP carrier · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/prism-xcode.min.css">
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<div id="TOC">
+<ul>
+<li><a href="#chp:ducknng-http-and-https-transport-adapter-contract">ducknng HTTP and HTTPS transport adapter contract</a>
+<ul>
+<li><a href="#sec:scope">Scope</a></li>
+<li><a href="#sec:current-sql-surface">Current SQL surface</a></li>
+<li><a href="#sec:companion-route-framework">Companion route framework</a></li>
+<li><a href="#sec:operation-oriented-routing-by-url-scheme">Operation-oriented routing by URL scheme</a></li>
+<li><a href="#sec:initial-http-carrier-contract">Initial HTTP carrier contract</a></li>
+<li><a href="#sec:sessions-and-arrow-record-batches-over-http">Sessions and Arrow record batches over HTTP</a></li>
+<li><a href="#sec:tls-and-security">TLS and security</a></li>
+<li><a href="#sec:deferred-items">Deferred items</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h1 id="chp:ducknng-http-and-https-transport-adapter-contract">ducknng HTTP and HTTPS transport adapter contract</h1>
+<p>This document defines the first concrete HTTP and HTTPS transport design for <code>ducknng</code>. It is binding for the HTTP/HTTPS carrier exposed through <code>ducknng_start_server(...)</code>, for the low-level <code>ducknng_ncurl(...)</code> helpers, and for the URL-routed synchronous request, RPC, and session helpers that now use the same carrier automatically when the URL scheme is <code>http</code> or <code>https</code>. The purpose of the document is to keep that surface aligned with the manifest, session, and Arrow contracts instead of letting the project grow a second RPC API that drifts away from the existing method model.</p>
+<p>The governing rule is the same one stated in <code>docs/protocol.md</code> and <code>docs/transports.md</code>: HTTP is a transport adapter, not a second protocol. It changes how the bytes travel. It does not change the registry-backed method set, the query-session lifecycle, or the Arrow-versus-JSON payload contract.</p>
+<h2 id="sec:scope">Scope</h2>
+<p>The initial HTTP adapter is deliberately narrow. Its primary job is still framed RPC carriage for the existing <code>ducknng</code> envelope and method registry. It is not a generic web framework, not a browser asset server, not a WebSocket toolkit, and not an excuse to create path-specific copies of <code>manifest</code>, <code>exec</code>, <code>query_open</code>, <code>fetch</code>, <code>close</code>, or <code>cancel</code>. A separate low-level route layer now exists beside that framed RPC mount, covering exact, prefix, and template patterns while remaining deliberately small and documented separately in <code>docs/http_server_framework.md</code>.</p>
+<p>The generic socket surface remains NNG-only. <code>ducknng_open_socket(...)</code>, <code>ducknng_listen_socket(...)</code>, <code>ducknng_send_socket_raw(...)</code>, <code>ducknng_recv_socket_raw(...)</code>, and the corresponding socket AIO helpers model NNG socket patterns and do not generalize to HTTP. The synchronous low-level socket helpers return a single struct-shaped result with <code>ok</code>, <code>error</code>, nullable <code>nng_error</code>, nullable <code>nng_error_message</code>, <code>socket_id</code>, <code>payload</code>, and <code>url</code>, so expected NNG failures can be handled in SQL without tearing down the DuckDB statement. The HTTP family instead gets its own low-level client helper, <code>ducknng_ncurl(...)</code>, while <code>ducknng_start_server(...)</code> mounts the HTTP/HTTPS carrier when the listen URL uses those schemes and the existing request, RPC, and session helpers route by URL scheme on top of that adapter.</p>
+<h2 id="sec:current-sql-surface">Current SQL surface</h2>
+<p>The shipped low-level synchronous client entry point is:</p>
+<pre><code class="language-sql">ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
+</code></pre>
+<p>Its unary asynchronous companion is:</p>
+<pre><code class="language-sql">ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
+ducknng_ncurl_aio_collect(aio_ids, wait_ms)
+</code></pre>
+<p>Incremental response bodies use an additive split-phase lifecycle:</p>
+<pre><code class="language-sql">ducknng_ncurl_stream_open_aio(url, method, headers_json, body,
+                              timeout_ms, tls_config_id[, profile_id])
+ducknng_ncurl_stream_open_aio_collect(aio_ids, wait_ms)
+ducknng_ncurl_stream_recv_aio(stream_id, max_bytes, timeout_ms)
+ducknng_ncurl_stream_recv_aio_collect(aio_ids, wait_ms)
+ducknng_ncurl_stream_close(stream_id)
+</code></pre>
+<p>They are modeled ergonomically on <code>nanonext::ncurl()</code> / <code>ncurl_aio()</code> while staying faithful to DuckDB SQL conventions and the project preference for in-band error tables. Existing <code>ducknng_ncurl_aio()</code> remains a unary operation that completes with the full body; callers opt into stream handles explicitly rather than having an established function change meaning.</p>
+<p>The implemented return shape is:</p>
+<pre><code class="language-text">TABLE(
+  ok BOOLEAN,
+  status INTEGER,
+  error VARCHAR,
+  headers_json VARCHAR,
+  body BLOB,
+  body_text VARCHAR
+)
+</code></pre>
+<p><code>ok</code> means the HTTP transport operation completed and a response was received. It does not mean the response status was 2xx. <code>status</code> is the HTTP status code when present. <code>error</code> is reserved for local client, connection, timeout, TLS, cancellation, or adapter failures. <code>headers_json</code> is the response header block in a canonical JSON form that preserves order and duplicates. <code>body</code> is the raw response body. <code>body_text</code> is a best-effort UTF-8 decoding of <code>body</code> and is <code>NULL</code> when the body is absent or not valid text. The raw <code>ducknng_ncurl(...)</code> helper is registered through a volatile execution path, so constant arguments are not folded into one cached HTTP response across recursive CTE iterations or repeated row execution. If a retry loop must avoid speculative calls after a stop condition, make the HTTP expression depend on the filtered recursive row, for example by including the attempt number in a query parameter or request body. <code>ducknng_ncurl_aio_collect(...)</code> returns the same raw result columns plus <code>aio_id</code> for terminal handles launched by <code>ducknng_ncurl_aio(...)</code>; expected launch failures such as unsupported schemes or invalid TLS handles are represented as immediate terminal error aio handles and are inspected through the same collect/status path. Those handles are inspected with <code>ducknng_aio_status(...)</code> and released with <code>ducknng_aio_drop(...)</code> like other aio handles.</p>
+<p>The incremental open collect returns <code>aio_id</code>, <code>ok</code>, <code>stream_id</code>, <code>status</code>, <code>error</code>, and <code>headers_json</code> as soon as the response head has arrived. A successful HTTP 4xx or 5xx response still has <code>ok = true</code>, just like unary ncurl. The stream id then accepts one pending receive at a time. Receive collection returns <code>aio_id</code>, <code>ok</code>, <code>stream_id</code>, <code>error</code>, <code>body</code>, and <code>end_of_stream</code>. A data result always has a non-empty raw <code>body</code> and <code>end_of_stream = false</code>; completion is a separate successful result with <code>body = NULL</code> and <code>end_of_stream = true</code>. A timeout, cancellation, malformed HTTP body, or premature fixed/chunked body close is an error rather than EOF. Any receive error makes the stream unreadable; the caller still closes its stream handle explicitly.</p>
+<p>Native streaming reads parse <code>Content-Length</code>, close-delimited responses, and HTTP/1.1 chunked transfer coding below the SQL surface. Chunk-size lines, chunk delimiters, and trailers never appear in <code>body</code>; content codings such as gzip are not transparently decompressed. SSE, NDJSON, and other application-level record parsing remain caller responsibilities. <code>max_bytes</code> bounds one returned body slice and must be between 1 and 67,108,864 bytes. Only one receive aio may be pending per stream.</p>
+<p>Open aios and stream handles have separate lifetimes. Collecting a successful open aio claims its stream id. Dropping a successful open aio before collection closes the unclaimed stream. After collection, callers drop every open/receive aio with <code>ducknng_aio_drop()</code> and close the stream independently with <code>ducknng_ncurl_stream_close()</code>, including after EOF. Closing a stream aborts an active receive before releasing the connection.</p>
+<p>The request-side <code>headers_json</code> argument uses the same canonical JSON shape for symmetry. The preferred contract is an array of objects such as <code>[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/json&quot;}]</code> rather than a plain JSON object, because HTTP header names may repeat and order sometimes matters operationally. Header names must be HTTP tokens, and header values must not contain CR, LF, NUL, tab, DEL, or any other control character. That validation is shared by the client request path, route response headers, explicit response <code>content_type</code> values, stream route content types, and <code>ducknng_http_headers_build(...)</code>, so JSON escapes such as <code>\r</code>, <code>\n</code>, and <code>\u000a</code> are rejected before an HTTP request or response is sent.</p>
+<p>Outbound HTTP credential profiles are runtime-local records resolved inside the HTTP client path rather than in caller SQL. They are managed with:</p>
+<pre><code class="language-sql">ducknng_register_http_profile(profile_id, scheme, host, port, path_prefix,
+                              method, tls_required,
+                              auth_header_name, auth_header_value[, expires_at_ms])
+ducknng_drop_http_profile(profile_id)
+ducknng_list_http_profiles()
+</code></pre>
+<p>When <code>profile_id</code> is supplied to <code>ducknng_ncurl(...)</code>, <code>ducknng_ncurl_aio(...)</code>, <code>ducknng_ncurl_stream_open_aio(...)</code>, or <code>ducknng_ncurl_table(...)</code>, ducknng looks up the profile, checks the request scope, and injects the profile’s authentication header before the request is sent. Scope checks are fail-closed and cover scheme, exact host, optional exact port, segment-aware path prefix, HTTP method, and whether TLS is required. A prefix such as <code>/auth</code> matches <code>/auth</code> and <code>/auth/...</code> but not <code>/authz</code>; use <code>/</code> or a trailing slash for deliberately broad scopes. The current implementation deliberately rejects a caller-supplied header that collides with the profile auth header, including <code>Authorization</code> when that is the profile header, instead of letting caller SQL override the credential. This collision policy applies consistently across the sync, table, and AIO helpers. A broader host-owned header policy should be represented as explicit profile metadata, for example owning the whole header set or accepting only an allowlist of caller headers. <code>ducknng_list_http_profiles()</code> is redacted: it exposes profile id, scope, auth header names, version, Unix-epoch-millisecond timestamps, and expiry, but never raw credential values. These profiles are ducknng runtime credentials; the vendored DuckDB C API in this repository does not expose a stable Secret Manager registration/lookup path, so the resolver is shaped to allow a future Secret Manager or C++ bridge without pretending that integration exists today.</p>
+<p>The raw helper deliberately does not parse response bodies by default. Provider-driven parsing is opt-in through two table helpers:</p>
+<pre><code class="language-sql">ducknng_list_codecs()
+ducknng_parse_body(body, content_type)
+ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])
+</code></pre>
+<p><code>ducknng_list_codecs()</code> lists the built-in body serialization/deserialization providers. <code>ducknng_parse_body(...)</code> takes an existing <code>BLOB</code> plus a <code>Content-Type</code> string and returns provider-specific table output. <code>ducknng_ncurl_table(...)</code> performs one HTTP/HTTPS request, requires a 2xx status, reads the response <code>Content-Type</code>, and returns the parsed body as a DuckDB table. Because its output schema depends on the response body and <code>Content-Type</code>, it is a dynamic-schema table function whose request is resolved during binding; it is not the right primitive for per-row retry loops or lateral chunk fanout. Use raw <code>ducknng_ncurl(...)</code> plus an explicit parse step when row-by-row HTTP execution is required. Missing or unknown content types fall back to a raw <code>body BLOB</code> column.</p>
+<p>The initial built-in providers are content-type driven: raw bytes, UTF-8 text, JSON, Arrow IPC stream, and <code>application/vnd.ducknng.frame</code>. CSV, TSV, and Parquet media types are recognized, but they currently use the generic <code>body BLOB</code> fallback rather than temporary files. JSON is parsed in memory through DuckDB JSON functions and then reuses the same Arrow IPC row mapping that powers <code>ducknng_query_rpc(...)</code>. Arrow IPC stream bytes are decoded with nanoarrow and mapped into DuckDB vectors through the stable manual mapping layer. <code>application/vnd.ducknng.frame</code> returns the same envelope columns as <code>ducknng_decode_frame(...)</code>.</p>
+<p>These parsed helpers are intentionally transport-local conveniences. They do not change the framed RPC method surface and they do not make the HTTP server accept arbitrary JSON, CSV, Parquet, or Arrow bodies at the RPC endpoint.</p>
+<p>The shipped server entry point is:</p>
+<pre><code class="language-sql">ducknng_start_server(name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json])
+</code></pre>
+<p>For <code>http://</code> and <code>https://</code> listeners, <code>contexts</code> must be <code>1</code> because the HTTP carrier does not expose the NNG REP-context model. Starting the server is non-blocking from SQL’s point of view: it installs an NNG HTTP handler, starts the NNG HTTP server, and returns. Requests are accepted by the NNG HTTP server through its asynchronous handler path. The current handler still collects each request body up to <code>recv_max_bytes</code> and dispatches the framed RPC synchronously into the <code>ducknng</code> dispatcher; service-owned DuckDB SQL remains serialized through the runtime execution lane. In other words, the listener is non-blocking, but long-running handler work can still occupy server-side execution resources.</p>
+<p><code>name</code> is the runtime service name. <code>listen</code> is a full HTTP or HTTPS endpoint URL such as <code>http://127.0.0.1:8080/_ducknng</code> or <code>https://127.0.0.1:8443/_ducknng</code>. For the HTTP adapter, the path component is semantically meaningful: it is the RPC mount path. <code>recv_max_bytes</code>, <code>session_idle_ms</code>, and <code>tls_config_id</code> retain their current meanings, and <code>ip_allowlist_json</code> is the optional startup allowlist copied into the service before it starts. <code>tls_config_id = 0::UBIGINT</code> means plaintext for <code>http://</code>. HTTPS listeners require an explicit TLS handle because the server needs certificate material to terminate TLS correctly. In server mode, <code>auth_mode = 0</code> keeps the listener compatible with ordinary TLS by not requiring client certificates; in client mode, the same configured value is fail-closed and verifies the remote server certificate by default. If a server TLS handle uses authentication mode <code>2</code>, the HTTPS server requires a verified client certificate and passes the derived <code>tls:san:&lt;value&gt;</code> or <code>tls:cn:&lt;common-name&gt;</code> caller identity into the same dispatcher path used by NNG TLS transports.</p>
+<p>The matching stop and introspection path remains generic rather than adding HTTP-specific variants. <code>ducknng_stop_server(name)</code> stops a named service regardless of transport family, and <code>ducknng_list_servers()</code> reports the currently registered services without minting transport-specific lifecycle names. That keeps the public surface compact.</p>
+<p><code>ducknng_ncurl(...)</code> and <code>ducknng_ncurl_aio(...)</code> are transport-local and not manifest-derived. They are meant for generic HTTP interactions, adapter debugging, and future interoperability helpers. They are not the only route to <code>ducknng</code> RPC over HTTP because the higher-level synchronous helpers already use the same carrier automatically.</p>
+<p>In browser wasm builds, unary HTTP/HTTPS client operations use the browser-safe adapter behind the same transport boundary. Same-origin requests work directly; cross-origin requests require the remote origin to allow CORS under the browser’s normal rules. HTTPS trust is browser-managed, so nonzero ducknng TLS config handles are rejected in browser mode instead of being silently ignored. Unary browser aios use the asynchronous Fetch completion bridge and support cancellation. Incremental client response streams are currently native-only: browser builds return a terminal error open aio instead of buffering <code>Response.arrayBuffer()</code> and pretending that it is incremental. A future browser implementation must use <code>ReadableStream.getReader()</code> behind the same open/receive/close contract.</p>
+<h2 id="sec:companion-route-framework">Companion route framework</h2>
+<p>HTTP and HTTPS services can now also register additional routes beside the framed RPC mount:</p>
+<pre><code class="language-sql">ducknng_register_http_route(service_name, method, path, handler_sql[, request_max_bytes])
+ducknng_register_http_route_pattern(service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes])
+ducknng_unregister_http_route(service_name, method, path)
+ducknng_unregister_http_route_pattern(service_name, method, match_kind, path_pattern)
+ducknng_list_http_routes()
+ducknng_list_http_workers()
+ducknng_http_request()
+ducknng_http_request_body()
+ducknng_http_headers_get(headers_json, name)
+ducknng_http_headers_build(names, values)
+ducknng_http_query_param_get(query_string, name)
+ducknng_http_cookie_get(cookie_header, name)
+ducknng_http_path_params_get(path_params_json, name)
+ducknng_http_header(name)
+ducknng_http_query_param(name)
+ducknng_http_cookie(name)
+ducknng_http_path_param(name)
+ducknng_http_response(status, headers_json, content_type, body, body_text)
+ducknng_http_text(status, body_text)
+ducknng_http_json(status, body_text)
+ducknng_http_binary(status, body)
+</code></pre>
+<p>These helpers are transport-local service tooling, not manifest-derived RPC methods. A route handler is one SQL query that returns exactly one response row, with optional <code>status</code>, <code>headers_json</code>, <code>content_type</code>, <code>body</code>, and <code>body_text</code> columns. Request context comes from <code>ducknng_http_request()</code> and <code>ducknng_http_request_body()</code> while that handler runs. The named header, query, cookie, and path helpers are small accessors over those same context rows, and the response macros build the same one-row route response shape.</p>
+<p>When a route needs per-request dynamic backend session control, use the raw synchronous session helpers:</p>
+<ul>
+<li><code>ducknng_open_query_raw(...)</code></li>
+<li><code>ducknng_fetch_query_raw(...)</code></li>
+<li><code>ducknng_close_query_raw(...)</code></li>
+<li><code>ducknng_cancel_query_raw(...)</code></li>
+</ul>
+<p>and inspect the returned frames with:</p>
+<ul>
+<li><code>ducknng_frame_version(...)</code></li>
+<li><code>ducknng_frame_type(...)</code></li>
+<li><code>ducknng_frame_flags(...)</code></li>
+<li><code>ducknng_frame_type_name(...)</code></li>
+<li><code>ducknng_frame_name(...)</code></li>
+<li><code>ducknng_frame_payload(...)</code></li>
+<li><code>ducknng_frame_payload_text(...)</code></li>
+<li><code>ducknng_frame_error_text(...)</code></li>
+<li><code>ducknng_frame_end_of_stream(...)</code></li>
+</ul>
+<p>The structured table helpers remain the ergonomic client-facing surface. The raw scalar helpers are the correct route-layer surface when parameters come from request-body columns or continuation-token columns.</p>
+<p>The important boundary stays the same:</p>
+<ul>
+<li>the framed RPC mount still lives exactly at the path encoded in the service listen URL</li>
+<li>registered routes must not conflict with that mount path</li>
+<li>routes are application routes beside the frame carrier, not a second RPC namespace</li>
+<li>routes inherit the same admission stack and the configured service execution model as the rest of the service</li>
+</ul>
+<p>For the precise route contract, request/response shape, and execution-model caveats, see <code>docs/http_server_framework.md</code>.</p>
+<h2 id="sec:operation-oriented-routing-by-url-scheme">Operation-oriented routing by URL scheme</h2>
+<p>The existing synchronous request, RPC, and session helpers remain operation-oriented and route by URL scheme instead of forcing callers to learn a second RPC client API.</p>
+<p>That means URLs like <code>http://127.0.0.1:8080/_ducknng</code> and <code>https://127.0.0.1:8443/_ducknng</code> are accepted by the existing synchronous helpers:</p>
+<ul>
+<li><code>ducknng_request(...)</code></li>
+<li><code>ducknng_request_raw(...)</code></li>
+<li><code>ducknng_get_rpc_manifest(...)</code></li>
+<li><code>ducknng_get_rpc_manifest_raw(...)</code></li>
+<li><code>ducknng_run_rpc(...)</code></li>
+<li><code>ducknng_run_rpc_raw(...)</code></li>
+<li><code>ducknng_open_query_raw(...)</code></li>
+<li><code>ducknng_fetch_query_raw(...)</code></li>
+<li><code>ducknng_close_query_raw(...)</code></li>
+<li><code>ducknng_cancel_query_raw(...)</code></li>
+<li><code>ducknng_query_rpc(...)</code></li>
+<li><code>ducknng_open_query(...)</code></li>
+<li><code>ducknng_fetch_query(...)</code></li>
+<li><code>ducknng_close_query(...)</code></li>
+<li><code>ducknng_cancel_query(...)</code></li>
+<li><code>ducknng_request_raw_aio(...)</code></li>
+<li><code>ducknng_get_rpc_manifest_raw_aio(...)</code></li>
+<li><code>ducknng_run_rpc_raw_aio(...)</code></li>
+</ul>
+<p>In other words, <code>ducknng_ncurl(...)</code> is the generic HTTP primitive, while the higher-level <code>ducknng</code> RPC and session helpers keep their current names and use the HTTP carrier automatically when the URL scheme is <code>http</code> or <code>https</code>. Structured helpers report carrier failures as <code>ok = false</code> rows. Framed raw helpers report those same local setup or carrier failures as <code>ducknng</code> error frames so dynamic SQL can decode the error without forcing a DuckDB exception.</p>
+<h2 id="sec:initial-http-carrier-contract">Initial HTTP carrier contract</h2>
+<p>The first HTTP adapter should expose one RPC endpoint at the exact path encoded in the <code>listen</code> URL. If the server is started on <code>http://127.0.0.1:8080/_ducknng</code>, then the RPC endpoint is <code>POST /_ducknng</code>. The same rule applies to HTTPS.</p>
+<p>The initial binding is frame-over-HTTP. The request body is one complete <code>ducknng</code> frame. The response body is one complete <code>ducknng</code> frame whenever the adapter successfully reaches the registry-backed dispatcher and obtains a protocol-level reply.</p>
+<p>The normative media type for both request and response is:</p>
+<pre><code class="language-text">application/vnd.ducknng.frame
+</code></pre>
+<p>The HTTP adapter is therefore a carrier for the existing <code>ducknng</code> envelope, not a replacement for it. The HTTP body is not raw SQL text, not ad hoc JSON RPC, and not a path-based method binding. It is the same versioned frame that today travels over NNG.</p>
+<p>The initial method contract is intentionally narrow. <code>POST</code> is the only accepted method on the RPC endpoint. The adapter should reject other methods with <code>405 Method Not Allowed</code>. It should reject an unsupported request <code>Content-Type</code> with <code>415 Unsupported Media Type</code>. It should reject an oversized request with <code>413 Payload Too Large</code>. It should reject a malformed frame with <code>400 Bad Request</code>. Path mismatches are <code>404 Not Found</code>.</p>
+<p>Once the adapter has accepted a request as a valid <code>ducknng</code> frame and handed it to the dispatcher, protocol-level success and protocol-level failure both travel back as ordinary <code>ducknng</code> frames. In that state, HTTP status code <code>200 OK</code> is the correct outer status even when the inner <code>ducknng</code> reply frame is an error frame. HTTP 4xx and 5xx responses are reserved for adapter-level failures that occur before a valid <code>ducknng</code> reply frame exists.</p>
+<p>This distinction is essential. It keeps application errors inside the <code>ducknng</code> protocol, where existing clients already know how to decode them, instead of spreading method failure semantics across two unrelated status systems.</p>
+<h2 id="sec:sessions-and-arrow-record-batches-over-http">Sessions and Arrow record batches over HTTP</h2>
+<p>The HTTP adapter does not alter the session contract. It carries the same methods and payloads that already exist over the NNG carrier.</p>
+<p><code>query_open</code> still accepts an Arrow IPC payload containing exactly one logical request row with <code>sql</code> and optional batch controls. Over HTTP, that Arrow IPC payload remains the payload inside a <code>ducknng</code> request frame, and that frame becomes the HTTP request body. Its JSON reply includes the same <code>session_id</code>, <code>session_token</code>, state metadata, and server-owned effective <code>idle_timeout_ms</code> as the NNG carrier.</p>
+<p><code>fetch</code> still accepts JSON control metadata keyed by <code>session_id</code> and <code>session_token</code>. Over HTTP, that JSON control payload remains the payload inside a <code>ducknng</code> request frame, and that frame becomes the HTTP request body.</p>
+<p><code>fetch</code> still returns either negotiated row payload bytes or JSON control metadata. When rows are returned, Arrow IPC or <code>ducknng_quack_batch</code> bytes remain inside the <code>ducknng</code> reply frame payload exactly as they do over NNG. The HTTP response body is therefore still one <code>ducknng</code> frame whose payload contains the negotiated row serialization. When only control metadata is returned, the HTTP response body is one <code>ducknng</code> frame whose payload contains JSON.</p>
+<p><code>close</code> and <code>cancel</code> retain the same JSON control request and response shapes. They do not become path-specialized HTTP endpoints and they do not gain alternate payload encodings just because the outer carrier is HTTP.</p>
+<p>This means Arrow record batches remain Arrow record batches. They do not become JSON arrays, text tables, or bespoke HTTP chunking formats in the first HTTP adapter. Session ids and session tokens remain frame payload fields. They do not migrate into path segments, query parameters, or HTTP cookies. The same state machine in <code>docs/protocol.md</code> continues to govern <code>query_open</code>, <code>fetch</code>, <code>close</code>, and <code>cancel</code>.</p>
+<h2 id="sec:tls-and-security">TLS and security</h2>
+<p>The HTTP adapter inherits the same trust model and ownership rules described in <code>docs/security.md</code>. It does not introduce a second authentication model. HTTPS uses the same TLS handle model already established for the NNG transport direction, and session ownership remains a protocol-level concern rather than a carrier-local shortcut.</p>
+<p>A successful HTTPS deployment therefore still needs deliberate TLS configuration. Session ownership is proven with the same <code>session_token</code> bearer capability used over NNG, and HTTPS protects that token from network observers. When HTTPS mTLS is enabled with authentication mode <code>2</code>, the adapter also requires a verified peer certificate, derives the caller identity from the first available SAN or, if no SAN is available, the certificate common name, and binds query sessions opened by that caller to the same identity in addition to the bearer token. If a service peer allowlist is active, the HTTPS adapter checks that verified identity before RPC dispatch and returns HTTP <code>403</code> for non-admitted peers. If a service IP/CIDR allowlist is active, the HTTP/HTTPS adapter checks the connection remote address before RPC dispatch and returns HTTP <code>403</code> for non-admitted addresses. If a service SQL authorizer is installed, the HTTP/HTTPS adapter evaluates the same <code>ducknng_auth_context()</code> callback used by NNG framed RPC before method dispatch; callback denials return HTTP <code>403</code> or the callback-provided status. This keeps HTTPS as a carrier for the frame protocol while still allowing transport-level authorization.</p>
+<h2 id="sec:deferred-items">Deferred items</h2>
+<p>The following are explicitly not part of the first HTTP adapter contract.</p>
+<p>Human-friendly convenience routes such as <code>GET /manifest</code> are deferred. They may later be added as transport conveniences that internally map onto the same registry-backed methods, but they are not part of the first binding.</p>
+<p>Additional HTTP-carrier WebSocket application APIs, application-level SSE/NDJSON parsers, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG <code>ws://</code> and <code>wss://</code> transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.</p>
+<p>The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching plus small request-accessor and response-builder helpers. Richer web-toolkit features are still deferred. Static asset serving, route-local authentication policy, HTTP-carrier WebSocket/SSE/NDJSON work, worker lifecycle management, and application gateway products must remain additive layers beside the frame carrier. They must not mint method copies such as <code>http_exec</code>, <code>http_query_open</code>, or <code>http_fetch</code>, and they must not change the frame endpoint’s <code>POST application/vnd.ducknng.frame</code> contract.</p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+</body>
+</html>

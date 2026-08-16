@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>Supported types · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<div id="TOC">
+<ul>
+<li><a href="#chp:ducknng-type-contract">ducknng type contract</a>
+<ul>
+<li><a href="#sec:arrow-ipc">Arrow IPC</a></li>
+<li><a href="#sec:quack-derived-batches">Quack-derived batches</a></li>
+<li><a href="#sec:sql-parameter-tuples">SQL parameter tuples</a></li>
+<li><a href="#sec:bounds-and-unsupported-encodings">Bounds and unsupported encodings</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h1 id="chp:ducknng-type-contract">ducknng type contract</h1>
+<p><code>ducknng</code> moves tables through two negotiated row codecs. Arrow IPC is the
+portable default. <code>ducknng_quack_batch</code> preserves DuckDB chunks for DuckDB-aware
+peers. The codec is independent of the NNG, HTTP, or WebSocket carrier.</p>
+<p>The executable contract is the end-to-end matrix in
+<code>test/sql/ducknng_type_roundtrip.test</code>. It sends values through a running server
+and compares the decoded values on the client over both codecs. Parameter
+binding is covered separately by <code>test/sql/ducknng_parameter_binding.test</code>.</p>
+<h2 id="sec:arrow-ipc">Arrow IPC</h2>
+<p>The receive path accepts these Arrow storage types and constructs the listed
+DuckDB logical types:</p>
+<table>
+<thead>
+<tr>
+<th>Arrow</th>
+<th>DuckDB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>null</code></td>
+<td><code>SQLNULL</code></td>
+</tr>
+<tr>
+<td><code>bool</code></td>
+<td><code>BOOLEAN</code></td>
+</tr>
+<tr>
+<td>signed and unsigned 8/16/32/64-bit integers</td>
+<td>matching DuckDB integer</td>
+</tr>
+<tr>
+<td><code>float32</code>, <code>float64</code></td>
+<td><code>FLOAT</code>, <code>DOUBLE</code></td>
+</tr>
+<tr>
+<td><code>utf8</code>, <code>large_utf8</code></td>
+<td><code>VARCHAR</code></td>
+</tr>
+<tr>
+<td><code>binary</code>, <code>large_binary</code>, <code>fixed_size_binary</code></td>
+<td><code>BLOB</code></td>
+</tr>
+<tr>
+<td><code>date32</code>, <code>date64</code></td>
+<td><code>DATE</code></td>
+</tr>
+<tr>
+<td><code>time32</code>, <code>time64</code></td>
+<td><code>TIME</code>, or <code>TIME_NS</code> for nanoseconds</td>
+</tr>
+<tr>
+<td>timestamp seconds/milliseconds/microseconds/nanoseconds</td>
+<td>matching DuckDB timestamp unit</td>
+</tr>
+<tr>
+<td>timestamp with timezone metadata</td>
+<td><code>TIMESTAMP WITH TIME ZONE</code></td>
+</tr>
+<tr>
+<td>decimal32/64/128</td>
+<td><code>DECIMAL(precision, scale)</code></td>
+</tr>
+<tr>
+<td>duration and Arrow interval variants</td>
+<td><code>INTERVAL</code></td>
+</tr>
+<tr>
+<td>list and large list</td>
+<td><code>LIST</code></td>
+</tr>
+<tr>
+<td>fixed-size list</td>
+<td><code>ARRAY</code></td>
+</tr>
+<tr>
+<td>struct</td>
+<td><code>STRUCT</code></td>
+</tr>
+<tr>
+<td>map</td>
+<td><code>MAP</code></td>
+</tr>
+<tr>
+<td>dense and sparse union</td>
+<td><code>UNION</code></td>
+</tr>
+</tbody>
+</table>
+<p>Nested combinations of list, array, struct, map, and union are decoded
+recursively. Null parent values and null children are preserved.</p>
+<p>The DuckDB-to-Arrow producer uses DuckDB’s Arrow conversion, so a few DuckDB
+types have canonical wire projections rather than identical logical types:</p>
+<ul>
+<li><code>HUGEINT</code> and <code>UHUGEINT</code> are emitted as <code>decimal128(38,0)</code> and return as
+<code>DECIMAL(38,0)</code>. Values outside that decimal domain are not representable.</li>
+<li><code>UUID</code> and <code>ENUM</code> are emitted as UTF-8 and return as <code>VARCHAR</code>.</li>
+<li><code>TIME WITH TIME ZONE</code> returns as <code>TIME</code>; its offset is not preserved.</li>
+<li><code>TIMESTAMP WITH TIME ZONE</code> uses an Arrow timezone timestamp and returns as
+DuckDB <code>TIMESTAMP WITH TIME ZONE</code>; the instant is preserved, not an original
+named-zone identity.</li>
+<li>Ordinary DuckDB strings and blobs are emitted as <code>utf8</code> and <code>binary</code> even
+though the receiver also accepts large and fixed-size variants.</li>
+</ul>
+<p>These are declared normalizations, not silent claims of identity.</p>
+<h2 id="sec:quack-derived-batches">Quack-derived batches</h2>
+<p><code>ducknng_quack_batch</code> is not Arrow. It carries DuckDB logical types and data
+chunks through the ducknng session protocol. The round-trip matrix covers the
+scalar numeric, string/blob, temporal, decimal, interval, huge integer, UUID,
+list, array, struct, map, and union families, including recursive nesting and
+nested nulls. Flat vectors are canonical output. On input, constant and
+dictionary vectors are materialized through DuckDB’s selection-copy C API, so
+the same scalar and recursive type families remain available; sequence vectors
+are accepted for the signed and unsigned integer logical types that DuckDB emits
+as sequences. FSST vectors remain unsupported and fail closed. A client
+selecting this codec must implement the ducknng Quack batch format; selecting it
+does not change session ownership, fetch, cancel, or end-of-stream semantics.</p>
+<p>DuckDB v1.5.2 also defines <code>GEOMETRY</code> (logical id 60) and <code>VARIANT</code>
+(logical id 109), but neither is part of this codec contract. <code>GEOMETRY</code> adds a
+versioned vector-format field and optional CRS type metadata that this codec does
+not yet preserve. <code>VARIANT</code> is a struct-like internal logical type, but v1.5.2’s
+C API does not expose a <code>DUCKDB_TYPE_VARIANT</code> constructor or vector contract.
+Both fail closed rather than being silently normalized to <code>BLOB</code> or <code>STRUCT</code>.
+Support must be gated and tested against each pinned DuckDB serializer/C API
+version; the presence of an internal logical id alone is not a public C contract.</p>
+<h2 id="sec:sql-parameter-tuples">SQL parameter tuples</h2>
+<p><code>exec</code>, <code>query_open</code>, and <code>query_prepare</code> may receive an optional one-row Arrow
+<code>STRUCT</code> named <code>params</code>. Its children form a positional tuple: child order binds
+the SQL <code>?</code> parameters, while child names are descriptive only. The protocol
+limit is 65,535 parameters. A missing or null <code>params</code> row means no parameters.</p>
+<p>Parameters use the same Arrow-to-DuckDB value mappings above, including nested
+list, array, struct, map, and union values. They are bound with
+<code>duckdb_bind_value</code>; values are never interpolated into SQL text. DuckDB’s C
+value API represents a top-level null as untyped <code>SQLNULL</code>, so null parameters
+need type context in the SQL, for example <code>?::BIGINT</code>. Nulls inside a typed
+list, struct, map, array, or union retain their container type.</p>
+<p>Parameterized <code>exec</code> and parameterized <code>query_open</code> accept exactly one SQL
+statement. <code>query_prepare</code> also accepts exactly one statement and returns its
+schema without executing it.</p>
+<h2 id="sec:bounds-and-unsupported-encodings">Bounds and unsupported encodings</h2>
+<p>The Arrow producer rejects logical nesting deeper than 16. The receiver caps
+recursive schema and value conversion at 64, in addition to nanoarrow IPC
+validation. The Quack decoder has its own checked length arithmetic and nesting
+bound. Unknown or malformed types fail with a DuckDB-visible error before row
+materialization.</p>
+<p>Dictionary-preserving round trips, Arrow extension-type semantics, and run-end
+encoded arrays are not supported. <code>ENUM</code> is deliberately normalized to UTF-8;
+arbitrary extension metadata is not treated as an executable type registry.</p>
+</div>
+</body>
+</html>

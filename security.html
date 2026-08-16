@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>Security model · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<div id="TOC">
+<ul>
+<li><a href="#chp:ducknng-security-model-and-threat-surface">ducknng security model and threat surface</a>
+<ul>
+<li><a href="#sec:trust-model">Trust model</a></li>
+<li><a href="#sec:identity-and-authentication">Identity and authentication</a></li>
+<li><a href="#sec:tls-and-transport-exposure">TLS and transport exposure</a></li>
+<li><a href="#sec:envelope-and-wire-safety">Envelope and wire safety</a></li>
+<li><a href="#sec:method-registry-and-dispatch">Method registry and dispatch</a></li>
+<li><a href="#sec:sessions-and-ownership">Sessions and ownership</a></li>
+<li><a href="#sec:duckdb-execution-surface">DuckDB execution surface</a></li>
+<li><a href="#sec:manifest-disclosure">Manifest disclosure</a></li>
+<li><a href="#sec:future-transport-patterns">Future transport patterns</a></li>
+<li><a href="#sec:resource-bounds-and-denial-of-service">Resource bounds and denial of service</a></li>
+<li><a href="#sec:implementation-checklist">Implementation checklist</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h1 id="chp:ducknng-security-model-and-threat-surface">ducknng security model and threat surface</h1>
+<p>This document is binding for security-relevant decisions in <code>ducknng</code>. It describes the trust model the framework assumes, the threats that follow from framing <code>ducknng</code> as an RPC server rather than a single-client helper, and the invariants the transport, envelope, registry, manifest, and session layers must uphold. Security is treated here the same way protocol, manifest, and type policy are treated elsewhere in <code>docs/</code>: as part of the public contract that implementation must conform to.</p>
+<h2 id="sec:trust-model">Trust model</h2>
+<p><code>ducknng</code> is a multi-client RPC server. The central invariant, inherited from <code>docs/protocol.md</code>, is that different clients may talk to the same service concurrently and one client must not corrupt, observe, or hijack another client’s state. Every security property in this document is a consequence of that invariant applied to a specific layer of the framework. The server must never assume that a single caller, a single transport connection, or a single process owns the whole service. That assumption is the difference between a DuckDB helper and an RPC framework, and it governs how sessions, registries, and manifests must be designed.</p>
+<p>The framework does not define its own cryptographic primitives. Channel confidentiality and integrity come from NNG transport options, client identity comes either from the transport layer or from an RPC-level handshake, and authorization is expressed per method through descriptors in the registry. Those three concerns are separate and must remain separate. Collapsing them into one layer is the most common way an RPC framework grows surprise trust relationships.</p>
+<h2 id="sec:identity-and-authentication">Identity and authentication</h2>
+<p><code>ducknng</code> must declare an explicit identity model before sessions, registries beyond discovery, and non-trivial methods are shipped. There are several coherent layers this model can use; the implementation must document which layers are active and how they compose rather than letting implicit trust relationships accumulate.</p>
+<p>The first shape is transport-level trust. In this model the chosen NNG transport provides the trust boundary, whether that is <code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, or <code>wss://</code>, and network authentication is enforced by the transport when the deployment requires it. The RPC layer does not carry identity of its own and instead relies on transport properties such as validated TLS peer identity, process-local <code>inproc://</code> boundaries, or filesystem boundaries around a Unix socket. This model requires that TLS be fully implemented when advertised, not silently skipped by a shim, and that user-facing docs make clear that transport choice and exposure are deployment decisions rather than framework-imposed policy. It also means the framework must accept ordinary NNG listener and dial URLs through one transport-agnostic API surface rather than multiplying functions by transport scheme.</p>
+<p>The second shape is RPC-level authentication. In this model a control method performs a handshake that returns a capability token, and every subsequent envelope carries that token as an explicit field. Descriptors declare which methods require authentication, and the dispatcher refuses protected methods without a valid token. This model requires an envelope field for the token, not ad-hoc encoding inside payloads, and that field must be added while the envelope is still free to evolve rather than retrofitted later.</p>
+<p>The third shape is per-pipe identity derived from NNG pipe metadata. In this model the first message observed on a new <code>nng_pipe</code> establishes an identity, either from a validated TLS peer certificate or from a handshake, and that identity is attached to every subsequent message dispatched from that pipe. Sessions and authorization bind to pipe identity. This model requires the compatibility shim to expose pipe identifiers to the dispatcher, and it requires an explicit policy for what happens when a pipe disconnects and reconnects.</p>
+<p>The current implementation combines three deliberately narrow mechanisms. First, query sessions use an RPC-level bearer capability: <code>query_open</code> returns an unguessable session-scoped bearer token, the server stores that token beside the session id, and <code>fetch</code>, <code>close</code>, and <code>cancel</code> must present both <code>session_id</code> and <code>session_token</code>. Second, when a request arrives over a TLS transport with a verified peer certificate, the dispatcher attaches a transport-derived caller identity to the request context. The identity currently prefers the first subject alternative name as <code>tls:san:&lt;value&gt;</code> and falls back to the peer certificate common name as <code>tls:cn:&lt;common-name&gt;</code>. A listener configured with TLS authentication mode <code>2</code> (<code>NNG_TLS_AUTH_MODE_REQUIRED</code>) requires such a verified identity before dispatching any method; mode <code>1</code> (<code>OPTIONAL</code>) records identity when the transport supplies one but still permits unauthenticated callers. Third, a TLS config or running service can carry an exact verified-peer allowlist. When that allowlist is active, only listed identities are admitted; <code>NULL</code> or an empty SQL string clears the allowlist and returns to the default-open policy, while an empty JSON array <code>[]</code> is active deny-all. Fourth, a service can carry an IP/CIDR allowlist using IPv4/IPv6 literals or CIDR blocks. That allowlist is parsed once into binary rules and can be installed at service startup or changed dynamically with <code>ducknng_set_service_ip_allowlist(...)</code>. Fifth, a service can carry basic resource limits such as <code>max_open_sessions</code>, NNG <code>max_active_pipes</code>, <code>max_inflight_requests</code>, and <code>max_sessions_per_peer_identity</code>, set dynamically with <code>ducknng_set_service_limits(...)</code>. Sixth, a service can install a SQL authorization callback with <code>ducknng_set_service_authorizer(...)</code>. The callback reads the uniform request context through <code>ducknng_auth_context()</code> and returns one row with an <code>allow</code> decision plus optional status, reason, principal, claims, and cache hint columns.</p>
+<p>This removes bare-identifier session hijacking without introducing an RPC login handshake. It is not a complete user/role system. <code>exec</code> is not registered by default; <code>ducknng_register_exec_method(true)</code> requires verified transport identity for that method, while <code>false</code> does not. That switch controls only the unary method. The always-on <code>query_open</code> method accepts DuckDB SQL, may execute multiple statements, and truthfully advertises <code>mutates_state = true</code>. Withholding <code>exec</code> therefore does not make a service read-only. A read-only deployment must enforce statement policy through <code>ducknng_set_service_authorizer(...)</code>, connection/database permissions, or a separately constrained DuckDB execution context.</p>
+<p>Listener TLS authentication mode <code>2</code> requires verified identity before any method dispatch. The framework does not choose exposure policy for the operator: plaintext and TLS URL schemes are explicit host decisions. TLS identity exists only when peer verification succeeds and the certificate exposes a usable SAN or common name; deployments relying on it must keep those identities unique within the trusted CA set.</p>
+<p>NNG transport admission uses NNG’s own pipe primitive: the service registers <code>NNG_PIPE_EV_ADD_PRE</code>, <code>NNG_PIPE_EV_ADD_POST</code>, and <code>NNG_PIPE_EV_REM_POST</code> callbacks with <code>nng_pipe_notify(...)</code>, reads verified TLS peer metadata and remote-address metadata (<code>NNG_OPT_REMADDR</code>) from the <code>nng_pipe</code>, records bounded monitor events for <code>ducknng_read_monitor(...)</code>, and calls <code>nng_pipe_close(...)</code> before the pipe is added to the socket when the peer identity or remote address is not admitted. The dispatcher also re-checks the current dynamic fast-path policy for each request, so policy changes affect already-open pipes even though those pipes are not retroactively removed by the ADD_PRE callback. SQL authorizers run after a complete frame has reached the request/dispatch boundary, where method name, transport family, remote address, and HTTP metadata are available without blocking NNG’s pipe callback. The HTTP/HTTPS carrier checks the same fast-path and SQL authorizer policy before RPC dispatch and returns HTTP <code>403</code> or the callback-provided status for non-admitted peers or remote addresses. For plaintext <code>tcp://</code>, <code>ws://</code>, or <code>http://</code>, there is no cryptographic peer identity to allowlist; IP/CIDR allowlists and SQL callbacks can still narrow access, but deployments should treat them as network/application gates rather than authenticated transport identity.</p>
+<p>The session-family identity contract is therefore sealed around the session token plus optional verified transport identity. The session token remains a bearer secret and, when present, the verified peer identity is an additional owner constraint. It must not be logged casually, embedded in public URLs, or sent over a transport whose exposure would let another principal observe it. A future full authentication model may add envelope-level credentials or richer certificate identity such as certificate fingerprints as an additive capability, but such a layer is not required for the current session contract and must not weaken the existing <code>session_token</code> and mTLS owner checks.</p>
+<h2 id="sec:tls-and-transport-exposure">TLS and transport exposure</h2>
+<p>TLS must either work or not be advertised. Accepting TLS configuration while silently ignoring it is a security defect rather than a future feature, because a caller who supplies that configuration reasonably believes the channel is encrypted and authenticated. The current implementation applies supplied TLS configuration to <code>tls+tcp://</code> and <code>wss://</code> listeners, to HTTPS frame-carrier servers, to the one-shot raw client request path, to the structured one-shot request/RPC/session helper family that rides on that path, to generic socket dialing through <code>ducknng_dial_socket(..., tls_config_id)</code>, and to the unary and incremental <code>ducknng_ncurl</code> families for HTTPS client requests, while still rejecting TLS configuration on non-TLS URL schemes. In client mode, <code>auth_mode = 0</code> is interpreted as the safe default: the server certificate must verify against the configured CA material and hostname. Server/listener mode keeps the existing peer-authentication meaning where <code>auth_mode = 0</code> does not require client certificates, and <code>auth_mode = 2</code> is the mTLS-required setting. The authentication mode and default peer allowlist are exposed through <code>ducknng_list_tls_configs()</code>, and service introspection through <code>ducknng_list_servers()</code> exposes <code>execution_model</code>, <code>active_pipes</code>, <code>max_active_pipes</code>, <code>inflight_requests</code>, <code>max_inflight_requests</code>, <code>max_sessions_per_peer_identity</code>, <code>tls_enabled</code>, <code>tls_auth_mode</code>, <code>peer_identity_required</code>, <code>peer_allowlist_active</code>, <code>peer_allowlist_count</code>, <code>ip_allowlist_active</code>, <code>ip_allowlist_count</code>, and <code>sql_authorizer_active</code>. A listener configured with TLS but no client-certificate requirement is explicitly distinct from one configured with mutual TLS.</p>
+<p>The TLS configuration model should not be file-only. The runtime accepts certificate authority material, server certificates, and private keys either from filesystem paths or from in-memory PEM content so that embedded clients and generated test fixtures do not need to round-trip through temporary files. The project also provides helper utilities for assembling client and server TLS configuration and for generating self-signed development certificates, in the same general spirit as the <code>nanonext</code> TLS helpers, while keeping the actual NNG/TLS wiring inside the compatibility layer. <code>ducknng_set_tls_peer_allowlist(tls_config_id, identities_json)</code> sets the allowlist copied into future services that use a TLS handle. <code>ducknng_set_service_peer_allowlist(name, identities_json)</code> changes the same policy dynamically for a running service. <code>ducknng_start_server(...)</code> accepts an optional <code>ip_allowlist_json</code> startup argument for every carrier, with <code>http://</code> and <code>https://</code> listeners additionally requiring <code>contexts = 1</code>, while <code>ducknng_set_service_ip_allowlist(name, cidrs_json)</code> changes remote-address admission dynamically. <code>ducknng_set_service_limits(name, max_open_sessions)</code> sets the query-session cap, <code>ducknng_set_service_limits(name, max_open_sessions, max_active_pipes)</code> also sets the NNG active-pipe cap, <code>ducknng_set_service_limits(name, max_open_sessions, max_active_pipes, max_inflight_requests)</code> also sets the concurrent request-boundary cap, and <code>ducknng_set_service_limits(name, max_open_sessions, max_active_pipes, max_inflight_requests, max_sessions_per_peer_identity)</code> also caps concurrent sessions per verified peer identity; <code>0</code> means unlimited for any cap. <code>ducknng_set_service_authorizer(name, authorizer_sql)</code> installs or clears the flexible SQL callback; <code>ducknng_auth_context()</code> intentionally returns one row only while that callback is being evaluated.</p>
+<p><code>ipc://</code> listeners on shared filesystems are subject to filesystem access control. The server must create the socket under a path whose directory permissions restrict access to the intended principal, or must apply restrictive permissions to the socket itself after bind. The default <code>/tmp</code> path used in examples is suitable for single-user development and not for multi-user hosts. That distinction must appear in any user-facing example.</p>
+<p>The implemented HTTP and HTTPS transport adapter inherits the same trust model rather than defining a second security model. <code>ducknng_start_server(...)</code> on <code>http://</code> / <code>https://</code>, <code>ducknng_ncurl(...)</code>, and <code>ducknng_ncurl_aio(...)</code> are transport-local helpers, not alternate manifest methods and not authorization bypasses. Registry policy, manifest visibility, session ownership, and Arrow-versus-JSON payload rules must remain identical across carriers even if the outer transport adds headers, status codes, or other HTTP-native metadata. Request and response <code>headers_json</code> values, explicit route response <code>content_type</code> values, and stream route content types reject CRLF and all other control characters before touching NNG HTTP header APIs, so caller-provided headers cannot smuggle additional header lines through string values.</p>
+<p>Outbound HTTP credential profiles are fail-closed runtime credentials. A profile carries a non-secret id, request scope, one injected authentication header, version/timestamp/expiry metadata, and the secret header value. The sync, table, unary-AIO, and streaming-open ncurl paths share the same resolver: before sending, ducknng checks scheme, exact host, optional exact port, segment-aware path prefix, method, and TLS requirement, rejects the request if the URL or method falls outside scope, and then injects the profile auth header. A caller header that collides with the profile auth header is rejected rather than allowed to override the credential. If a deployment needs the host to own additional headers beside the injected one, that should be explicit profile policy, for example whole-header ownership or a caller-header allowlist. Introspection through <code>ducknng_list_http_profiles()</code> is redacted and exposes only profile id, scope, auth header names, version, timestamps, and expiry. The current DuckDB C API headers vendored here do not expose a stable Secret Manager register/lookup API, so these profiles are ducknng-managed today while keeping the resolver boundary suitable for future Secret Manager or C++ bridge integration.</p>
+<h2 id="sec:envelope-and-wire-safety">Envelope and wire safety</h2>
+<p>The envelope is the first line of defense because every byte that reaches a method handler first passes through the decoder. The envelope must be versioned, and the version must be checked. <code>docs/protocol.md</code> calls the version field mandatory, and the implementation must enforce that by reading a version byte from a fixed position and rejecting frames whose version the server does not understand. Silently misparsing a future envelope as a current one is a forward-compatibility hole and a security hazard, because attacker-influenced bytes land in field positions whose semantics differ between versions.</p>
+<p>The decoder must bound every length field before using it. Method names, error strings, and payloads each have their own length, and the sum of these lengths plus the fixed header must not exceed the configured receive limit. Arithmetic performed on wire-provided lengths must be carried out in a width that cannot wrap on any supported platform. The same rule applies to <code>ducknng_quack_batch</code>: top-level schema column counts, reader offsets, fixed-width vector byte counts, array child row counts, list child sizes, and cumulative row counts are checked before allocation, casts, pointer arithmetic, or copies, and overlarge source chunks are rejected instead of being sliced through wrapped arithmetic. The compressed-vector decoder additionally caps each chunk at 4,194,304 cumulative materialized values and checks the budget before temporary-vector or list-child allocation, preventing a small sequence/dictionary body from requesting unbounded expansion. Method names are short protocol labels and must be capped at a small, documented maximum so that an attacker cannot force the dispatcher to scan gigabyte-scale name buffers against the registry. Error strings on incoming frames are not trusted input for the handler and should be ignored when the envelope type is a call.</p>
+<p>Flags are contract rather than freeform bytes. Each method descriptor declares which flag bits it accepts on requests and which it emits on replies. The dispatcher must reject unknown flag bits on incoming frames rather than ignoring them, because ignore-unknown is the behavior that turns future flag allocations into silent protocol breaks. This rule applies uniformly across methods and does not have per-method exceptions.</p>
+<h2 id="sec:method-registry-and-dispatch">Method registry and dispatch</h2>
+<p>The registry is a security boundary, not only an extensibility mechanism. Only methods registered in the registry may be dispatched, and the dispatcher must never contain a hardcoded method name that shortcuts the registry. Each descriptor must carry, in addition to the fields required by <code>docs/manifest.md</code>, the security-relevant properties that the dispatcher needs to enforce before calling a handler. Those properties include whether the method requires authentication, whether it mutates server state, whether it requires an already-open session, whether it opens a new session, the maximum accepted request payload size, the maximum permitted reply payload size, and whether the method is deprecated to the point of being disabled on this deployment.</p>
+<p>Enforcement should happen in the dispatcher and session manager, not as scattered per-method folklore. The dispatcher validates the envelope, method lookup, flags, payload limits, and any required verified peer identity before a handler runs; the session manager verifies session-token ownership and mTLS owner-identity binding before returning or removing a session. Future sessionful methods should continue moving toward a request-context path where handlers receive already-resolved authorized session state instead of each inventing a separate ownership check. The manifest exported to clients is derived from the same descriptors, so whatever the manifest says about authentication, session behavior, and payload limits must be enforced by the same runtime path.</p>
+<p>Bulk registration and unregistration are part of this story. The registry can remove individual methods or every method in a family, and unregistration is session-aware: it refuses to unregister a sessionful method or family while any service still has open sessions. That conservative policy is safer than stranding client-owned state. A later drain mode may refuse new openings while existing sessions are allowed to complete or are force-closed through a documented lifecycle, but silent removal of live session control methods is not permitted.</p>
+<h2 id="sec:sessions-and-ownership">Sessions and ownership</h2>
+<p>Sessions are the framework’s main cross-client trust boundary and must carry an explicit owner. In the current query-family implementation the baseline owner proof is a session-scoped bearer token generated at <code>query_open</code>. The server records that token as session metadata and refuses <code>fetch</code>, <code>close</code>, and <code>cancel</code> when the supplied token does not match. If <code>query_open</code> arrived with a verified mTLS caller identity, the server also records that identity and requires later <code>fetch</code>, <code>close</code>, and <code>cancel</code> requests to arrive with the same identity. A session with no owner token is a defect; a session with an owner identity must reject a matching token presented by a different or unauthenticated peer.</p>
+<p>Ownership is modeled as session metadata that lives beside the session id rather than inside it. The session id is only a lookup key. The owner token, optional owner identity, creation timestamp, idle deadline, current lifecycle state, and originating method descriptor are separate fields that the dispatcher or session manager checks on every session-referencing call. This keeps later identity-model changes out of the public <code>session_id</code> format and prevents accidental capability semantics from creeping into the identifier string.</p>
+<p>Session identifiers are not capabilities. A session identifier may be observed, logged, or guessed, and the server must not rely on identifier secrecy for access control. Ownership checks must be performed on every session-referencing call using the session token or a future stronger principal. This rule matters even when the server appears to be single-tenant, because the framework is designed for multi-client use and regressing to identifier-only checks under a single-tenant assumption is how multi-tenant deployments later break.</p>
+<p>Session lifecycle is part of the security contract. A session has an explicit open, an explicit close, and an idle timeout. The idle timeout counts only owner activity; non-owner references to a session must not reset the idle counter, because otherwise an attacker who can enumerate or guess identifiers can keep sessions alive indefinitely or, in a different implementation, prevent their cleanup. Cancel is best-effort by the nature of the NNG REP pattern, and its exact guarantees must appear both in <code>docs/protocol.md</code> and in the method descriptor so that clients and operators understand what a successful cancel reply does and does not promise.</p>
+<p>The required guarantees for the query family are intentionally narrow. A successful <code>cancel</code> reply acknowledges that the server accepted the request to stop further work on that session; it does not guarantee that the underlying DuckDB work was interrupted before producing more rows, nor does it by itself guarantee resource reclamation. Resource reclamation is guaranteed only after <code>close</code>, idle expiry, or an explicit cancel reply that states the session is already closed. A successful <code>fetch</code> after end-of-stream is a protocol misuse and should return a structured error instead of reopening or rewinding the session.</p>
+<p>The default implementation serializes service-owned SQL through a shared runtime connection. That contract is surfaced as <code>server.execution.model = &quot;shared_serialized_connection&quot;</code> in the manifest and as <code>execution_model</code> in <code>ducknng_list_servers()</code>. It can be a valid deployment choice when a service is treated as a single DuckDB execution lane. Services that need same-runtime gateway composition or more isolation can switch to <code>service_serialized_connection</code> or <code>request_connection</code> with <code>ducknng_set_service_execution_model(...)</code> before they have active requests or open sessions. Execution-pool connections are opened from the same database handle at extension initialization; they share the same database and catalog, but not temp/session state from the init connection.</p>
+<h2 id="sec:duckdb-execution-surface">DuckDB execution surface</h2>
+<p>DuckDB is a capable engine, and the capabilities that are innocuous for a local library become dangerous when exposed over an RPC boundary. <code>COPY ... TO</code> and <code>COPY ... FROM</code> provide filesystem write and read under the server’s process identity. <code>ATTACH</code> opens arbitrary database files. <code>INSTALL</code> and <code>LOAD</code> bring in native extension code. The <code>httpfs</code> family, when available, performs outbound network requests. On an unauthenticated or loosely authenticated deployment these capabilities reach well beyond the tabular surface the RPC framework is intended to expose.</p>
+<p>This is a deployment boundary, not an automatic <code>ducknng</code> sandbox. <code>ducknng</code> transports and dispatches SQL that a deployment has deliberately exposed through <code>exec</code> or query sessions; it does not rewrite that SQL into a safe subset, and it does not promise to make arbitrary untrusted SQL safe. The extension must instead keep its own SQL construction safe: remote SQL text is executed only as the requested DuckDB statement, not interpolated into hidden administrative SQL; internal SQL that <code>ducknng</code> builds from data values must quote or bind those values; service SQL authorizers are deployment-supplied policy queries and should read request fields through <code>ducknng_auth_context()</code> rather than string-concatenating untrusted HTTP headers, method names, or payload text into new SQL. The JSON body parser is an example of the intended rule: body bytes are copied to text and quoted as a SQL literal before DuckDB JSON functions see them.</p>
+<p>Recommended deployment profiles are:</p>
+<ol>
+<li><strong>Local development / single-user IPC</strong>: use <code>inproc://</code>, loopback, or an <code>ipc://</code> socket in a private directory; accept default-open SQL only inside that trust boundary.</li>
+<li><strong>Trusted service mesh</strong>: use <code>tls+tcp://</code>, <code>wss://</code>, or <code>https://</code> with mTLS (<code>auth_mode = 2</code>), exact peer allowlists, useful IP/CIDR limits, and service limits. Register unary <code>exec</code> only when clients need it; authorize <code>query_open</code> independently because it already executes SQL.</li>
+<li><strong>Shared or semi-trusted clients</strong>: do not expose free-form SQL through either <code>exec</code> or <code>query_open</code> unless the deployment authorizes those clients to run DuckDB SQL as the server process. Install a SQL authorizer and use OS/container/database configuration to restrict filesystem, extension loading, outbound network, and attachment capabilities.</li>
+<li><strong>Public/untrusted internet</strong>: do not expose raw DuckDB SQL execution directly. Put <code>ducknng</code> behind a gateway that authenticates, rate-limits, and maps users to a narrow application-level API, or use the HTTP route layer to expose fixed queries or stored operations rather than arbitrary SQL text. When that gateway needs to call another <code>ducknng</code> backend synchronously, prefer a separate DuckDB process or runtime boundary instead of a sibling service in the same shared execution lane.</li>
+</ol>
+<p>Any filesystem, extension-loading, outbound-network, or attachment lockdown is therefore an operator responsibility expressed through DuckDB configuration, process/container sandboxing, reverse proxies, service meshes, and authorization policy. Future helper profiles may make those settings easier to apply, but the sealed <code>ducknng</code> contract is that dangerous SQL is dangerous by design and must be exposed only inside an appropriate deployment boundary.</p>
+<p>Reply size is bounded per method. Unary <code>exec</code> is not the correct place to return arbitrarily large result sets, and its descriptor must declare a maximum reply size that fits a unary reply. Results larger than that bound must be produced through the session family, where clients opt into incremental <code>fetch</code> and the server can apply its own backpressure. This is both a denial-of-service mitigation and an alignment with the protocol’s own stated purpose for the session family.</p>
+<p>Error payloads are structured. The envelope carries an error string for human readability, but the normative error signal is a code from the documented status enum. Handlers must not lean on the free-form string to communicate state that clients must act on, because this forces clients to parse English and leaks more about internal schemas and identifiers than the contract intends. Verbose error detail may be made available through a server-side configuration flag for development, but the default must be the narrow structured form.</p>
+<h2 id="sec:manifest-disclosure">Manifest disclosure</h2>
+<p>The manifest is designed to describe the full public capability surface, and that design is correct for clients that are authorized to see that surface. In the default implementation, <code>manifest</code> is registered without descriptor-level <code>requires_auth</code>, but deployments can protect it with the same descriptor policy used for other methods through <code>ducknng_set_method_auth('manifest', true)</code>. A listener configured with TLS authentication mode <code>2</code> also requires verified peer identity before dispatching every method, including <code>manifest</code>, because that listener policy is stronger than descriptor-local auth. A deployment that requires authentication for discovery must return a consistent and minimal pre-auth response rather than partial method lists that leak which methods exist.</p>
+<p>The manifest is derived from the registry and therefore never reveals methods that the registry does not contain. Conversely, the registry must never expose methods that the manifest does not describe. Drift between the two is a security defect because it either hides methods that are dispatchable or advertises methods that are not, and both shapes produce misleading client and operator expectations.</p>
+<h2 id="sec:future-transport-patterns">Future transport patterns</h2>
+<p>PUB/SUB is reserved by <code>docs/protocol.md</code> for server-originated fanout. Broadcast is an inherent property of the pattern, and PUB/SUB events therefore must not carry per-client-confidential payloads, per-session state, or any data that would be unsafe to deliver to every subscriber. Per-client or per-session notifications require a different pattern, such as SURVEY/RESPONDENT keyed on identity or a session-scoped reply channel, and that choice must be made in <code>docs/protocol.md</code> before the PUB/SUB surface is populated. Event schemas published through PUB/SUB are manifest-declared like any other method output and are subject to the same type-contract discipline described in <code>docs/types.md</code>.</p>
+<p>The implemented HTTP/HTTPS carrier does not change that rule. Transport adapters may widen how clients reach the same registry-backed methods, but they do not alter which payloads are fanout-safe, session-bound, or confidential.</p>
+<h2 id="sec:resource-bounds-and-denial-of-service">Resource bounds and denial of service</h2>
+<p>The current implementation enforces the baseline limits that are part of the stable service contract: the listener receive-size limit bounds a single request body, method descriptors declare maximum request and reply sizes, query sessions have an idle timeout configured at service start and returned to clients as the effective <code>idle_timeout_ms</code> in <code>query_open</code> replies, running services can enforce a <code>max_open_sessions</code> cap before <code>query_open</code> registers a new session, NNG services can enforce a <code>max_active_pipes</code> cap at pipe <code>ADD_PRE</code> admission, all RPC carriers can enforce a <code>max_inflight_requests</code> cap before SQL authorizers and dispatch, and mTLS deployments can cap open sessions per verified peer identity with <code>max_sessions_per_peer_identity</code>. In the current stable model, the only built-in quota owner identities are the service itself and the verified peer identity; the optional SQL-authorizer <code>principal</code> column is request metadata for deployment policy and audit, not yet durable session ownership metadata. Future additive limits may include concurrent in-flight requests per pipe or principal, principal-based open-session caps, cumulative reply bytes per owner, and session-open rate limits. Per-session idle-timeout hints should only be considered later if bounded by server-side defaults and maxima. Those limits should live in server configuration with conservative defaults and be enforced in the dispatcher and session subsystem, not in individual handlers.</p>
+<p>Idle cleanup is a resource bound. The idle timeout belongs to the session, counts only owner activity, and fires without requiring the owner to initiate it. Session close on idle timeout is indistinguishable from explicit close from the client’s perspective, so that an owner cannot use idle-close as a signal channel and a non-owner cannot use idle-close against someone else’s session.</p>
+<h2 id="sec:implementation-checklist">Implementation checklist</h2>
+<p>A change to <code>ducknng</code> is considered security-reviewed only when the conditions relevant to that change hold. Already-enforced baseline checks include envelope version validation, bounded wire lengths, descriptor-based request flag validation, method lookup through the registry, per-method request/reply size validation, TLS configuration rejection on incompatible URL schemes, descriptor-level method auth including optional manifest protection, session-aware unregistration refusal while sessions are open, session owner-token checks, optional mTLS owner-identity checks, idle session pruning, and safe internal SQL construction for extension-generated queries. Remaining hardening work includes explicit owner/pipe-level resource quotas, optional convenience helpers for documented deployment profiles, and any future richer pre-authentication discovery policy. PUB/SUB, when introduced, must carry only fanout-safe payloads. This document is updated when any of the above changes, because the checklist is the contract.</p>
+</div>
+</body>
+</html>

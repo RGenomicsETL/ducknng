@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 0.10">
+<title>SQL function reference · ducknng</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/site.min.css">
+<style type="text/css">
+:root {
+  --dn-ink: #14202b;
+  --dn-muted: #5c6a76;
+  --dn-line: #d7dee6;
+  --dn-surface: #f5f8fa;
+  --dn-panel: #ffffff;
+  --dn-teal: #0b6b7a;
+  --dn-teal-dark: #063f49;
+  --dn-gold: #f5c542;
+  --dn-code: #0d1726;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--dn-ink);
+  max-width: 1160px;
+}
+
+.body {
+  padding: clamp(1rem, 3vw, 2.75rem);
+}
+
+.site-nav {
+  background: var(--dn-panel);
+  border-bottom: 1px solid var(--dn-line);
+}
+
+.site-nav > p {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(0.6rem, 1.6vw, 1.15rem);
+  margin: 0;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem);
+}
+
+.site-nav a {
+  color: var(--dn-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--dn-teal);
+}
+
+.site-nav .project-home {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 1.08rem;
+  gap: 0.55rem;
+  margin-right: auto;
+}
+
+.mark {
+  align-items: center;
+  background: var(--dn-gold);
+  border-radius: 0.45rem;
+  color: #2a2417;
+  display: inline-flex;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.8rem;
+  justify-content: center;
+  letter-spacing: -0.05em;
+  width: 1.8rem;
+}
+
+.frontmatter .title h1,
+.body > h1:first-child {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.2rem, 6vw, 3.8rem);
+  letter-spacing: -0.04em;
+  margin-bottom: 0.55em;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 60%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  margin: 0.5rem 0 1.75rem;
+  overflow: hidden;
+  padding: clamp(1.4rem, 5vw, 3.5rem);
+}
+
+.hero h1 {
+  color: var(--dn-teal-dark);
+  font-size: clamp(2.6rem, 7vw, 5rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+  margin: 0.18em 0 0.3em;
+  max-width: 780px;
+}
+
+.eyebrow {
+  color: var(--dn-teal);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.lede {
+  color: var(--dn-muted);
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.55;
+  max-width: 760px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin: 1.5rem 0 0;
+}
+
+.button {
+  border: 1px solid var(--dn-line);
+  border-radius: 0.5rem;
+  color: var(--dn-teal-dark) !important;
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--dn-teal);
+  border-color: var(--dn-teal);
+  color: white !important;
+}
+
+.transport-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1.6rem 0 0;
+}
+
+.transport-strip code {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.35rem;
+  color: var(--dn-teal-dark);
+  font-size: 0.84rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1.25rem 0 2.5rem;
+}
+
+.feature {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.75rem;
+  color: var(--dn-ink) !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.15rem;
+  text-decoration: none;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.feature:hover {
+  border-color: var(--dn-teal);
+  transform: translateY(-2px);
+}
+
+.feature strong {
+  color: var(--dn-teal-dark);
+}
+
+.feature span {
+  color: var(--dn-muted);
+  line-height: 1.45;
+}
+
+.callout {
+  background: #fff9e8;
+  border: 1px solid #ead49a;
+  border-left: 0.3rem solid var(--dn-gold);
+  border-radius: 0.35rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+}
+
+a,
+a:visited {
+  color: var(--dn-teal);
+}
+
+h2,
+h3 {
+  color: var(--dn-teal-dark);
+  letter-spacing: -0.015em;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+pre {
+  border-radius: 0.55rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+pre > code {
+  background: var(--dn-surface) !important;
+  border: 1px solid var(--dn-line);
+  box-sizing: border-box;
+  color: var(--dn-ink) !important;
+  display: block !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  overflow-x: auto;
+  white-space: pre;
+  width: 100% !important;
+}
+
+svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+pre > code .token {
+  background: transparent !important;
+  color: var(--dn-ink) !important;
+}
+
+pre > code .token.comment,
+pre > code .token.prolog,
+pre > code .token.doctype,
+pre > code .token.cdata {
+  color: #52606d !important;
+}
+
+pre > code .token.keyword,
+pre > code .token.atrule {
+  color: #08505c !important;
+}
+
+pre > code .token.string,
+pre > code .token.char,
+pre > code .token.regex {
+  color: #9b1c1c !important;
+}
+
+pre > code .token.function,
+pre > code .token.builtin,
+pre > code .token.class-name {
+  color: #8b1e3f !important;
+}
+
+pre > code .token.number,
+pre > code .token.boolean,
+pre > code .token.constant,
+pre > code .token.symbol,
+pre > code .token.variable {
+  color: #4c1d95 !important;
+}
+
+pre > code .token.operator,
+pre > code .token.punctuation {
+  color: #334155 !important;
+}
+
+#TOC,
+#TOC ul,
+#TOC li {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+#TOC ul {
+  columns: 1 !important;
+  display: block !important;
+  width: auto !important;
+}
+
+#TOC li {
+  float: none !important;
+  position: static !important;
+  width: auto !important;
+}
+
+table {
+  border-color: var(--dn-line);
+  width: 100%;
+}
+
+thead th {
+  background: var(--dn-surface);
+  color: var(--dn-teal-dark);
+  text-align: left;
+}
+
+tbody td:first-child code {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0.4rem;
+  }
+
+  .site-nav > p {
+    flex-wrap: wrap;
+  }
+
+  .site-nav .project-home {
+    flex-basis: 100%;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<nav class="site-nav" aria-label="Project">
+  <p>
+    <a class="project-home" href="./" aria-label="ducknng home"><span class="mark">dn</span><span>ducknng</span></a>
+    <a href="protocol.html">Protocol</a>
+    <a href="reference.html">Reference</a>
+    <a href="types.html">Types</a>
+    <a href="transports.html">Transports</a>
+    <a href="http.html">HTTP</a>
+    <a href="browser.html">Browser</a>
+    <a href="security.html">Security</a>
+    <a href="wasm/">Demo <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
+  </p>
+</nav>
+<div class="frontmatter">
+</div>
+<div class="body">
+<div id="TOC">
+<ul>
+<li><a href="#sec:function-reference">Function reference</a>
+<ul>
+<li><a href="#sec:server">Server</a></li>
+<li><a href="#sec:nng-sockets">NNG Sockets</a></li>
+<li><a href="#sec:framed-rpc">Framed RPC</a></li>
+<li><a href="#sec:http-client">HTTP Client</a></li>
+<li><a href="#sec:http-routes">HTTP Routes</a></li>
+<li><a href="#sec:http-workers">HTTP Workers</a></li>
+<li><a href="#sec:async-i-o">Async I/O</a></li>
+<li><a href="#sec:body-codecs">Body Codecs</a></li>
+<li><a href="#sec:tls">TLS</a></li>
+<li><a href="#sec:service">Service</a></li>
+<li><a href="#sec:admission">Admission</a></li>
+<li><a href="#sec:monitoring">Monitoring</a></li>
+<li><a href="#sec:method-registry">Method Registry</a></li>
+<li><a href="#sec:frame-helpers">Frame Helpers</a></li>
+<li><a href="#sec:sql-macros">SQL Macros</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<h2 id="sec:function-reference">Function reference</h2>
+<h3 id="sec:server">Server</h3>
+<h4 id="sec:ducknng-start-server-name-listen-url-rep-contexts-recv-max-bytes-session-idle-ms-tls-config-id"><code>ducknng_start_server(name, listen_url, rep_contexts, recv_max_bytes, session_idle_ms, tls_config_id)</code></h4>
+<p>Start a named NNG REP server. Supports inproc://, ipc://, tcp://, tls+tcp://, ws://, wss://, http://, and https:// URL schemes.</p>
+<h4 id="sec:ducknng-stop-server-name"><code>ducknng_stop_server(name)</code></h4>
+<p>Stop a named server, close all its pipes, and release resources.</p>
+<h4 id="sec:ducknng-list-servers"><code>ducknng_list_servers()</code></h4>
+<p>List all running servers with listen URL, TLS mode/peering mode, pipe count.</p>
+<h4 id="sec:ducknng-nng-version"><code>ducknng_nng_version()</code></h4>
+<p>Return the vendored NNG library version string.</p>
+<h3 id="sec:nng-sockets">NNG Sockets</h3>
+<h4 id="sec:ducknng-open-socket-kind"><code>ducknng_open_socket(kind)</code></h4>
+<p>Open a raw NNG socket: req, rep, pub, sub, push, pull, surveyor, respondent, bus, pair.</p>
+<h4 id="sec:ducknng-dial-socket-socket-id-url-timeout-ms-tls-config-id"><code>ducknng_dial_socket(socket_id, url, timeout_ms, tls_config_id)</code></h4>
+<p>Dial a socket to a remote listener.</p>
+<h4 id="sec:ducknng-listen-socket-socket-id-url-flags-tls-config-id"><code>ducknng_listen_socket(socket_id, url, flags, tls_config_id)</code></h4>
+<p>Start listening on a socket at the given URL.</p>
+<h4 id="sec:ducknng-send-socket-raw-socket-id-data-timeout-ms"><code>ducknng_send_socket_raw(socket_id, data, timeout_ms)</code></h4>
+<p>Send raw bytes on a connected socket. Negative timeout = non-blocking.</p>
+<h4 id="sec:ducknng-recv-socket-raw-socket-id-timeout-ms"><code>ducknng_recv_socket_raw(socket_id, timeout_ms)</code></h4>
+<p>Receive raw bytes from a connected socket.</p>
+<h4 id="sec:ducknng-close-socket-socket-id"><code>ducknng_close_socket(socket_id)</code></h4>
+<p>Close a socket and release resources.</p>
+<h4 id="sec:ducknng-subscribe-socket-socket-id-prefix"><code>ducknng_subscribe_socket(socket_id, prefix)</code></h4>
+<p>Subscribe a SUB socket to a topic prefix.</p>
+<h4 id="sec:ducknng-unsubscribe-socket-socket-id-prefix"><code>ducknng_unsubscribe_socket(socket_id, prefix)</code></h4>
+<p>Unsubscribe a SUB socket from a topic prefix.</p>
+<h4 id="sec:ducknng-list-sockets"><code>ducknng_list_sockets()</code></h4>
+<p>List all open NNG sockets with kind and state.</p>
+<h3 id="sec:framed-rpc">Framed RPC</h3>
+<h4 id="sec:ducknng-get-rpc-manifest-url-tls-config-id"><code>ducknng_get_rpc_manifest(url, tls_config_id)</code></h4>
+<p>Request the RPC method manifest from a remote server.</p>
+<h4 id="sec:ducknng-query-rpc-url-sql-tls-config-id"><code>ducknng_query_rpc(url, sql, tls_config_id)</code></h4>
+<p>Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.</p>
+<h4 id="sec:ducknng-upload-table-url-source-query-target-table-tls-config-id"><code>ducknng_upload_table(url, source_query, target_table[, tls_config_id])</code></h4>
+<p>Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.</p>
+<h4 id="sec:ducknng-run-rpc-url-sql-tls-config-id"><code>ducknng_run_rpc(url, sql, tls_config_id)</code></h4>
+<p>Execute SQL via the exec method. Returns rows_changed + metadata.</p>
+<h4 id="sec:ducknng-open-query-url-sql-batch-rows-batch-bytes-tls-config-id"><code>ducknng_open_query(url, sql, batch_rows, batch_bytes, tls_config_id)</code></h4>
+<p>Open a remote query session. Returns session_id + session_token needed for fetch/close/cancel.</p>
+<h4 id="sec:ducknng-fetch-query-table-url-session-id-session-token-batch-rows-batch-bytes-tls-config-id"><code>ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)</code></h4>
+<p>Fetch the next batch of rows from an open query session. Returns decoded Arrow IPC rows.</p>
+<h4 id="sec:ducknng-close-query-url-session-id-session-token-tls-config-id"><code>ducknng_close_query(url, session_id, session_token, tls_config_id)</code></h4>
+<p>Close a remote query session and release server-side resources.</p>
+<h4 id="sec:ducknng-cancel-query-url-session-id-session-token-tls-config-id"><code>ducknng_cancel_query(url, session_id, session_token, tls_config_id)</code></h4>
+<p>Cancel a running query on a remote session.</p>
+<h4 id="sec:ducknng-request-raw-url-data-timeout-ms-tls-config-id"><code>ducknng_request_raw(url, data, timeout_ms, tls_config_id)</code></h4>
+<p>Send a raw NNG request and return the reply as a BLOB frame.</p>
+<h4 id="sec:ducknng-request-socket-raw-socket-id-data-timeout-ms"><code>ducknng_request_socket_raw(socket_id, data, timeout_ms)</code></h4>
+<p>Send a raw request on a connected socket and return the reply frame.</p>
+<h4 id="sec:ducknng-get-rpc-manifest-raw-url-tls-config-id"><code>ducknng_get_rpc_manifest_raw(url, tls_config_id)</code></h4>
+<p>Request the manifest and return the raw reply frame.</p>
+<h4 id="sec:ducknng-open-query-raw-url-sql-batch-rows-batch-bytes-tls-config-id"><code>ducknng_open_query_raw(url, sql, batch_rows, batch_bytes, tls_config_id)</code></h4>
+<p>Open a query session and return the raw reply frame.</p>
+<h4 id="sec:ducknng-fetch-query-raw-url-session-id-session-token-batch-rows-batch-bytes-tls-config-id"><code>ducknng_fetch_query_raw(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)</code></h4>
+<p>Fetch next batch and return the raw Arrow IPC frame.</p>
+<h4 id="sec:ducknng-close-query-raw-url-session-id-session-token-tls-config-id"><code>ducknng_close_query_raw(url, session_id, session_token, tls_config_id)</code></h4>
+<p>Close a session and return the raw reply frame.</p>
+<h4 id="sec:ducknng-cancel-query-raw-url-session-id-session-token-tls-config-id"><code>ducknng_cancel_query_raw(url, session_id, session_token, tls_config_id)</code></h4>
+<p>Cancel a query and return the raw reply frame.</p>
+<h3 id="sec:http-client">HTTP Client</h3>
+<h4 id="sec:ducknng-ncurl-url-method-headers-json-body-timeout-ms-tls-config-id"><code>ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)</code></h4>
+<p>Perform an HTTP request. Returns status, headers_json, body BLOB, body_text VARCHAR.</p>
+<h4 id="sec:ducknng-ncurl-table-url-method-headers-json-body-timeout-ms-tls-config-id"><code>ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)</code></h4>
+<p>HTTP request with auto-parsed response body via Content-Type codec dispatch. Requires 2xx status.</p>
+<h3 id="sec:http-routes">HTTP Routes</h3>
+<h4 id="sec:ducknng-register-http-route-service-name-method-path-handler-sql"><code>ducknng_register_http_route(service_name, method, path, handler_sql)</code></h4>
+<p>Register an exact-match HTTP route. Handler SQL must return status, content_type, body or body_text columns.</p>
+<h4 id="sec:ducknng-register-http-route-pattern-service-name-method-match-kind-path-handler-sql"><code>ducknng_register_http_route_pattern(service_name, method, match_kind, path, handler_sql)</code></h4>
+<p>Register prefix or template-matched route. match_kind: ‘prefix’ or ‘template’. {param} accessible via ducknng_http_path_param.</p>
+<h4 id="sec:ducknng-add-stream-route-service-name-method-path-handler-sql-content-type"><code>ducknng_add_stream_route(service_name, method, path, handler_sql, content_type)</code></h4>
+<p>Register a chunked-streaming route. Handler SQL must return ‘chunk’ column. Each row written as HTTP chunk. Default content-type: text/event-stream.</p>
+<h4 id="sec:ducknng-register-http-static-service-name-url-prefix-directory-path"><code>ducknng_register_http_static(service_name, url_prefix, directory_path)</code></h4>
+<p>Serve static files from a directory under a URL prefix.</p>
+<h4 id="sec:ducknng-unregister-http-route-service-name-method-path"><code>ducknng_unregister_http_route(service_name, method, path)</code></h4>
+<p>Unregister a previously registered HTTP route.</p>
+<h4 id="sec:ducknng-list-http-routes"><code>ducknng_list_http_routes()</code></h4>
+<p>List all registered HTTP routes with method, path, match kind, auth policy, streaming mode.</p>
+<h3 id="sec:http-workers">HTTP Workers</h3>
+<h4 id="sec:ducknng-register-http-worker-service-name-worker-name-sql-interval-ms"><code>ducknng_register_http_worker(service_name, worker_name, sql, interval_ms)</code></h4>
+<p>Register a background worker that executes SQL on a recurring interval (milliseconds).</p>
+<h4 id="sec:ducknng-unregister-http-worker-service-name-worker-name"><code>ducknng_unregister_http_worker(service_name, worker_name)</code></h4>
+<p>Unregister a background worker.</p>
+<h4 id="sec:ducknng-list-http-workers"><code>ducknng_list_http_workers()</code></h4>
+<p>List all registered HTTP workers with their interval and last-run timestamp.</p>
+<h3 id="sec:async-i-o">Async I/O</h3>
+<h4 id="sec:ducknng-send-socket-raw-aio-socket-id-data-timeout-ms"><code>ducknng_send_socket_raw_aio(socket_id, data, timeout_ms)</code></h4>
+<p>Launch an async raw socket send. Returns aio_id to collect with ducknng_aio_collect.</p>
+<h4 id="sec:ducknng-recv-socket-raw-aio-socket-id-timeout-ms"><code>ducknng_recv_socket_raw_aio(socket_id, timeout_ms)</code></h4>
+<p>Launch an async raw socket recv. Returns aio_id.</p>
+<h4 id="sec:ducknng-request-raw-aio-url-data-timeout-ms-tls-config-id"><code>ducknng_request_raw_aio(url, data, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async raw RPC request. Returns aio_id.</p>
+<h4 id="sec:ducknng-request-socket-raw-aio-socket-id-data-timeout-ms"><code>ducknng_request_socket_raw_aio(socket_id, data, timeout_ms)</code></h4>
+<p>Launch an async request on a connected socket. Returns aio_id.</p>
+<h4 id="sec:ducknng-run-rpc-raw-aio-url-sql-timeout-ms-tls-config-id"><code>ducknng_run_rpc_raw_aio(url, sql, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async exec RPC. Returns aio_id.</p>
+<h4 id="sec:ducknng-get-rpc-manifest-raw-aio-url-timeout-ms-tls-config-id"><code>ducknng_get_rpc_manifest_raw_aio(url, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async manifest request. Returns aio_id.</p>
+<h4 id="sec:ducknng-open-query-raw-aio-url-sql-batch-rows-batch-bytes-timeout-ms-tls-config-id"><code>ducknng_open_query_raw_aio(url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async query session open. Returns aio_id.</p>
+<h4 id="sec:ducknng-fetch-query-raw-aio-url-session-id-session-token-batch-rows-batch-bytes-timeout-ms-tls-config-id"><code>ducknng_fetch_query_raw_aio(url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async batch fetch. Returns aio_id.</p>
+<h4 id="sec:ducknng-close-query-raw-aio-url-session-id-session-token-timeout-ms-tls-config-id"><code>ducknng_close_query_raw_aio(url, session_id, session_token, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async session close. Returns aio_id.</p>
+<h4 id="sec:ducknng-cancel-query-raw-aio-url-session-id-session-token-timeout-ms-tls-config-id"><code>ducknng_cancel_query_raw_aio(url, session_id, session_token, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async cancel. Returns aio_id.</p>
+<h4 id="sec:ducknng-ncurl-aio-url-method-headers-json-body-timeout-ms-tls-config-id"><code>ducknng_ncurl_aio(url, method, headers_json, body, timeout_ms, tls_config_id)</code></h4>
+<p>Launch an async HTTP request. Returns aio_id.</p>
+<h4 id="sec:ducknng-aio-ready-aio-id"><code>ducknng_aio_ready(aio_id)</code></h4>
+<p>Check if an async operation has completed.</p>
+<h4 id="sec:ducknng-aio-cancel-aio-id"><code>ducknng_aio_cancel(aio_id)</code></h4>
+<p>Cancel a pending async operation.</p>
+<h4 id="sec:ducknng-aio-drop-aio-id"><code>ducknng_aio_drop(aio_id)</code></h4>
+<p>Drop an aio handle and release its resources.</p>
+<h4 id="sec:ducknng-aio-wait-aio-ids-timeout-ms"><code>ducknng_aio_wait(aio_ids, timeout_ms)</code></h4>
+<p>Block until all aio_ids complete or timeout. aio_ids: LIST(UBIGINT).</p>
+<h4 id="sec:ducknng-aio-collect-aio-ids-wait-ms"><code>ducknng_aio_collect(aio_ids, wait_ms)</code></h4>
+<p>Collect async RPC results into decoded frame table.</p>
+<h4 id="sec:ducknng-aio-collect-decoded-aio-ids-wait-ms"><code>ducknng_aio_collect_decoded(aio_ids, wait_ms)</code></h4>
+<p>Collect and decode ASYNC RPC aio results into a decoded frame rows table.</p>
+<h4 id="sec:ducknng-ncurl-aio-collect-aio-ids-wait-ms"><code>ducknng_ncurl_aio_collect(aio_ids, wait_ms)</code></h4>
+<p>Collect async HTTP results into ncurl-style table.</p>
+<h3 id="sec:body-codecs">Body Codecs</h3>
+<h4 id="sec:ducknng-parse-body-body-content-type"><code>ducknng_parse_body(body, content_type)</code></h4>
+<p>Parse a BLOB using the supplied content type. Supports JSON, NDJSON, CSV, TSV, Parquet, Arrow IPC, form-urlencoded, ducknng frames.</p>
+<h4 id="sec:ducknng-parse-csv-body"><code>ducknng_parse_csv(body)</code></h4>
+<p>Parse a CSV BLOB via DuckDB read_csv_auto through a tempfile round-trip.</p>
+<h4 id="sec:ducknng-parse-tsv-body"><code>ducknng_parse_tsv(body)</code></h4>
+<p>Parse a TSV BLOB via DuckDB read_csv_auto(delim=’	’) through a tempfile round-trip.</p>
+<h4 id="sec:ducknng-parse-parquet-body"><code>ducknng_parse_parquet(body)</code></h4>
+<p>Parse a Parquet BLOB via DuckDB read_parquet through a tempfile round-trip.</p>
+<h4 id="sec:ducknng-list-codecs"><code>ducknng_list_codecs()</code></h4>
+<p>List all built-in and user-registered body codec providers.</p>
+<h4 id="sec:ducknng-register-codec-content-type-function-name"><code>ducknng_register_codec(content_type, function_name)</code></h4>
+<p>Register a scalar SQL function as a custom body codec for the given content type.</p>
+<h4 id="sec:ducknng-unregister-codec-content-type"><code>ducknng_unregister_codec(content_type)</code></h4>
+<p>Unregister a user-registered body codec, restoring the built-in behavior.</p>
+<h3 id="sec:tls">TLS</h3>
+<h4 id="sec:ducknng-self-signed-tls-config-host-days-auth-mode"><code>ducknng_self_signed_tls_config(host, days, auth_mode)</code></h4>
+<p>Generate a self-signed TLS cert in memory. In client mode auth_mode 0 verifies the remote server; on listeners auth_mode 2 requires mTLS. Returns TLS config handle.</p>
+<h4 id="sec:ducknng-tls-config-from-files-cert-path-key-path-ca-path-auth-mode"><code>ducknng_tls_config_from_files(cert_path, key_path, ca_path, auth_mode)</code></h4>
+<p>Create TLS config from PEM file paths.</p>
+<h4 id="sec:ducknng-tls-config-from-pem-cert-pem-key-pem-ca-pem-hostname-auth-mode"><code>ducknng_tls_config_from_pem(cert_pem, key_pem, ca_pem, hostname, auth_mode)</code></h4>
+<p>Create TLS config from in-memory PEM text (no file I/O).</p>
+<h4 id="sec:ducknng-drop-tls-config-tls-config-id"><code>ducknng_drop_tls_config(tls_config_id)</code></h4>
+<p>Drop a TLS config and release its certificate memory.</p>
+<h4 id="sec:ducknng-list-tls-configs"><code>ducknng_list_tls_configs()</code></h4>
+<p>List all created TLS configs with auth mode.</p>
+<h4 id="sec:ducknng-set-tls-peer-allowlist-tls-config-id-identity-regex"><code>ducknng_set_tls_peer_allowlist(tls_config_id, identity_regex)</code></h4>
+<p>Set peer identity allowlist on a TLS config for server-side mTLS filtering.</p>
+<h3 id="sec:service">Service</h3>
+<h4 id="sec:ducknng-set-service-limits-name-max-memory-max-sessions-max-result-bytes-max-send-bytes-max-recv-bytes-max-pipes-query-timeout-ms"><code>ducknng_set_service_limits(name, max_memory, max_sessions, max_result_bytes, max_send_bytes, max_recv_bytes, max_pipes, query_timeout_ms)</code></h4>
+<p>Set resource limits for a service. All params after name are UBIGINT with 0 = no limit.</p>
+<h4 id="sec:ducknng-set-service-execution-model-name-model"><code>ducknng_set_service_execution_model(name, model)</code></h4>
+<p>Set execution model: ‘shared_serialized_connection’, ‘service_serialized_connection’, or ‘request_connection’.</p>
+<h3 id="sec:admission">Admission</h3>
+<h4 id="sec:ducknng-set-service-peer-allowlist-name-identity-regex"><code>ducknng_set_service_peer_allowlist(name, identity_regex)</code></h4>
+<p>Restrict a service to mTLS peer identities matching a regex.</p>
+<h4 id="sec:ducknng-set-service-ip-allowlist-name-cidr-list"><code>ducknng_set_service_ip_allowlist(name, cidr_list)</code></h4>
+<p>Restrict a service to clients matching IP/CIDR patterns. Semicolon-separated list.</p>
+<h4 id="sec:ducknng-set-http-route-auth-service-name-method-path-require-auth-auth-allow-identities"><code>ducknng_set_http_route_auth(service_name, method, path, require_auth, auth_allow_identities)</code></h4>
+<p>Set route-level auth policy. require_auth: BOOLEAN. allow_identities: comma-separated peer identity regexes.</p>
+<h4 id="sec:ducknng-set-service-authorizer-name-handler-sql"><code>ducknng_set_service_authorizer(name, handler_sql)</code></h4>
+<p>Register a SQL authorizer callback for a service. The handler receives query text and returns allow/deny.</p>
+<h4 id="sec:ducknng-auth-context"><code>ducknng_auth_context()</code></h4>
+<p>Return the current request’s auth context: peer_identity, peer_addr, authenticated columns.</p>
+<h3 id="sec:monitoring">Monitoring</h3>
+<h4 id="sec:ducknng-read-monitor-name-after-seq-max-events"><code>ducknng_read_monitor(name, after_seq, max_events)</code></h4>
+<p>Read pipe events from a service’s event monitor ring buffer.</p>
+<h4 id="sec:ducknng-monitor-status-name"><code>ducknng_monitor_status(name)</code></h4>
+<p>Return monitor ring buffer capacity, event counts, active/max pipes.</p>
+<h4 id="sec:ducknng-list-pipes-name"><code>ducknng_list_pipes(name)</code></h4>
+<p>List currently open NNG pipes for a service.</p>
+<h4 id="sec:ducknng-log-entries"><code>ducknng_log_entries()</code></h4>
+<p>Read the DuckDB log ring buffer (requires ducknng_enable_log_capture()).</p>
+<h4 id="sec:ducknng-enable-log-capture"><code>ducknng_enable_log_capture()</code></h4>
+<p>Enable DuckDB log ring capture for the current session.</p>
+<h3 id="sec:method-registry">Method Registry</h3>
+<h4 id="sec:ducknng-list-methods"><code>ducknng_list_methods()</code></h4>
+<p>List all registered RPC methods with auth requirements.</p>
+<h4 id="sec:ducknng-register-exec-method-enable-default"><code>ducknng_register_exec_method(enable_default)</code></h4>
+<p>Register (or re-register) the default exec method. Pass TRUE to enable by default.</p>
+<h4 id="sec:ducknng-register-upload-methods-require-auth"><code>ducknng_register_upload_methods(require_auth)</code></h4>
+<p>Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.</p>
+<h4 id="sec:ducknng-set-method-auth-method-name-require-auth"><code>ducknng_set_method_auth(method_name, require_auth)</code></h4>
+<p>Set auth requirement for an RPC method.</p>
+<h4 id="sec:ducknng-unregister-method-method-name"><code>ducknng_unregister_method(method_name)</code></h4>
+<p>Unregister a single RPC method.</p>
+<h4 id="sec:ducknng-unregister-family-family-name"><code>ducknng_unregister_family(family_name)</code></h4>
+<p>Unregister all methods in a family. Returns count of unregistered methods.</p>
+<h3 id="sec:frame-helpers">Frame Helpers</h3>
+<h4 id="sec:ducknng-decode-frame-data"><code>ducknng_decode_frame(data)</code></h4>
+<p>Decode a ducknng protocol frame into type, name, payload_text, error_text, and raw payload.</p>
+<h4 id="sec:ducknng-frame-payload-data"><code>ducknng_frame_payload(data)</code></h4>
+<p>Extract the frame payload BLOB from a ducknng protocol frame.</p>
+<h4 id="sec:ducknng-frame-payload-text-data"><code>ducknng_frame_payload_text(data)</code></h4>
+<p>Decode frame payload as UTF-8 text.</p>
+<h4 id="sec:ducknng-frame-error-text-data"><code>ducknng_frame_error_text(data)</code></h4>
+<p>Extract the error message from a ducknng error frame.</p>
+<h4 id="sec:ducknng-frame-version-data"><code>ducknng_frame_version(data)</code></h4>
+<p>Extract protocol version from a ducknng frame.</p>
+<h4 id="sec:ducknng-frame-type-data"><code>ducknng_frame_type(data)</code></h4>
+<p>Extract numeric type code from a ducknng frame.</p>
+<h4 id="sec:ducknng-frame-flags-data"><code>ducknng_frame_flags(data)</code></h4>
+<p>Extract flags field from a ducknng frame.</p>
+<h4 id="sec:ducknng-frame-type-name-data"><code>ducknng_frame_type_name(data)</code></h4>
+<p>Decode the human-readable type name from a ducknng frame.</p>
+<h4 id="sec:ducknng-frame-name-data"><code>ducknng_frame_name(data)</code></h4>
+<p>Extract the method name from a ducknng query/call frame.</p>
+<h4 id="sec:ducknng-frame-end-of-stream-data"><code>ducknng_frame_end_of_stream(data)</code></h4>
+<p>Check if a ducknng frame is an end-of-stream marker.</p>
+<h3 id="sec:sql-macros">SQL Macros</h3>
+<h4 id="sec:ducknng-format-sse-data-event-null-id-null-retry-null"><code>ducknng_format_sse(data, event := NULL, id := NULL, retry := NULL)</code></h4>
+<p>Format a Server-Sent Events event string with optional event type, id, retry fields.</p>
+<h4 id="sec:ducknng-http-response-status-headers-json-content-type-body-body-text"><code>ducknng_http_response(status, headers_json, content_type, body, body_text)</code></h4>
+<p>Build an HTTP route response row with explicit status, headers, content-type, and body.</p>
+<h4 id="sec:ducknng-http-text-status-body-text"><code>ducknng_http_text(status, body_text)</code></h4>
+<p>Build a text/plain HTTP route response.</p>
+<h4 id="sec:ducknng-http-json-status-body-text"><code>ducknng_http_json(status, body_text)</code></h4>
+<p>Build an application/json HTTP route response.</p>
+<h4 id="sec:ducknng-http-binary-status-body"><code>ducknng_http_binary(status, body)</code></h4>
+<p>Build an application/octet-stream HTTP route response.</p>
+<h4 id="sec:ducknng-http-ndjson-status-body-text"><code>ducknng_http_ndjson(status, body_text)</code></h4>
+<p>Build an application/x-ndjson HTTP route response.</p>
+</div>
+</body>
+</html>
