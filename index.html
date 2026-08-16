@@ -214,6 +214,255 @@ body {
   line-height: 1.45;
 }
 
+/* --- Landing page components ------------------------------------------- */
+
+.diagram {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.9rem;
+  margin: 0 0 2.5rem;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.diagram svg {
+  margin: 0 auto;
+  max-width: 780px;
+  width: 100%;
+}
+
+.section-head {
+  align-items: baseline;
+  border-bottom: 1px solid var(--dn-line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 2.75rem 0 1.5rem;
+  padding-bottom: 0.6rem;
+}
+
+.section-head h2 {
+  border: 0;
+  margin: 0;
+}
+
+.section-head span {
+  color: var(--dn-muted);
+  font-size: 0.95rem;
+}
+
+.steps {
+  counter-reset: dn-step;
+  display: grid;
+  gap: 1rem;
+  margin: 0 0 2.5rem;
+}
+
+.step {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.9rem;
+  padding: clamp(1rem, 2.5vw, 1.6rem);
+}
+
+.step-head {
+  align-items: center;
+  display: flex;
+  gap: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.step-num {
+  align-items: center;
+  background: var(--dn-teal);
+  border-radius: 50%;
+  color: #fff;
+  display: inline-flex;
+  flex: none;
+  font-size: 0.95rem;
+  font-weight: 800;
+  height: 1.9rem;
+  justify-content: center;
+  width: 1.9rem;
+}
+
+.step-head h3 {
+  margin: 0;
+}
+
+.step > p {
+  color: var(--dn-muted);
+  margin: 0 0 0.9rem 2.7rem;
+}
+
+.step-cols {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-left: 2.7rem;
+}
+
+.step-body {
+  margin-left: 2.7rem;
+}
+
+/* Says which DuckDB session a block runs in -- the distinction the old
+ * single-block tour hid. */
+.code-label {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 800;
+  gap: 0.4rem;
+  letter-spacing: 0.07em;
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+}
+
+.code-label:before {
+  background: var(--dn-gold);
+  border-radius: 50%;
+  content: "";
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.code-label.client:before {
+  background: var(--dn-teal);
+}
+
+.step pre {
+  margin: 0 0 0.6rem;
+}
+
+/* Query results as real tables instead of the README's ASCII art, which
+ * overflowed the content column and was clipped. */
+table.res {
+  font-size: 0.86rem;
+  margin: 0.3rem 0 0;
+  width: auto;
+}
+
+table.res th,
+table.res td {
+  border: 1px solid var(--dn-line);
+  padding: 0.3rem 0.7rem;
+}
+
+table.res th {
+  background: var(--dn-surface);
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+table.res td {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.layer-stack {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 2.5rem;
+}
+
+.layer {
+  align-items: baseline;
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-left: 0.35rem solid var(--dn-teal);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.2rem 1.2rem;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  padding: 0.85rem 1.1rem;
+}
+
+.layer strong {
+  color: var(--dn-teal-dark);
+}
+
+.layer span {
+  color: var(--dn-muted);
+}
+
+.layer:nth-child(2) { border-left-color: #2a8fa0; }
+.layer:nth-child(3) { border-left-color: #6bb3bf; }
+.layer:nth-child(4) { border-left-color: var(--dn-gold); }
+
+.demo-strip {
+  align-items: center;
+  background:
+    radial-gradient(circle at 90% 20%, rgb(245 197 66 / 24%), transparent 40%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 65%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  display: grid;
+  gap: clamp(1rem, 3vw, 2.5rem);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: 0 0 2.5rem;
+  padding: clamp(1.2rem, 3vw, 2.2rem);
+}
+
+.demo-strip h2 {
+  margin-top: 0;
+}
+
+.demo-strip p {
+  color: var(--dn-muted);
+}
+
+.demo-strip pre {
+  margin: 0;
+}
+
+.next-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 2rem;
+}
+
+.next-grid a {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.6rem;
+  color: var(--dn-teal-dark) !important;
+  font-weight: 700;
+  padding: 0.8rem 0.9rem;
+  text-decoration: none;
+}
+
+.next-grid a:hover {
+  border-color: var(--dn-teal);
+}
+
+.next-grid span {
+  color: var(--dn-muted);
+  display: block;
+  font-size: 0.83rem;
+  font-weight: 400;
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 860px) {
+  .step-cols,
+  .demo-strip,
+  .next-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .layer {
+    grid-template-columns: 1fr;
+  }
+
+  .step > p,
+  .step-cols,
+  .step-body {
+    margin-left: 0;
+  }
+}
+
 .callout {
   background: #fff9e8;
   border: 1px solid #ead49a;
@@ -325,7 +574,10 @@ pre > code .token.punctuation {
    * the first line. The TOC then sized row 1 to its own full height and the
    * first paragraph, sharing that row, was followed by hundreds of pixels of
    * blank space. Floating keeps every sibling in normal flow. */
-  .body {
+  /* Only reserve the column on pages that actually have a contents list. The
+   * landing page renders with toc disabled, and without :has() it kept an
+   * empty 290px indent. */
+  .body:has(#TOC) {
     padding-left: calc(var(--dn-pad) + var(--dn-toc-width) + var(--dn-toc-gap));
   }
 
@@ -435,3552 +687,194 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="hero-wrap">
-<div class="hero">
-<p class="eyebrow">DuckDB extension &middot; pure C</p>
-<h1>DuckDB, on the network.</h1>
-<p class="lede">ducknng binds the <a href="https://nng.nanomsg.org/">NNG</a>
-scalability protocols into DuckDB: framed RPC with Arrow and Quack payloads,
-query sessions, mTLS and policy admission in C, and an HTTP carrier &mdash;
-so one DuckDB session can serve or call another.</p>
-<p class="hero-actions">
-<a class="button primary" href="protocol.html">Read the protocol</a>
-<a class="button" href="reference.html">SQL reference</a>
-<a class="button" href="https://github.com/RGenomicsETL/ducknng">GitHub</a>
-</p>
-<p class="transport-strip">
-<code>inproc://</code> <code>ipc://</code> <code>tcp://</code> <code>tls+tcp://</code> <code>ws://</code> <code>wss://</code> <code>http://</code> <code>https://</code>
-</p>
-</div>
-<div class="feature-grid">
-<a class="feature" href="protocol.html">
-<strong>Framed RPC</strong>
-<span>A small versioned envelope carrying Arrow IPC or JSON, with an
-explicit status byte and a fixed four-method query session.</span></a>
-<a class="feature" href="reference.html">
-<strong>SQL surface</strong>
-<span>Servers, sockets, AIO futures, TLS configs, codecs, and HTTP routes,
-all managed from SQL as explicit handles.</span></a>
-<a class="feature" href="types.html">
-<strong>Quack payloads</strong>
-<span>DuckDB's own BinarySerializer batch format alongside Arrow IPC,
-carrying nested types and compressed vectors.</span></a>
-<a class="feature" href="security.html">
-<strong>Admission in C</strong>
-<span>mTLS, exact peer-identity and CIDR allowlists, per-principal limits,
-and an optional SQL authorizer at the request boundary.</span></a>
-<a class="feature" href="transports.html">
-<strong>Transport by URL</strong>
-<span>The scheme picks the carrier. The method contract does not change
-between inproc, IPC, TCP, TLS, WebSocket, and HTTP.</span></a>
-<a class="feature" href="browser.html">
-<strong>Browser clients</strong>
-<span>A duckdb-wasm side module speaking the same protocol over HTTPS and
-WSS, with capability negotiation rather than simulation.</span></a>
-</div>
-</div>
 <div class="frontmatter">
 </div>
 <div class="body">
-<div id="TOC">
-<ul>
-<li><a href="#sec:layer-map">Layer map</a></li>
-<li><a href="#sec:quick-tour">Quick tour</a></li>
-<li><a href="#sec:development">Development</a></li>
-<li><a href="#sec:lifetime-and-manual-cleanup">Lifetime and manual cleanup</a></li>
-<li><a href="#sec:function-catalog">Function catalog</a></li>
-<li><a href="#chp:function-catalog">Function Catalog</a>
-<ul>
-<li><a href="#sec:service-control">Service Control</a></li>
-<li><a href="#sec:introspection">Introspection</a></li>
-<li><a href="#sec:method-registry">Method Registry</a></li>
-<li><a href="#sec:primitive-transport">Primitive Transport</a></li>
-<li><a href="#sec:transport-security">Transport Security</a></li>
-<li><a href="#sec:http-transport">HTTP Transport</a></li>
-<li><a href="#sec:body-codecs">Body Codecs</a></li>
-<li><a href="#sec:http-routes">HTTP Routes</a></li>
-<li><a href="#sec:async-i-o">Async I/O</a></li>
-<li><a href="#sec:rpc-helper">RPC Helper</a></li>
-<li><a href="#sec:rpc-session">RPC Session</a></li>
-<li><a href="#sec:transport-layer">Transport layer</a>
-<ul>
-<li><a href="#sec:nng-socket-patterns">NNG socket patterns</a></li>
-<li><a href="#sec:tls-tls-tcp-wss-https">TLS (<code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code>)</a></li>
-<li><a href="#sec:websocket-ws-wss">WebSocket (<code>ws://</code>, <code>wss://</code>)</a></li>
-</ul>
-</li>
-<li><a href="#sec:framed-rpc">Framed RPC</a>
-<ul>
-<li><a href="#sec:registry-manifest-and-exec">Registry: manifest and exec</a></li>
-<li><a href="#sec:registry-the-upload-lane">Registry: the upload lane</a></li>
-<li><a href="#sec:synchronous-helpers">Synchronous helpers</a></li>
-<li><a href="#sec:raw-frame-helpers">Raw frame helpers</a></li>
-<li><a href="#sec:aio-helpers">AIO helpers</a></li>
-</ul>
-</li>
-<li><a href="#sec:query-sessions">Query sessions</a>
-<ul>
-<li><a href="#sec:high-level-open-fetch-table-close">High-level (open / fetch_table / close)</a></li>
-<li><a href="#sec:raw-frames-open-raw-fetch-raw-close-raw">Raw frames (open_raw / fetch_raw / close_raw)</a></li>
-<li><a href="#sec:async-open-aio-fetch-aio-close-aio-cancel-aio">Async (open_aio / fetch_aio / close_aio / cancel_aio)</a></li>
-</ul>
-</li>
-<li><a href="#sec:http-carrier">HTTP carrier</a>
-<ul>
-<li><a href="#sec:ducknng-ncurl-http-client-primitive"><code>ducknng_ncurl</code> — HTTP client primitive</a></li>
-<li><a href="#sec:ducknng-start-server-on-http-and-https"><code>ducknng_start_server</code> on <code>http://</code> and <code>https://</code></a></li>
-<li><a href="#sec:custom-http-routes">Custom HTTP routes</a></li>
-<li><a href="#sec:chunked-streaming-routes-sse">Chunked streaming routes (SSE)</a></li>
-</ul>
-</li>
-<li><a href="#sec:client-interop-nanonext-req-rep">Client interop: nanonext REQ/REP</a>
-<ul>
-<li><a href="#sec:frame-helpers">Frame helpers</a></li>
-<li><a href="#sec:start-a-server-dial-a-req-socket-run-remote-sql">Start a server, dial a REQ socket, run remote SQL</a></li>
-</ul>
-</li>
-<li><a href="#sec:deployment-and-admission-policy">Deployment and admission policy</a></li>
-<li><a href="#sec:introspection-examples">Introspection examples</a>
-<ul>
-<li><a href="#sec:duckdb-log-entries">DuckDB log entries</a></li>
-<li><a href="#sec:nng-statistics">NNG statistics</a></li>
-<li><a href="#sec:pipe-event-monitor">Pipe-event monitor</a></li>
-</ul>
-</li>
-<li><a href="#sec:browser-and-webassembly">Browser and WebAssembly</a></li>
-<li><a href="#sec:status">Status</a></li>
-<li><a href="#sec:references">References</a></li>
-</ul>
-</li>
-</ul>
+<!-- Landing page for the documentation site only. README.md remains the full
+     GitHub-facing document; this page orients a first-time reader and hands
+     off to the contracts. Rendered as index.html by scripts/build_docs_site.R
+     with the table of contents disabled. -->
+<div class="hero">
+<p class="eyebrow">DuckDB extension &middot; pure C</p>
+<h1 id="chp:duckdb-on-the-network" class="unlisted">DuckDB, on the network.</h1>
+<p class="lede">
+ducknng binds the <a href="https://nng.nanomsg.org/">NNG</a> scalability
+protocols into DuckDB: framed RPC with Arrow and Quack payloads, query
+sessions, mTLS and policy admission in C, and an HTTP carrier &mdash; so one
+DuckDB session can serve or call another.
+</p>
+<p class="hero-actions">
+<a class="button primary" href="#sec:get-started">Get started</a>
+<a class="button" href="protocol.html">Read the protocol</a>
+<a class="button" href="https://github.com/RGenomicsETL/ducknng">GitHub</a>
+</p>
+<p class="transport-strip">
+<code>inproc://</code> <code>ipc://</code> <code>tcp://</code>
+<code>tls+tcp://</code> <code>ws://</code> <code>wss://</code>
+<code>http://</code> <code>https://</code>
+</p>
 </div>
-<p><code>ducknng</code> is a pure C DuckDB extension providing a binding to the
-<a href="https://nng.nanomsg.org/">NNG</a> scalability protocols. It is inspired by
-<a href="https://github.com/r-lib/nanonext"><code>nanonext</code></a> and follows its
-ergonomic model: transport is chosen by URL scheme, aio handles wrap
-pending NNG operations as SQL-visible futures, and TLS material may come
-from filesystem paths or in-memory PEM. On top of the raw socket and
-transport layer, <code>ducknng</code> adds a framed RPC envelope, Arrow IPC tabular
-payloads, manifest-declared methods, and an HTTP/HTTPS carrier so DuckDB
-sessions can reach one another over <code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>,
-<code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>, <code>http://</code>, or <code>https://</code>. Long-lived
-handles — servers, sockets, AIO futures, TLS configs, query sessions —
-are manually managed at the SQL surface.</p>
-<p>It also draws on <a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a>
-for the thin versioned RPC envelope design. The optional
-<code>ducknng_quack_batch</code> row serializer is informed by DuckDB’s
-experimental <a href="https://github.com/duckdb/duckdb-quack"><code>quack</code></a> extension
-and related Quack client work such as
-<a href="https://github.com/tobilg/quack-protocol"><code>@quack-protocol/sdk</code></a> and
-<a href="https://github.com/gizmodata/adbc-driver-quack"><code>adbc-driver-quack</code></a>.
-In ducknng today, that Quack-derived encoding is a row-payload mode
-inside the ducknng RPC/session protocol; it is not yet a full Quack
-<code>POST /quack</code> / <code>application/vnd.duckdb</code> server or client.</p>
-<h2 id="sec:layer-map">Layer map</h2>
-<table>
-<thead>
-<tr>
-<th>Layer</th>
-<th>What it does</th>
-</tr>
-</thead>
+<div class="diagram">
+<svg viewBox="0 0 780 200" role="img" aria-label="Two DuckDB sessions exchanging a framed request and reply over a URL-selected transport">
+  <defs>
+    <marker id="dn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0b6b7a"/>
+    </marker>
+  </defs>
+  <rect x="8" y="40" width="210" height="120" rx="12" fill="#ffffff" stroke="#d7dee6"/>
+  <text x="113" y="72" text-anchor="middle" font-size="15" font-weight="700" fill="#063f49">DuckDB session</text>
+  <text x="113" y="94" text-anchor="middle" font-size="12.5" fill="#5c6a76">client</text>
+  <text x="113" y="126" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#0b6b7a">ducknng_query_rpc()</text>
+  <rect x="562" y="40" width="210" height="120" rx="12" fill="#ffffff" stroke="#d7dee6"/>
+  <text x="667" y="72" text-anchor="middle" font-size="15" font-weight="700" fill="#063f49">DuckDB session</text>
+  <text x="667" y="94" text-anchor="middle" font-size="12.5" fill="#5c6a76">server</text>
+  <text x="667" y="126" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#0b6b7a">ducknng_start_server()</text>
+  <line x1="228" y1="82" x2="552" y2="82" stroke="#0b6b7a" stroke-width="2" marker-end="url(#dn-arrow)"/>
+  <text x="390" y="72" text-anchor="middle" font-size="12.5" fill="#063f49">framed call &middot; Arrow or Quack</text>
+  <line x1="552" y1="122" x2="228" y2="122" stroke="#6bb3bf" stroke-width="2" marker-end="url(#dn-arrow)"/>
+  <text x="390" y="142" text-anchor="middle" font-size="12.5" fill="#5c6a76">result batches &middot; end-of-stream</text>
+  <rect x="300" y="160" width="180" height="30" rx="15" fill="#f5f8fa" stroke="#d7dee6"/>
+  <text x="390" y="180" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#063f49">tls+tcp://host:port</text>
+</svg>
+</div>
+<div class="section-head">
+<h2 id="sec:get-started">Get started</h2>
+<span>Two DuckDB sessions, three steps, no broker in between.</span>
+</div>
+<div class="steps">
+<div class="step">
+<div class="step-head"><span class="step-num">1</span><h3 id="sec:load-the-extension" class="unlisted">Load the extension</h3></div>
+<p>Build it first (see <a href="https://github.com/RGenomicsETL/ducknng#development">Development</a>), then load the artifact into any DuckDB session.</p>
+<div class="step-body">
+<pre><code class="language-sql">LOAD 'build/release/ducknng.duckdb_extension';
+</code></pre>
+</div>
+</div>
+<div class="step">
+<div class="step-head"><span class="step-num">2</span><h3 id="sec:serve-a-session-over-tls" class="unlisted">Serve a session over TLS</h3></div>
+<p>Port <code>0</code> lets the OS assign a free port, and the self-signed certificate lives only in DuckDB memory &mdash; no files to manage.</p>
+<div class="step-body">
+<span class="code-label">Server session</span>
+<pre><code class="language-sql">SET VARIABLE tour_tls = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
+
+SELECT ducknng_start_server(
+  'tour',                            -- service name
+  'tls+tcp://127.0.0.1:0',           -- TLS; port 0 = OS-assigned
+  1,                                 -- REP contexts
+  134217728,                         -- recv_max_bytes (128 MiB)
+  300000,                            -- session_idle_ms
+  getvariable('tour_tls')::UBIGINT   -- TLS config handle
+);
+
+SELECT name, listen FROM ducknng_list_servers();
+</code></pre>
+<table class="res">
+<thead><tr><th>name</th><th>listen</th></tr></thead>
+<tbody><tr><td>tour</td><td>tls+tcp://127.0.0.1:41573</td></tr></tbody>
+</table>
+</div>
+</div>
+<div class="step">
+<div class="step-head"><span class="step-num">3</span><h3 id="sec:query-it-from-another-session" class="unlisted">Query it from another session</h3></div>
+<p>The URL scheme picks the carrier. The same call works over <code>ipc://</code>, <code>tcp://</code>, <code>wss://</code>, or <code>https://</code> without changing the method contract.</p>
+<div class="step-cols">
+<div>
+<span class="code-label client">Client session &middot; remote rows</span>
+<pre><code class="language-sql">SELECT *
+FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng.ipc',
+  'SELECT i, i &gt; 10 AS gt_10
+     FROM rpc_demo_t ORDER BY i',
+  0::UBIGINT
+);
+</code></pre>
+<table class="res">
+<thead><tr><th>i</th><th>gt_10</th></tr></thead>
 <tbody>
-<tr>
-<td><strong>Transport</strong></td>
-<td>NNG sockets and listeners. Synchronous send/recv. One-shot AIO handles. Pipe-event telemetry.</td>
-</tr>
-<tr>
-<td><strong>Framed RPC</strong></td>
-<td>Versioned envelope carrying Arrow IPC payloads or JSON control text. The query family is always on and may mutate; unary <code>exec</code> is opt-in. <code>http://</code>/<code>https://</code> mount the same methods at the URL path.</td>
-</tr>
-<tr>
-<td><strong>Policy</strong></td>
-<td>Fast C admission: mTLS, exact peer-identity allowlists, IP/CIDR allowlists, per-service and per-principal resource limits. Optional SQL authorizer at the request boundary.</td>
-</tr>
-<tr>
-<td><strong>Codecs</strong></td>
-<td><code>ducknng_parse_body(...)</code> and <code>ducknng_ncurl_table(...)</code> parse content-type-tagged BLOBs. Built-in providers cover JSON, Arrow IPC, ducknng frames, the ducknng <code>ducknng_quack_batch</code> batch media type, and text/raw fallback. User-registered codec hooks extend the set.</td>
-</tr>
+<tr><td>7</td><td>false</td></tr>
+<tr><td>11</td><td>true</td></tr>
+<tr><td>42</td><td>true</td></tr>
 </tbody>
 </table>
-<p>Raw protocol clients now also have a built-in <code>handshake</code> control method
-for capability negotiation. It advertises
-<code>supported_serialization_modes</code> plus <code>fetch_metadata</code> and
-<code>session_schema</code> capability objects covering control-plane
-<code>correlation_id</code> echo, stable query-session <code>result_handle</code> values,
-terminal <code>batch_index</code> metadata, negotiated protocol/schema versions,
-and effective fetch chunk counts. Today the advertised row payload modes
-are <code>arrow_ipc_stream</code> and <code>ducknng_quack_batch</code>: Arrow IPC remains the
-broad default, while <code>ducknng_quack_batch</code> is the Quack-derived DuckDB
-BinarySerializer batch path used for the new comparative benchmarks. The
-runnable wire-level example lives in <code>test/rpc_smoke.R</code>, and the
-contract is pinned in <code>docs/protocol.md</code>.</p>
-<h2 id="sec:quick-tour">Quick tour</h2>
-<p>Build the extension first (see <strong>Development</strong> below), then load it:</p>
-<p>Start a TLS server. Port 0 lets the OS assign a free port; a self-signed
-certificate is generated in memory — no files needed.</p>
-<pre><code class="language-sql">-- Self-signed dev cert: key and certificate live only in DuckDB memory.
-SET VARIABLE tour_tls = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
-SELECT ducknng_start_server(
-  'tour',                              -- service name
-  'tls+tcp://127.0.0.1:0',             -- TLS; port 0 = OS-assigned
-  1,                                   -- REP contexts
-  134217728,                           -- recv_max_bytes (128 MiB)
-  300000,                              -- session_idle_ms
-  getvariable('tour_tls')::UBIGINT     -- TLS config handle
-);
-SET VARIABLE tour_url = (
-  SELECT listen FROM ducknng_list_servers() WHERE name = 'tour'
-);
-SELECT starts_with(
-  getvariable('tour_url'),
-  'tls+tcp://127.0.0.1:'
-) AS tls_listen_ready;
--- Open a REQ socket and dial immediately.
-SET VARIABLE req_id = (ducknng_open_socket('req')).socket_id;
-SELECT (ducknng_dial_socket(
-  getvariable('req_id')::UBIGINT,
-  getvariable('tour_url'),
-  1000, getvariable('tour_tls')::UBIGINT
-)).ok AS dialed;
-
-+-------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS &quot;UBIGINT&quot;)) |
-+-------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                    |
-+-------------------------------------------------------------------------------------------------------------------------+
-
-+------------------+
-| tls_listen_ready |
-+------------------+
-| true             |
-+------------------+
-
-+--------+
-| dialed |
-+--------+
-| true   |
-+--------+
-</code></pre>
-<p><strong>Raw socket send/receive.</strong> Send the manifest request frame and decode
-the reply envelope.</p>
-<pre><code class="language-sql">-- Send the 22-byte manifest call frame and decode the reply.
-SELECT ok, type_name, name,
-       json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
-FROM ducknng_decode_frame(
-  ducknng_request_socket_raw(
-    getvariable('req_id')::UBIGINT,
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000
-  )
-);
-+------+-----------+----------+--------------+
-|  ok  | type_name |   name   | method_count |
-+------+-----------+----------+--------------+
-| true | result    | manifest | 7            |
-+------+-----------+----------+--------------+
-</code></pre>
-<p><strong>One-shot URL form</strong> — same call without holding a socket handle.</p>
+</div>
+<div>
+<span class="code-label client">Client session &middot; discovery</span>
 <pre><code class="language-sql">SELECT ok, type_name, name
 FROM ducknng_decode_frame(
   ducknng_request_raw(
     getvariable('tour_url'),
-    from_hex('01000000000000000000000000000000000000000000'),
+    from_hex('0100000000000000000000
+              00000000000000000000'),
     1000, getvariable('tour_tls')::UBIGINT
   )
 );
-+------+-----------+----------+
-|  ok  | type_name |   name   |
-+------+-----------+----------+
-| true | result    | manifest |
-+------+-----------+----------+
 </code></pre>
-<p><strong>AIO: launch two requests in parallel, collect both later.</strong>
-<code>ducknng_request_raw_aio(...)</code> returns immediately with an integer AIO
-handle. A list collect waits until any handle is ready and returns the
-terminal subset; this example collects each handle separately so both
-replies are shown.</p>
-<pre><code class="language-sql">CREATE TEMP TABLE tour_aios AS
-SELECT ducknng_request_raw_aio(
-         getvariable('tour_url'),
-         from_hex('01000000000000000000000000000000000000000000'),
-         1000 + i::INTEGER * 0,
-         getvariable('tour_tls')::UBIGINT
-       ) AS aio_id
-FROM range(2) t(i);
--- A one-element collect waits for that specific handle.
-SELECT count(*) AS replies,
-       bool_and(c.ok) AS all_ok,
-       bool_and(octet_length(c.frame) &gt; 0) AS all_have_frames
-FROM tour_aios AS a,
-LATERAL ducknng_aio_collect(list_value(a.aio_id), 1000) AS c;
-
-+---------+--------+-----------------+
-| replies | all_ok | all_have_frames |
-+---------+--------+-----------------+
-| 2       | true   | true            |
-+---------+--------+-----------------+
+<table class="res">
+<thead><tr><th>ok</th><th>type_name</th><th>name</th></tr></thead>
+<tbody><tr><td>true</td><td>result</td><td>manifest</td></tr></tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<div class="demo-strip">
+<div>
+<h2 id="sec:run-it-in-your-browser" class="unlisted">Run it in your browser</h2>
+<p>
+The same extension compiles to a duckdb-wasm side module. The demo loads it in
+your own tab, runs the smoke checks, and opens a SQL shell against that
+connection &mdash; no server, no install.
+</p>
+<p class="hero-actions">
+<a class="button primary" href="wasm/">Open the browser demo</a>
+<a class="button" href="browser.html">Support contract</a>
+</p>
+</div>
+<div>
+<pre><code class="language-sql">SELECT provider, media_types
+FROM ducknng_list_codecs()
+ORDER BY provider
+LIMIT 3;
 </code></pre>
-<p><strong><code>ducknng_ncurl</code> — HTTP client primitive.</strong> The framed RPC mount
-accepts POST only. Mount a server on an <code>http://</code> URL and POST the
-manifest call frame to demonstrate that the framed RPC surface is
-identical over HTTP.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, 0::UBIGINT
-);
--- The RPC mount accepts POST. POST the 22-byte manifest frame and decode the reply.
-SET VARIABLE tour_http_reply = (
-  SELECT body FROM ducknng_ncurl(
-    'http://127.0.0.1:18440/_ducknng',
-    'POST', '[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/vnd.ducknng.frame&quot;}]',
-    from_hex('01000000000000000000000000000000000000000000'),
-    2000, 0::UBIGINT
-  )
-);
-SELECT ok, type_name, name,
-       json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
-FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
-+------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                             |
-+------------------------------------------------------------------------------------------------------------------+
-
-+------+-----------+----------+--------------+
-|  ok  | type_name |   name   | method_count |
-+------+-----------+----------+--------------+
-| true | result    | manifest | 7            |
-+------+-----------+----------+--------------+
-</code></pre>
-<p><strong>Outbound HTTP profile.</strong> Caller SQL passes a profile id and ordinary
-request fields. <code>ducknng</code> checks the profile scope, injects the profile
-auth header inside the HTTP client path, rejects caller attempts to
-override that header, and keeps profile introspection redacted.</p>
-<pre><code class="language-sql">SELECT CASE WHEN ducknng_register_http_route(
-  'tour_http', 'GET', '/profile-auth',
-  'SELECT * FROM ducknng_http_text(
-     200,
-     CASE
-       WHEN ducknng_http_header(''Authorization'') = ''Bearer readme-secret''
-       THEN ''authorized''
-       ELSE ''denied''
-     END
-   )'
-) THEN 1 ELSE 0 END AS route_registered;
-SELECT CASE WHEN ducknng_register_http_profile(
-  'tour-profile', 'http', '127.0.0.1', 18440,
-  '/profile-auth', 'GET', false,
-  'Authorization', 'Bearer readme-secret'
-) THEN 1 ELSE 0 END AS profile_registered;
-SELECT ok, status, body_text
-FROM ducknng_ncurl(
-  'http://127.0.0.1:18440/profile-auth',
-  'GET', NULL, NULL, 2000, 0::UBIGINT,
-  'tour-profile'
-);
-SELECT profile_id, path_prefix, method, auth_header_names_json,
-       position('readme-secret' IN auth_header_names_json) = 0 AS redacted
-FROM ducknng_list_http_profiles()
-WHERE profile_id = 'tour-profile';
-SELECT CASE WHEN ducknng_drop_http_profile('tour-profile')
-  THEN 1 ELSE 0 END AS profile_dropped;
-+------------------+
-| route_registered |
-+------------------+
-| 1                |
-+------------------+
-+--------------------+
-| profile_registered |
-+--------------------+
-| 1                  |
-+--------------------+
-+------+--------+------------+
-|  ok  | status | body_text  |
-+------+--------+------------+
-| true | 200    | authorized |
-+------+--------+------------+
-+--------------+---------------+--------+------------------------+----------+
-|  profile_id  |  path_prefix  | method | auth_header_names_json | redacted |
-+--------------+---------------+--------+------------------------+----------+
-| tour-profile | /profile-auth | GET    | [&quot;Authorization&quot;]      | true     |
-+--------------+---------------+--------+------------------------+----------+
-+-----------------+
-| profile_dropped |
-+-----------------+
-| 1               |
-+-----------------+
-</code></pre>
-<p><strong>Query session: open, fetch Arrow IPC, parse the batch.</strong>
-<code>ducknng_open_query</code> returns a <code>session_id</code> + <code>session_token</code>.
-<code>ducknng_fetch_query_table</code> decodes the first Arrow batch directly as
-rows. The raw fetch frame carries the same Arrow bytes as a BLOB for
-callers that need to forward or inspect the payload.</p>
-<pre><code class="language-sql">CREATE TEMP TABLE tour_session AS
-SELECT *
-FROM ducknng_open_query(
-  getvariable('tour_url'),
-  'SELECT i, i * i AS sq FROM range(1, 6) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
-);
-SET VARIABLE tour_sid   = (SELECT session_id    FROM tour_session);
-SET VARIABLE tour_token = (SELECT session_token FROM tour_session);
--- Decoded rows directly:
-SELECT *
-FROM ducknng_fetch_query_table(
-  getvariable('tour_url'),
-  getvariable('tour_sid')::UBIGINT,
-  getvariable('tour_token')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
-);
-
-
-
-+---+----+
-| i | sq |
-+---+----+
-| 1 | 1  |
-| 2 | 4  |
-| 3 | 9  |
-| 4 | 16 |
-| 5 | 25 |
-+---+----+
-</code></pre>
-<p>Raw fetch gives the Arrow IPC BLOB. <code>ducknng_parse_body</code> decodes it as a
-table function.</p>
-<pre><code class="language-sql">-- Re-open a fresh session to show the raw path.
-CREATE TEMP TABLE tour_session2 AS
-SELECT *
-FROM ducknng_open_query(
-  getvariable('tour_url'),
-  'SELECT i, i * i AS sq FROM range(1, 6) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
-);
-SET VARIABLE tour_raw_frame = ducknng_fetch_query_raw(
-  getvariable('tour_url'),
-  (SELECT session_id    FROM tour_session2)::UBIGINT,
-  (SELECT session_token FROM tour_session2)::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
-);
--- Inspect envelope fields, then decode the Arrow payload.
-SELECT ducknng_frame_type_name(getvariable('tour_raw_frame')::BLOB) AS type_name,
-       ducknng_frame_end_of_stream(getvariable('tour_raw_frame')::BLOB) AS end_of_stream;
-SELECT *
-FROM ducknng_parse_body(
-  ducknng_frame_payload(getvariable('tour_raw_frame')::BLOB),
-  'application/vnd.apache.arrow.stream'
-);
-
-
-+-----------+---------------+
-| type_name | end_of_stream |
-+-----------+---------------+
-| result    | false         |
-+-----------+---------------+
-+---+----+
-| i | sq |
-+---+----+
-| 1 | 1  |
-| 2 | 4  |
-| 3 | 9  |
-| 4 | 16 |
-| 5 | 25 |
-+---+----+
-</code></pre>
-<p><strong>SSE streaming route.</strong> <code>ducknng_add_stream_route</code> registers a
-chunked-streaming route. The SQL must return a <code>chunk</code> column; each
-non-null row is written to the client as a separate HTTP chunk.
-<code>ducknng_format_sse</code> formats a Server-Sent Events event string.</p>
-<pre><code class="language-sql">SELECT ducknng_add_stream_route(
-  'tour_http', 'GET', '/events',
-  'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
-   FROM generate_series(1, 3) t(i)'
-);
--- ncurl transparently reassembles the chunked body.
-SELECT ok, status, body_text
-FROM ducknng_ncurl('http://127.0.0.1:18440/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-+--------------------------------------+
-| ducknng_add_stream_route('tour_http', 'GET', '/events', 'SELECT ducknng_format_sse(''tick '' || i::VARCHAR) AS chunk
-   FROM generate_series(1, 3) t(i)') |
-+--------------------------------------+
-| true                                 |
-+--------------------------------------+
-+------+--------+-----------+
-|  ok  | status | body_text |
-+------+--------+-----------+
-| true | 200    | data: tick 1
-
-data: tick 2
-
-data: tick 3
-
-          |
-+------+--------+-----------+
-</code></pre>
-<p>Explicit cleanup — everything that was opened must be explicitly
-stopped, closed, or dropped.</p>
-<pre><code class="language-sql">SELECT bool_and(ducknng_aio_drop(aio_id)) AS aios_dropped
-FROM tour_aios;
-DROP TABLE tour_aios;
-DROP TABLE tour_session;
-DROP TABLE tour_session2;
-SELECT (ducknng_close_socket(getvariable('req_id')::UBIGINT)).ok AS socket_closed;
-SELECT ducknng_stop_server('tour_http');
-SELECT ducknng_stop_server('tour');
-SELECT ducknng_drop_tls_config(getvariable('tour_tls')::UBIGINT);
-+--------------+
-| aios_dropped |
-+--------------+
-| true         |
-+--------------+
-
-
-
-+---------------+
-| socket_closed |
-+---------------+
-| true          |
-+---------------+
-+----------------------------------+
-| ducknng_stop_server('tour_http') |
-+----------------------------------+
-| true                             |
-+----------------------------------+
-+-----------------------------+
-| ducknng_stop_server('tour') |
-+-----------------------------+
-| true                        |
-+-----------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS &quot;UBIGINT&quot;)) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
-</code></pre>
-<h2 id="sec:development">Development</h2>
-<p>Prerequisites: a C compiler, CMake, Python 3, and R with the <code>rmarkdown</code>
-and <a href="https://github.com/rundel/duckknit"><code>duckknit</code></a> packages.</p>
-<pre><code class="language-sh"># Download DuckDB headers and set up the build tree. Run once per checkout.
-make configure
-
-# Build the release extension binary.
-# Output: build/release/ducknng.duckdb_extension
-make release
-
-# Run the SQL test suite against the release build.
-make test_release
-
-# Run the ducknng-only RPC microbench harness.
-make rpc_bench
-
-# Render the bulk benchmark report to bench/rpc_bulk_compare.md.
-# This compares ducknng RPC over http/tcp/ipc/ws in both arrow_ipc_stream
-# and ducknng_quack_batch modes, plus Quack over its public client path.
-# Requires network access to INSTALL quack FROM core_nightly.
-make rpc_bulk_compare
-
-# Render README.md and demo/subscriber_gateway.md from their Rmd sources.
-make docs
-</code></pre>
-<p><code>make configure</code> downloads the DuckDB C API headers at the version
-pinned in the Makefile (<code>DUCKDB_HEADER_VERSION</code>) and sets up CMake. The
-extension targets <code>TARGET_DUCKDB_VERSION</code>. It builds with
-<code>USE_UNSTABLE_C_API=1</code> to access DuckDB’s native Arrow conversion API
-(<code>duckdb_to_arrow_schema</code>, <code>duckdb_data_chunk_to_arrow</code>) in the
-result-to-IPC emit path. The only deprecated-entrypoint exception is the
-pending-result streaming pair, isolated in
-<code>src/ducknng_duckdb_streaming_compat.c</code>, because DuckDB v1.5.2 does not
-yet expose an undeprecated C API for pending execution with incremental
-chunk delivery. Query sessions do not silently fall back to materialized
-results; when DuckDB provides a replacement streaming API, that
-compatibility boundary is the single place to change. <code>make rpc_bench</code>
-keeps the existing raw-RPC microbench path. <code>make rpc_bulk_compare</code> now
-renders <code>bench/rpc_bulk_compare.md</code>, a benchmark report that records
-machine details, compares ducknng RPC over <code>http</code>, <code>tcp</code>, <code>ipc</code>, and
-<code>ws</code> in both <code>arrow_ipc_stream</code> and <code>ducknng_quack_batch</code> modes,
-compares Quack over its public client/server path, and includes
-concurrent reader, writer, and mixed reader/writer RPC slices. The
-writer slice is a set-oriented remote SQL write dispatch benchmark, not
-a client-side bulk append protocol. The report generates a local TPC-H
-dataset if needed and installs <code>quack</code> from <code>core_nightly</code>. The unstable
-functions in use are tracked by <code>tools/used_duckdb_unstable_api.R</code>; the
-table below is generated fresh on every README render:</p>
-<table>
-<thead>
-<tr>
-<th>ABI group</th>
-<th>Functions used</th>
-<th align="right">Count</th>
-</tr>
-</thead>
+<table class="res">
+<thead><tr><th>provider</th><th>media_types</th></tr></thead>
 <tbody>
-<tr>
-<td><code>unstable_deprecated</code></td>
-<td><code>duckdb_pending_prepared_streaming</code>, <code>duckdb_result_chunk_count</code>, <code>duckdb_result_get_chunk</code>, <code>duckdb_stream_fetch_chunk</code></td>
-<td align="right">4</td>
-</tr>
-<tr>
-<td><code>unstable_new_append_functions</code></td>
-<td><code>duckdb_appender_error_data</code></td>
-<td align="right">1</td>
-</tr>
-<tr>
-<td><code>unstable_new_arrow_functions</code></td>
-<td><code>duckdb_data_chunk_to_arrow</code>, <code>duckdb_to_arrow_schema</code></td>
-<td align="right">2</td>
-</tr>
-<tr>
-<td><code>unstable_new_config_options_functions</code></td>
-<td><code>duckdb_client_context_get_config_option</code>, <code>duckdb_config_option_set_default_scope</code>, <code>duckdb_config_option_set_default_value</code>, <code>duckdb_config_option_set_description</code>, <code>duckdb_config_option_set_name</code>, <code>duckdb_config_option_set_type</code>, <code>duckdb_create_config_option</code>, <code>duckdb_destroy_config_option</code>, <code>duckdb_register_config_option</code></td>
-<td align="right">9</td>
-</tr>
-<tr>
-<td><code>unstable_new_error_data_functions</code></td>
-<td><code>duckdb_destroy_error_data</code>, <code>duckdb_error_data_has_error</code>, <code>duckdb_error_data_message</code></td>
-<td align="right">3</td>
-</tr>
-<tr>
-<td><code>unstable_new_logger_functions</code></td>
-<td><code>duckdb_create_log_storage</code>, <code>duckdb_destroy_log_storage</code>, <code>duckdb_log_storage_set_extra_data</code>, <code>duckdb_log_storage_set_name</code>, <code>duckdb_log_storage_set_write_log_entry</code>, <code>duckdb_register_log_storage</code></td>
-<td align="right">6</td>
-</tr>
-<tr>
-<td><code>unstable_new_open_connect_functions</code></td>
-<td><code>duckdb_client_context_get_connection_id</code>, <code>duckdb_connection_get_arrow_options</code>, <code>duckdb_connection_get_client_context</code>, <code>duckdb_destroy_arrow_options</code>, <code>duckdb_destroy_client_context</code></td>
-<td align="right">5</td>
-</tr>
-<tr>
-<td><code>unstable_new_prepared_statement_functions</code></td>
-<td><code>duckdb_prepared_statement_column_count</code>, <code>duckdb_prepared_statement_column_logical_type</code>, <code>duckdb_prepared_statement_column_name</code></td>
-<td align="right">3</td>
-</tr>
-<tr>
-<td><code>unstable_new_query_execution_functions</code></td>
-<td><code>duckdb_result_get_arrow_options</code></td>
-<td align="right">1</td>
-</tr>
-<tr>
-<td><code>unstable_new_scalar_function_functions</code></td>
-<td><code>duckdb_scalar_function_bind_set_error</code>, <code>duckdb_scalar_function_get_bind_data</code>, <code>duckdb_scalar_function_get_client_context</code>, <code>duckdb_scalar_function_set_bind</code>, <code>duckdb_scalar_function_set_bind_data</code>, <code>duckdb_scalar_function_set_bind_data_copy</code></td>
-<td align="right">6</td>
-</tr>
-<tr>
-<td><code>unstable_new_scalar_function_state_functions</code></td>
-<td><code>duckdb_scalar_function_set_init</code></td>
-<td align="right">1</td>
-</tr>
-<tr>
-<td><code>unstable_new_string_functions</code></td>
-<td><code>duckdb_valid_utf8_check</code></td>
-<td align="right">1</td>
-</tr>
-<tr>
-<td><code>unstable_new_table_function_functions</code></td>
-<td><code>duckdb_table_function_get_client_context</code></td>
-<td align="right">1</td>
-</tr>
-<tr>
-<td><code>unstable_new_value_functions</code></td>
-<td><code>duckdb_create_map_value</code>, <code>duckdb_create_time_ns</code>, <code>duckdb_create_union_value</code></td>
-<td align="right">3</td>
-</tr>
-<tr>
-<td><code>unstable_new_vector_functions</code></td>
-<td><code>duckdb_create_selection_vector</code>, <code>duckdb_create_vector</code>, <code>duckdb_destroy_selection_vector</code>, <code>duckdb_destroy_vector</code>, <code>duckdb_selection_vector_get_data_ptr</code>, <code>duckdb_unsafe_vector_assign_string_element_len</code>, <code>duckdb_vector_copy_sel</code></td>
-<td align="right">7</td>
-</tr>
+<tr><td>arrow</td><td>application/vnd.apache.arrow.stream</td></tr>
+<tr><td>ducknng</td><td>application/vnd.ducknng.frame</td></tr>
+<tr><td>json</td><td>application/json</td></tr>
 </tbody>
 </table>
-<p><code>make test_release</code> runs the SQL test suite with DuckDB’s test runner.
-All tests live under <code>test/sql/</code> as <code>.test</code> files. The public function
-surface is verified by <code>test/sql/ducknng_public_surface.test</code>, which
-reads <code>function_catalog/functions.yaml</code> and checks that every declared
-name appears in the loaded extension catalog.</p>
-<p>To regenerate the function catalog markdown (embedded in this README)
-after adding or renaming public functions:</p>
-<pre><code class="language-sh">make function_catalog  # regenerates function_catalog/functions.md
-</code></pre>
-<p>Every new public SQL function must have a corresponding entry in
-<code>function_catalog/functions.yaml</code> or the surface test will fail.</p>
-<h2 id="sec:lifetime-and-manual-cleanup">Lifetime and manual cleanup</h2>
-<p>Long-lived handles are manually managed at the SQL surface. Stop, close,
-or drop them explicitly; runtime teardown is fallback cleanup, not the
-primary lifecycle model.</p>
-<ul>
-<li>Stop servers with <code>ducknng_stop_server(...)</code></li>
-<li>Close sockets with <code>ducknng_close_socket(...)</code></li>
-<li>Drop AIO handles with <code>ducknng_aio_drop(...)</code></li>
-<li>Drop TLS config handles with <code>ducknng_drop_tls_config(...)</code></li>
-<li>Close query sessions with <code>ducknng_close_query(...)</code></li>
-</ul>
-<p><code>ducknng_aio_cancel(...)</code> is cancellation control, not the destructor.
-<code>ducknng_cancel_query(...)</code> is best-effort session control, not a
-replacement for the explicit close path.</p>
-<h2 id="sec:function-catalog">Function catalog</h2>
-<p>The generated catalog is the public SQL surface. Any loaded <code>ducknng__*</code>
-helper names are internal macro implementation details required by
-DuckDB’s stable C API path and are not supported user APIs.</p>
-<details>
-<summary>
-<strong>Expand the full generated function catalog</strong>
-</summary>
-<h1 id="chp:function-catalog">Function Catalog</h1>
-<p>This file is generated from <code>function_catalog/functions.yaml</code>.</p>
-<h2 id="sec:service-control">Service Control</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_start_server</code></td>
-<td>scalar</td>
-<td><code>name, listen, contexts, recv_max_bytes, session_idle_ms, tls_config_id[, ip_allowlist_json]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Start a named ducknng service and choose the carrier from the listen URL scheme.</td>
-</tr>
-<tr>
-<td><code>ducknng_stop_server</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Stop a named ducknng service.</td>
-</tr>
-<tr>
-<td><code>ducknng_service_inflight</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>UBIGINT</code></td>
-<td>Return the current in-flight request count for a named service. Re-evaluated on every call, making it suitable for use inside recursive poll CTEs.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_service_execution_model</code></td>
-<td>scalar</td>
-<td><code>name, model</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Set the DuckDB connection execution model used by service-side SQL.</td>
-</tr>
-<tr>
-<td><code>ducknng_transport_capabilities</code></td>
-<td>scalar</td>
-<td></td>
-<td><code>VARCHAR</code></td>
-<td>Return the active net backend’s capability descriptor as a JSON object.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_transport_capabilities</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(target VARCHAR, active BOOLEAN, http VARCHAR, https VARCHAR, http_response_stream VARCHAR, inproc VARCHAR, tcp VARCHAR, ipc VARCHAR, tls_tcp VARCHAR, websocket VARCHAR, async_is_real BOOLEAN, honors_timeout BOOLEAN, honors_cancel BOOLEAN, tls_owner VARCHAR)</code></td>
-<td>List the capability contract for every build target; exactly one row is active.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_execution_pool_max</code></td>
-<td>scalar</td>
-<td><code>n</code></td>
-<td><code>UBIGINT</code></td>
-<td>Set the runtime execution-connection pool grow ceiling and return the effective value.</td>
-</tr>
-<tr>
-<td><code>ducknng_execution_pool_max</code></td>
-<td>scalar</td>
-<td></td>
-<td><code>UBIGINT</code></td>
-<td>Return the current execution-connection pool grow ceiling.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:introspection">Introspection</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_list_servers</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(service_id UBIGINT, name VARCHAR, listen VARCHAR, contexts INTEGER, running BOOLEAN, execution_model VARCHAR, sessions UBIGINT, active_pipes UBIGINT, max_open_sessions UBIGINT, max_active_pipes UBIGINT, inflight_requests UBIGINT, max_inflight_requests UBIGINT, max_sessions_per_peer_identity UBIGINT, max_inflight_per_peer_identity UBIGINT, max_reply_bytes_per_peer_identity UBIGINT, max_session_open_rate_per_peer_identity UBIGINT, tls_enabled BOOLEAN, tls_auth_mode INTEGER, peer_identity_required BOOLEAN, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, peer_allowlist_count UBIGINT, ip_allowlist_count UBIGINT)</code></td>
-<td>List registered ducknng services.</td>
-</tr>
-<tr>
-<td><code>ducknng_read_monitor</code></td>
-<td>table</td>
-<td><code>name, after_seq, max_events</code></td>
-<td><code>TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, event VARCHAR, admitted BOOLEAN, reason VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)</code></td>
-<td>Read the bounded per-service NNG pipe monitor event stream.</td>
-</tr>
-<tr>
-<td><code>ducknng_monitor_status</code></td>
-<td>table</td>
-<td><code>name</code></td>
-<td><code>TABLE(service_name VARCHAR, event_capacity UBIGINT, event_count UBIGINT, oldest_seq UBIGINT, newest_seq UBIGINT, dropped_events UBIGINT, active_pipes UBIGINT, max_active_pipes UBIGINT)</code></td>
-<td>Return pipe monitor ring status and active-pipe counters for a running service.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_pipes</code></td>
-<td>table</td>
-<td><code>name</code></td>
-<td><code>TABLE(pipe_id UBIGINT, opened_ms UBIGINT, service_name VARCHAR, listen VARCHAR, transport_family VARCHAR, scheme VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, peer_identity VARCHAR)</code></td>
-<td>List currently active NNG pipes for a running service.</td>
-</tr>
-<tr>
-<td><code>ducknng_nng_stats</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(scope VARCHAR, name VARCHAR, type VARCHAR, unit VARCHAR, value UBIGINT, svalue VARCHAR, description VARCHAR)</code></td>
-<td>Snapshot of NNG’s native statistics tree, flattened into rows.</td>
-</tr>
-<tr>
-<td><code>ducknng_monitor_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Opt a client socket into pipe-event monitoring. Subsequent pipe add/remove events are captured into a per-socket ring readable with ducknng_read_socket_monitor().</td>
-</tr>
-<tr>
-<td><code>ducknng_read_socket_monitor</code></td>
-<td>table</td>
-<td><code>socket_id, after_seq, max_events</code></td>
-<td><code>TABLE(seq UBIGINT, ts_ms UBIGINT, pipe_id UBIGINT, event VARCHAR, dropped UBIGINT)</code></td>
-<td>Read captured pipe events for a monitored client socket. event is ‘add’ or ‘remove’; dropped is the running count of events evicted from the ring.</td>
-</tr>
-<tr>
-<td><code>ducknng_socket_monitor_wait</code></td>
-<td>scalar</td>
-<td><code>socket_id, after_seq, timeout_ms</code></td>
-<td><code>UBIGINT</code></td>
-<td>Block until a monitored socket records a pipe event newer than after_seq, or until timeout_ms elapses; returns the current newest event seq.</td>
-</tr>
-<tr>
-<td><code>ducknng_log_entries</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(ts TIMESTAMP, level VARCHAR, log_type VARCHAR, message VARCHAR)</code></td>
-<td>Return a snapshot of the most recent DuckDB log entries captured by the ducknng log ring.</td>
-</tr>
-<tr>
-<td><code>ducknng_enable_log_capture</code></td>
-<td>scalar</td>
-<td></td>
-<td><code>BOOLEAN</code></td>
-<td>Wire the ducknng log ring into DuckDB’s internal logger so that DuckDB log entries are captured and visible through ducknng_log_entries(). Returns TRUE if capture is active after the call, FALSE if registration failed. Safe to call multiple times.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:method-registry">Method Registry</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_register_exec_method</code></td>
-<td>scalar</td>
-<td><code>[requires_auth]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register the built-in exec RPC method explicitly.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_upload_methods</code></td>
-<td>scalar</td>
-<td><code>[requires_auth]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_method_auth</code></td>
-<td>scalar</td>
-<td><code>name, requires_auth</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Set descriptor-level verified-peer-identity authorization for a registered RPC method.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_method</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Unregister a method from the runtime registry.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_family</code></td>
-<td>scalar</td>
-<td><code>family</code></td>
-<td><code>UBIGINT</code></td>
-<td>Unregister all methods in a family and return the number removed.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_methods</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)</code></td>
-<td>List the currently registered RPC methods in the runtime registry.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:primitive-transport">Primitive Transport</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_open_socket</code></td>
-<td>scalar</td>
-<td><code>protocol</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Open a client socket handle for a supported NNG protocol.</td>
-</tr>
-<tr>
-<td><code>ducknng_dial_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id, url, timeout_ms, tls_config_id</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Dial a URL using an opened socket handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_listen_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id, url, recv_max_bytes, tls_config_id</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Bind a socket handle to a listen URL and start its NNG listener.</td>
-</tr>
-<tr>
-<td><code>ducknng_close_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Close a client socket handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_send_socket_raw</code></td>
-<td>scalar</td>
-<td><code>socket_id, frame, timeout_ms</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Send one raw frame through an active socket handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_recv_socket_raw</code></td>
-<td>scalar</td>
-<td><code>socket_id, timeout_ms</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Receive one raw frame from an active socket handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_subscribe_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id, topic</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Register a raw topic prefix on a sub socket.</td>
-</tr>
-<tr>
-<td><code>ducknng_unsubscribe_socket</code></td>
-<td>scalar</td>
-<td><code>socket_id, topic</code></td>
-<td><code>STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)</code></td>
-<td>Remove a raw topic prefix from a sub socket.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_sockets</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)</code></td>
-<td>List client socket handles in the runtime.</td>
-</tr>
-<tr>
-<td><code>ducknng_request</code></td>
-<td>table</td>
-<td><code>url, payload, timeout_ms, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)</code></td>
-<td>Perform a one-shot raw request and return a structured result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_request_socket</code></td>
-<td>table</td>
-<td><code>socket_id, payload, timeout_ms</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)</code></td>
-<td>Perform a raw request through a previously dialed socket handle and return a structured result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_request_raw</code></td>
-<td>scalar</td>
-<td><code>url, payload, timeout_ms, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Perform a one-shot raw request and return the raw reply frame bytes.</td>
-</tr>
-<tr>
-<td><code>ducknng_request_socket_raw</code></td>
-<td>scalar</td>
-<td><code>socket_id, payload, timeout_ms</code></td>
-<td><code>BLOB</code></td>
-<td>Perform a raw request through a dialed socket handle and return the raw reply frame bytes.</td>
-</tr>
-<tr>
-<td><code>ducknng_decode_frame</code></td>
-<td>table</td>
-<td><code>frame</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)</code></td>
-<td>Decode a raw ducknng frame into envelope fields and extracted payload columns.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_payload</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>BLOB</code></td>
-<td>Extract the payload bytes from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_payload_text</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>VARCHAR</code></td>
-<td>Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_error_text</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>VARCHAR</code></td>
-<td>Extract the protocol-level error text from a raw ducknng error frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_version</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>UTINYINT</code></td>
-<td>Extract the protocol version field from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_type</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>UTINYINT</code></td>
-<td>Extract the numeric reply type field from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_status</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>UTINYINT</code></td>
-<td>Extract the protocol status from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_flags</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>UINTEGER</code></td>
-<td>Extract the reply flags bitset from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_type_name</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>VARCHAR</code></td>
-<td>Extract the symbolic reply type name from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_name</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>VARCHAR</code></td>
-<td>Extract the method or reply name field from one raw ducknng frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_frame_end_of_stream</code></td>
-<td>scalar</td>
-<td><code>frame</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Report whether one raw ducknng frame carries the end-of-stream reply flag.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:transport-security">Transport Security</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_list_tls_configs</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(tls_config_id UBIGINT, source VARCHAR, enabled BOOLEAN, has_cert_key_file BOOLEAN, has_ca_file BOOLEAN, has_cert_pem BOOLEAN, has_key_pem BOOLEAN, has_ca_pem BOOLEAN, has_password BOOLEAN, auth_mode INTEGER, peer_allowlist_active BOOLEAN, peer_allowlist_count UBIGINT, peer_allowlist_json VARCHAR)</code></td>
-<td>List registered TLS config handles and the kinds of material they contain.</td>
-</tr>
-<tr>
-<td><code>ducknng_drop_tls_config</code></td>
-<td>scalar</td>
-<td><code>tls_config_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Remove a registered TLS config handle from the runtime.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_tls_peer_allowlist</code></td>
-<td>scalar</td>
-<td><code>tls_config_id, identities_json</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Set the default exact peer-identity allowlist on a TLS config handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_service_peer_allowlist</code></td>
-<td>scalar</td>
-<td><code>name, identities_json</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Dynamically set the exact peer-identity allowlist for a running service.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_service_ip_allowlist</code></td>
-<td>scalar</td>
-<td><code>name, cidrs_json</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Dynamically set the IP/CIDR remote-address allowlist for a running service.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_service_limits</code></td>
-<td>scalar</td>
-<td><code>name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Set service resource limits.</td>
-</tr>
-<tr>
-<td><code>ducknng_auth_context</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(phase VARCHAR, service_name VARCHAR, transport_family VARCHAR, scheme VARCHAR, listen VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, tls_verified BOOLEAN, peer_identity VARCHAR, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, http_method VARCHAR, http_path VARCHAR, content_type VARCHAR, body_bytes UBIGINT, rpc_method VARCHAR, rpc_type VARCHAR, payload_bytes UBIGINT)</code></td>
-<td>Expose the current request context to a SQL authorization callback.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_service_authorizer</code></td>
-<td>scalar</td>
-<td><code>name, authorizer_sql</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Install or clear a service-level SQL authorization callback evaluated uniformly for framed RPC requests before method dispatch.</td>
-</tr>
-<tr>
-<td><code>ducknng_self_signed_tls_config</code></td>
-<td>scalar</td>
-<td><code>common_name, valid_days, auth_mode</code></td>
-<td><code>UBIGINT</code></td>
-<td>Generate a self-signed development certificate and register it as a TLS config handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_tls_config_from_pem</code></td>
-<td>scalar</td>
-<td><code>cert_pem, key_pem, ca_pem, password, auth_mode</code></td>
-<td><code>UBIGINT</code></td>
-<td>Register a TLS config handle from in-memory PEM material.</td>
-</tr>
-<tr>
-<td><code>ducknng_tls_config_from_files</code></td>
-<td>scalar</td>
-<td><code>cert_key_file, ca_file, password, auth_mode</code></td>
-<td><code>UBIGINT</code></td>
-<td>Register a TLS config handle from file-backed certificate material.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:http-transport">HTTP Transport</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_ncurl</code></td>
-<td>table</td>
-<td><code>url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]</code></td>
-<td><code>TABLE(ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Perform one HTTP or HTTPS request and return an in-band result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_aio</code></td>
-<td>scalar</td>
-<td><code>url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous HTTP or HTTPS request and return a future-like aio handle id.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_aio_collect</code></td>
-<td>table</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, status INTEGER, error VARCHAR, headers_json VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Wait for asynchronous ncurl handles and return one raw HTTP result row per newly collected terminal operation.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_stream_open_aio</code></td>
-<td>scalar</td>
-<td><code>url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]</code></td>
-<td><code>UBIGINT</code></td>
-<td>Open an HTTP or HTTPS response stream asynchronously and return an aio handle for the response headers.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_stream_open_aio_collect</code></td>
-<td>table</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, status INTEGER, error VARCHAR, headers_json VARCHAR)</code></td>
-<td>Wait for streaming HTTP open aios and return response status, headers, and a readable stream handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_stream_recv_aio</code></td>
-<td>scalar</td>
-<td><code>stream_id, max_bytes, timeout_ms</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one cancellable asynchronous raw-body receive from an opened HTTP response stream.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_stream_recv_aio_collect</code></td>
-<td>table</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, stream_id UBIGINT, error VARCHAR, body BLOB, end_of_stream BOOLEAN)</code></td>
-<td>Wait for streaming HTTP receive aios and return one raw body slice or explicit end-of-stream result per ready handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_stream_close</code></td>
-<td>scalar</td>
-<td><code>stream_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Close and release an HTTP response stream handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_ncurl_table</code></td>
-<td>table</td>
-<td><code>url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id]</code></td>
-<td><code>TABLE(dynamic by response Content-Type)</code></td>
-<td>Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_http_profile</code></td>
-<td>scalar</td>
-<td><code>profile_id, scheme, host, port, path_prefix, method, tls_required, auth_header_name, auth_header_value[, expires_at_ms[, allow_subjects_json]]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register or replace an outbound HTTP credential profile with fail-closed request scope.</td>
-</tr>
-<tr>
-<td><code>ducknng_drop_http_profile</code></td>
-<td>scalar</td>
-<td><code>profile_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Drop a registered outbound HTTP credential profile.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_http_profiles</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(profile_id VARCHAR, scheme VARCHAR, host VARCHAR, port INTEGER, has_port BOOLEAN, path_prefix VARCHAR, method VARCHAR, tls_required BOOLEAN, auth_header_names_json VARCHAR, version UBIGINT, created_ms UBIGINT, updated_ms UBIGINT, expires_at_ms UBIGINT, allow_subjects_json VARCHAR)</code></td>
-<td>List registered outbound HTTP profiles with redacted credential metadata.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:body-codecs">Body Codecs</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_list_codecs</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(provider VARCHAR, media_types VARCHAR, kind VARCHAR, function_name VARCHAR, output VARCHAR, notes VARCHAR)</code></td>
-<td>List built-in body serialization/deserialization providers and any registered user codec hooks.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_codec</code></td>
-<td>scalar</td>
-<td><code>content_type, function_name</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register a user body codec that decodes a BLOB body into a single VARCHAR value through an existing scalar SQL function.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_codec</code></td>
-<td>scalar</td>
-<td><code>content_type</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Remove a previously registered user body codec for a content type.</td>
-</tr>
-<tr>
-<td><code>ducknng_parse_body</code></td>
-<td>table</td>
-<td><code>body, content_type</code></td>
-<td><code>TABLE(dynamic by provider)</code></td>
-<td>Parse one response/request body BLOB according to its content type.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:http-routes">HTTP Routes</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_register_http_route</code></td>
-<td>scalar</td>
-<td><code>service_name, method, path, handler_sql[, request_max_bytes]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register one exact-path HTTP route beside the framed RPC mount of an existing <a href="http://">http://</a> or <a href="https://">https://</a> service.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_http_route_pattern</code></td>
-<td>scalar</td>
-<td><code>service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register one low-level HTTP route pattern beside the framed RPC mount using exact, prefix, or template matching.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_http_route</code></td>
-<td>scalar</td>
-<td><code>service_name, method, path</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Remove one previously registered exact-path HTTP route from a service.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_http_route_pattern</code></td>
-<td>scalar</td>
-<td><code>service_name, method, match_kind, path_pattern</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Remove one previously registered prefix, template, or explicit exact route pattern from a service.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_http_routes</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR, auth_require_identity BOOLEAN, static_dir_path VARCHAR, auth_allow_identities_json VARCHAR)</code></td>
-<td>List the currently registered HTTP routes across running services, including their match kind and stored path pattern.</td>
-</tr>
-<tr>
-<td><code>ducknng_set_http_route_auth</code></td>
-<td>scalar</td>
-<td><code>service_name, method, path[, require_identity[, allow_identities_json]]</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Set authentication requirements on a registered HTTP route.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_http_static</code></td>
-<td>scalar</td>
-<td><code>service_name, path_prefix, dir_path</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register a prefix route that serves static files from a directory on the server filesystem.</td>
-</tr>
-<tr>
-<td><code>ducknng_register_http_worker</code></td>
-<td>scalar</td>
-<td><code>service_name, worker_name, sql, interval_ms</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Register a background SQL worker that runs on a recurring interval while the HTTP service is active.</td>
-</tr>
-<tr>
-<td><code>ducknng_unregister_http_worker</code></td>
-<td>scalar</td>
-<td><code>service_name, worker_name</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Unregister a previously registered HTTP background worker.</td>
-</tr>
-<tr>
-<td><code>ducknng_list_http_workers</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(service_name VARCHAR, worker_name VARCHAR, sql VARCHAR, interval_ms UBIGINT)</code></td>
-<td>List all currently registered HTTP background workers across running services.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_ndjson</code></td>
-<td>table_macro</td>
-<td><code>status, body_text</code></td>
-<td><code>TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)</code></td>
-<td>Convenience table macro for returning an NDJSON HTTP response from a route handler.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_sse</code></td>
-<td>table_macro</td>
-<td><code>status, body_text</code></td>
-<td><code>TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)</code></td>
-<td>Convenience table macro for returning a Server-Sent Events HTTP response from a route handler.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_request</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(service_name VARCHAR, listen VARCHAR, scheme VARCHAR, method VARCHAR, path VARCHAR, query_string VARCHAR, content_type VARCHAR, headers_json VARCHAR, caller_identity VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, route_method VARCHAR, route_match_kind VARCHAR, route_path VARCHAR, path_params_json VARCHAR, body_bytes UBIGINT, route_id UBIGINT, remote_port INTEGER)</code></td>
-<td>Expose the current HTTP request context while SQL runs inside an active route handler.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_request_body</code></td>
-<td>table</td>
-<td></td>
-<td><code>TABLE(body BLOB, body_text VARCHAR)</code></td>
-<td>Expose the current HTTP request body while SQL runs inside an active route handler.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_headers_get</code></td>
-<td>scalar</td>
-<td><code>headers_json, name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Return one header value from ducknng’s canonical HTTP header JSON.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_headers_build</code></td>
-<td>scalar</td>
-<td><code>names, values</code></td>
-<td><code>VARCHAR</code></td>
-<td>Build ducknng’s canonical HTTP header JSON from parallel name and value lists.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_query_param_get</code></td>
-<td>scalar</td>
-<td><code>query_string, name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Return one decoded query-string parameter value.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_cookie_get</code></td>
-<td>scalar</td>
-<td><code>cookie_header, name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Return one cookie value from a Cookie header string.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_path_params_get</code></td>
-<td>scalar</td>
-<td><code>path_params_json, name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Return one template-route path parameter from path_params_json.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_header</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Route-local shortcut for reading one request header by name.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_query_param</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Route-local shortcut for reading one decoded query parameter by name.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_cookie</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Route-local shortcut for reading one request cookie by name.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_path_param</code></td>
-<td>scalar</td>
-<td><code>name</code></td>
-<td><code>VARCHAR</code></td>
-<td>Route-local shortcut for reading one template path parameter by name.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_response</code></td>
-<td>table</td>
-<td><code>status, headers_json, content_type, body, body_text</code></td>
-<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Build the one-row response shape expected by a route handler.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_text</code></td>
-<td>table</td>
-<td><code>status, body_text</code></td>
-<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Build a one-row plain-text HTTP route response.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_json</code></td>
-<td>table</td>
-<td><code>status, body_text</code></td>
-<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Build a one-row JSON HTTP route response from a text body.</td>
-</tr>
-<tr>
-<td><code>ducknng_http_binary</code></td>
-<td>table</td>
-<td><code>status, body</code></td>
-<td><code>TABLE(status INTEGER, headers_json VARCHAR, content_type VARCHAR, body BLOB, body_text VARCHAR)</code></td>
-<td>Build a one-row binary HTTP route response.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:async-i-o">Async I/O</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_request_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, frame, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one raw req/rep roundtrip asynchronously and return a future-like aio handle id.</td>
-</tr>
-<tr>
-<td><code>ducknng_get_rpc_manifest_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous manifest RPC request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_run_rpc_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, sql, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous metadata-only exec RPC request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_open_query_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, sql, batch_rows, batch_bytes, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous query_open request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_fetch_query_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, batch_rows, batch_bytes, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous fetch request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_close_query_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous close request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_cancel_query_raw_aio</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, timeout_ms, tls_config_id</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one asynchronous cancel request and return an aio handle id for the raw reply frame.</td>
-</tr>
-<tr>
-<td><code>ducknng_request_socket_raw_aio</code></td>
-<td>scalar</td>
-<td><code>socket_id, frame, timeout_ms</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one raw req/rep roundtrip asynchronously on an existing req socket handle and return an aio handle id.</td>
-</tr>
-<tr>
-<td><code>ducknng_send_socket_raw_aio</code></td>
-<td>scalar</td>
-<td><code>socket_id, frame, timeout_ms</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one raw socket send asynchronously and return an aio handle id.</td>
-</tr>
-<tr>
-<td><code>ducknng_recv_socket_raw_aio</code></td>
-<td>scalar</td>
-<td><code>socket_id, timeout_ms</code></td>
-<td><code>UBIGINT</code></td>
-<td>Launch one raw socket receive asynchronously and return an aio handle id.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_ready</code></td>
-<td>scalar</td>
-<td><code>aio_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Return whether an aio handle has reached a terminal state.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_wait</code></td>
-<td>scalar</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Wait until any requested aio handle reaches a terminal state without collecting or dropping it.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_status</code></td>
-<td>table</td>
-<td><code>aio_id</code></td>
-<td><code>TABLE(aio_id UBIGINT, exists BOOLEAN, kind VARCHAR, state VARCHAR, phase VARCHAR, terminal BOOLEAN, send_done BOOLEAN, send_ok BOOLEAN, recv_done BOOLEAN, recv_ok BOOLEAN, has_reply_frame BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)</code></td>
-<td>Inspect the current or terminal status of one aio handle, including send-phase and recv-phase completion.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_collect</code></td>
-<td>table</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame BLOB, nng_error INTEGER, nng_error_message VARCHAR)</code></td>
-<td>Wait for any requested aio handles to finish and return one row per newly collected terminal result.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_collect_decoded</code></td>
-<td>table</td>
-<td><code>aio_ids, wait_ms</code></td>
-<td><code>TABLE(aio_id UBIGINT, ok BOOLEAN, error VARCHAR, frame_ok BOOLEAN, frame_error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR, nng_error INTEGER, nng_error_message VARCHAR)</code></td>
-<td>Wait for framed aio handles, collect their terminal frame rows, and project the decoded envelope columns directly.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_cancel</code></td>
-<td>scalar</td>
-<td><code>aio_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Request cancellation of a pending aio handle.</td>
-</tr>
-<tr>
-<td><code>ducknng_aio_drop</code></td>
-<td>scalar</td>
-<td><code>aio_id</code></td>
-<td><code>BOOLEAN</code></td>
-<td>Release a terminal aio handle from the runtime registry.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:rpc-helper">RPC Helper</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_get_rpc_manifest</code></td>
-<td>table</td>
-<td><code>url, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, manifest VARCHAR)</code></td>
-<td>Request the RPC manifest and return a structured result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_get_rpc_manifest_raw</code></td>
-<td>scalar</td>
-<td><code>url, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Request the RPC manifest and return the raw reply frame as BLOB.</td>
-</tr>
-<tr>
-<td><code>ducknng_run_rpc</code></td>
-<td>table</td>
-<td><code>url, sql, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)</code></td>
-<td>Execute a metadata-oriented RPC call and return a structured result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_run_rpc_params</code></td>
-<td>table</td>
-<td><code>url, sql, params, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, rows_changed UBIGINT, statement_type INTEGER, result_type INTEGER)</code></td>
-<td>Execute one parameterized metadata-oriented exec RPC and return a structured result row.</td>
-</tr>
-<tr>
-<td><code>ducknng_run_rpc_raw</code></td>
-<td>scalar</td>
-<td><code>url, sql, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Execute the exec RPC and return the raw reply frame as BLOB.</td>
-</tr>
-<tr>
-<td><code>ducknng_query_rpc</code></td>
-<td>table</td>
-<td><code>url, sql, tls_config_id</code></td>
-<td><code>table</code></td>
-<td>Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.</td>
-</tr>
-<tr>
-<td><code>ducknng_query_rpc_params</code></td>
-<td>table</td>
-<td><code>url, sql, params, tls_config_id</code></td>
-<td><code>table</code></td>
-<td>Execute a parameterized row-returning query through the session family and expose its Arrow rows as a DuckDB table.</td>
-</tr>
-<tr>
-<td><code>ducknng_prepare_query</code></td>
-<td>table</td>
-<td><code>url, sql, tls_config_id</code></td>
-<td><code>table (zero rows with the prepared remote schema)</code></td>
-<td>Prepare exactly one remote SQL statement without executing it and expose its result schema.</td>
-</tr>
-<tr>
-<td><code>ducknng_prepare_query_params</code></td>
-<td>table</td>
-<td><code>url, sql, params, tls_config_id</code></td>
-<td><code>table (zero rows with the prepared remote schema)</code></td>
-<td>Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.</td>
-</tr>
-<tr>
-<td><code>ducknng_upload_table</code></td>
-<td>table</td>
-<td><code>url, source_query, target_table[, tls_config_id]</code></td>
-<td><code>TABLE(rows_uploaded BIGINT, bytes_uploaded BIGINT)</code></td>
-<td>Run source_query locally and stream its result rows into a remote table over the quack-batch upload lane; returns rows_uploaded and client-sent bytes_uploaded.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="sec:rpc-session">RPC Session</h2>
-<table>
-<thead>
-<tr>
-<th>name</th>
-<th>kind</th>
-<th>arguments</th>
-<th>returns</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_open_query</code></td>
-<td>table</td>
-<td><code>url, sql, batch_rows, batch_bytes, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)</code></td>
-<td>Open a server-side query session and return the JSON control metadata as a structured row.</td>
-</tr>
-<tr>
-<td><code>ducknng_fetch_query</code></td>
-<td>table</td>
-<td><code>url, session_id, session_token, batch_rows, batch_bytes, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT, payload BLOB, end_of_stream BOOLEAN)</code></td>
-<td>Fetch the next session reply and return either JSON control metadata or an Arrow IPC batch payload.</td>
-</tr>
-<tr>
-<td><code>ducknng_fetch_query_table</code></td>
-<td>table</td>
-<td><code>url, session_id, session_token, batch_rows, batch_bytes, tls_config_id</code></td>
-<td><code>TABLE(dynamic from Arrow IPC batch)</code></td>
-<td>Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table.</td>
-</tr>
-<tr>
-<td><code>ducknng_close_query</code></td>
-<td>table</td>
-<td><code>url, session_id, session_token, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)</code></td>
-<td>Close a server-side query session and return the JSON control metadata as a structured row.</td>
-</tr>
-<tr>
-<td><code>ducknng_cancel_query</code></td>
-<td>table</td>
-<td><code>url, session_id, session_token, tls_config_id</code></td>
-<td><code>TABLE(ok BOOLEAN, error VARCHAR, session_id UBIGINT, session_token VARCHAR, state VARCHAR, next_method VARCHAR, control_json VARCHAR, idle_timeout_ms UBIGINT)</code></td>
-<td>Request cancellation for a server-side query session and return the JSON control metadata as a structured row.</td>
-</tr>
-<tr>
-<td><code>ducknng_open_query_raw</code></td>
-<td>scalar</td>
-<td><code>url, sql, batch_rows, batch_bytes, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Open a server-side query session and return the raw reply frame as BLOB.</td>
-</tr>
-<tr>
-<td><code>ducknng_fetch_query_raw</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, batch_rows, batch_bytes, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Fetch the next session reply and return the raw reply frame as BLOB.</td>
-</tr>
-<tr>
-<td><code>ducknng_close_query_raw</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Close a server-side query session and return the raw reply frame as BLOB.</td>
-</tr>
-<tr>
-<td><code>ducknng_cancel_query_raw</code></td>
-<td>scalar</td>
-<td><code>url, session_id, session_token, tls_config_id</code></td>
-<td><code>BLOB</code></td>
-<td>Cancel a server-side query session and return the raw reply frame as BLOB.</td>
-</tr>
-</tbody>
-</table>
-</details>
-<h2 id="sec:transport-layer">Transport layer</h2>
-<h3 id="sec:nng-socket-patterns">NNG socket patterns</h3>
-<p>NNG exposes seven socket patterns. All share the same
-<code>ducknng_open_socket(kind)</code> / <code>ducknng_listen_socket(...)</code> /
-<code>ducknng_dial_socket(...)</code> entry points and the same synchronous/AIO
-send-recv helpers.</p>
-<table>
-<thead>
-<tr>
-<th>Pattern</th>
-<th><code>kind</code></th>
-<th>Direction</th>
-<th>Typical use</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Request/reply</td>
-<td><code>req</code> / <code>rep</code></td>
-<td>1:1 round-trip</td>
-<td>RPC, sync calls</td>
-</tr>
-<tr>
-<td>Pipeline</td>
-<td><code>push</code> / <code>pull</code></td>
-<td>1-way fan-out</td>
-<td>Task queues, load distribution</td>
-</tr>
-<tr>
-<td>Publish/subscribe</td>
-<td><code>pub</code> / <code>sub</code></td>
-<td>1:N broadcast</td>
-<td>Event fan-out; subscribers filter by prefix</td>
-</tr>
-<tr>
-<td>Survey</td>
-<td><code>surveyor</code> / <code>respondent</code></td>
-<td>1:N with replies</td>
-<td>Health checks, membership queries</td>
-</tr>
-<tr>
-<td>Bus</td>
-<td><code>bus</code></td>
-<td>N:N mesh</td>
-<td>Fully-connected peer broadcast</td>
-</tr>
-<tr>
-<td>Pair</td>
-<td><code>pair</code></td>
-<td>1:1 bidirectional</td>
-<td>Point-to-point channels</td>
-</tr>
-</tbody>
-</table>
-<p>The push/pull example below shows the pattern shared by all of them: arm
-an async receiver, send synchronously, collect the AIO result.</p>
-<pre><code class="language-sql">SET VARIABLE pull_s = (ducknng_open_socket('pull')).socket_id;
-SET VARIABLE pull_ok = (ducknng_listen_socket(
-  getvariable('pull_s')::UBIGINT,
-  'ipc:///tmp/ducknng_readme_pushpull.ipc',
-  134217728, 0::UBIGINT
-)).ok;
-SET VARIABLE push_s = (ducknng_open_socket('push')).socket_id;
-SET VARIABLE push_ok = (ducknng_dial_socket(
-  getvariable('push_s')::UBIGINT,
-  'ipc:///tmp/ducknng_readme_pushpull.ipc',
-  1000, 0::UBIGINT
-)).ok;
-CREATE TEMP TABLE pp_recv AS
-SELECT ducknng_recv_socket_raw_aio(getvariable('pull_s')::UBIGINT, 1000) AS recv_aio;
-SET VARIABLE pp_sent = (ducknng_send_socket_raw(
-  getvariable('push_s')::UBIGINT, from_hex('6865796f'), 1000
-)).ok;
-SELECT getvariable('pp_sent')::BOOLEAN AS sent,
-       ok, hex(frame) = '6865796F' AS got_payload
-FROM ducknng_aio_collect((SELECT list_value(recv_aio) FROM pp_recv), 1000);
-SELECT ducknng_aio_drop((SELECT recv_aio FROM pp_recv)) AS dropped;
-DROP TABLE pp_recv;
-SELECT (ducknng_close_socket(getvariable('push_s')::UBIGINT)).ok AS closed_push,
-       (ducknng_close_socket(getvariable('pull_s')::UBIGINT)).ok AS closed_pull;
-
-
-
-
-
-
-+------+------+-------------+
-| sent |  ok  | got_payload |
-+------+------+-------------+
-| true | true | true        |
-+------+------+-------------+
-+---------+
-| dropped |
-+---------+
-| true    |
-+---------+
-
-+-------------+-------------+
-| closed_push | closed_pull |
-+-------------+-------------+
-| true        | true        |
-+-------------+-------------+
-</code></pre>
-<p>For pub/sub, call <code>ducknng_subscribe_socket(socket_id, prefix_blob)</code>
-before dialing. For surveyor, send then arm multiple respondent
-receivers. For bus, every peer dials the same listener so each send
-reaches all other peers.</p>
-<h3 id="sec:tls-tls-tcp-wss-https">TLS (<code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code>)</h3>
-<p>TLS handles are created once and reused across services and clients.
-Material can come from the filesystem or from in-memory PEM content.</p>
-<pre><code class="language-sql">-- Self-signed development cert: no files needed.
-SET VARIABLE tls_self = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
-SELECT ducknng_start_server(
-  'tls_demo', 'tls+tcp://127.0.0.1:45453',
-  1, 134217728, 300000,
-  getvariable('tls_self')::UBIGINT
-);
-SELECT ok, type_name, name
-FROM ducknng_decode_frame(
-  ducknng_request_raw(
-    'tls+tcp://127.0.0.1:45453',
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000,
-    getvariable('tls_self')::UBIGINT
-  )
-);
-SELECT ducknng_stop_server('tls_demo');
-SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
-
-+---------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_demo', 'tls+tcp://127.0.0.1:45453', 1, 134217728, 300000, CAST(getvariable('tls_self') AS &quot;UBIGINT&quot;)) |
-+---------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                            |
-+---------------------------------------------------------------------------------------------------------------------------------+
-+------+-----------+----------+
-|  ok  | type_name |   name   |
-+------+-----------+----------+
-| true | result    | manifest |
-+------+-----------+----------+
-+---------------------------------+
-| ducknng_stop_server('tls_demo') |
-+---------------------------------+
-| true                            |
-+---------------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_self') AS &quot;UBIGINT&quot;)) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
-</code></pre>
-<p>File-backed material uses
-<code>ducknng_tls_config_from_files(cert_key_file, ca_file, password, auth_mode)</code>.
-TLS client handles verify the remote server certificate by default when
-<code>auth_mode = 0</code>; on listeners, <code>auth_mode = 0</code> means ordinary server TLS
-without requiring client certificates. Set listener <code>auth_mode = 2</code> to
-require client certificates (mTLS). The dispatcher derives caller
-identity from the first verified SAN (<code>tls:san:&lt;value&gt;</code>) falling back to
-CN (<code>tls:cn:&lt;name&gt;</code>). Peer identity and IP/CIDR allowlists narrow
-admission before SQL dispatch.</p>
-<pre><code class="language-sql">SET VARIABLE tls_files = ducknng_tls_config_from_files(
-  'test/certs/loopback-cert-key.pem',
-  'test/certs/loopback-ca.pem',
-  NULL, 0
-);
-SELECT ducknng_start_server(
-  'tls_files_demo', 'tls+tcp://127.0.0.1:45454',
-  1, 134217728, 300000,
-  getvariable('tls_files')::UBIGINT
-);
-SELECT ok, type_name, name
-FROM ducknng_decode_frame(
-  ducknng_request_raw(
-    'tls+tcp://127.0.0.1:45454',
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000,
-    getvariable('tls_files')::UBIGINT
-  )
-);
-SELECT ducknng_stop_server('tls_files_demo');
-SELECT ducknng_drop_tls_config(getvariable('tls_files')::UBIGINT);
-
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_files_demo', 'tls+tcp://127.0.0.1:45454', 1, 134217728, 300000, CAST(getvariable('tls_files') AS &quot;UBIGINT&quot;)) |
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                   |
-+----------------------------------------------------------------------------------------------------------------------------------------+
-+------+-----------+----------+
-|  ok  | type_name |   name   |
-+------+-----------+----------+
-| true | result    | manifest |
-+------+-----------+----------+
-+---------------------------------------+
-| ducknng_stop_server('tls_files_demo') |
-+---------------------------------------+
-| true                                  |
-+---------------------------------------+
-+----------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_files') AS &quot;UBIGINT&quot;)) |
-+----------------------------------------------------------------------+
-| true                                                                 |
-+----------------------------------------------------------------------+
-</code></pre>
-<h3 id="sec:websocket-ws-wss">WebSocket (<code>ws://</code>, <code>wss://</code>)</h3>
-<p><code>ws://</code> and <code>wss://</code> are NNG transport schemes. They use
-<code>ducknng_start_server(...)</code>, the full framed RPC surface, and the same
-TLS handle model as <code>tls+tcp://</code>. They are not the HTTP carrier
-described in <code>docs/http.md</code>.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, 0::UBIGINT
-);
-SELECT ok, type_name, name
-FROM ducknng_decode_frame(
-  ducknng_request_raw(
-    'ws://127.0.0.1:45455/_ducknng',
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000, 0::UBIGINT
-  )
-);
-SELECT ducknng_stop_server('ws_demo');
-+--------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+--------------------------------------------------------------------------------------------------------------+
-| true                                                                                                         |
-+--------------------------------------------------------------------------------------------------------------+
-+------+-----------+----------+
-|  ok  | type_name |   name   |
-+------+-----------+----------+
-| true | result    | manifest |
-+------+-----------+----------+
-+--------------------------------+
-| ducknng_stop_server('ws_demo') |
-+--------------------------------+
-| true                           |
-+--------------------------------+
-</code></pre>
-<h2 id="sec:framed-rpc">Framed RPC</h2>
-<h3 id="sec:registry-manifest-and-exec">Registry: manifest and exec</h3>
-<p>Every server starts with a <code>manifest</code> method and nothing else. <code>exec</code> is
-registered explicitly.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'rpc_demo', 'ipc:///tmp/ducknng_readme_rpc.ipc', 1, 134217728, 300000, 0
-);
--- Default registry: manifest only.
-SELECT name, family, response_mode, requires_auth, disabled
-FROM ducknng_list_methods()
-ORDER BY name;
--- Register exec (false = no auth required).
-SELECT ducknng_register_exec_method(false) AS registered_exec;
--- Manifest now reports two methods.
-WITH m AS (
-  SELECT manifest
-  FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_readme_rpc.ipc', 0::UBIGINT)
-  WHERE ok
-)
-SELECT json_extract_string(manifest::JSON, '$.server.name') AS server_name,
-       json_array_length(json_extract(manifest::JSON, '$.methods')) AS method_count,
-       position('&quot;name&quot;:&quot;exec&quot;' IN manifest) &gt; 0 AS has_exec
-FROM m;
-+------------------------------------------------------------------------------------------------+
-| ducknng_start_server('rpc_demo', 'ipc:///tmp/ducknng_readme_rpc.ipc', 1, 134217728, 300000, 0) |
-+------------------------------------------------------------------------------------------------+
-| true                                                                                           |
-+------------------------------------------------------------------------------------------------+
-+---------------+---------+---------------+---------------+----------+
-|     name      | family  | response_mode | requires_auth | disabled |
-+---------------+---------+---------------+---------------+----------+
-| cancel        | query   | metadata_only | false         | false    |
-| close         | query   | metadata_only | false         | false    |
-| fetch         | query   | rows          | false         | false    |
-| handshake     | control | metadata_only | false         | false    |
-| manifest      | control | metadata_only | false         | false    |
-| query_open    | query   | session_open  | false         | false    |
-| query_prepare | query   | rows          | false         | false    |
-+---------------+---------+---------------+---------------+----------+
-+-----------------+
-| registered_exec |
-+-----------------+
-| true            |
-+-----------------+
-+-------------+--------------+----------+
-| server_name | method_count | has_exec |
-+-------------+--------------+----------+
-| ducknng     | 8            | true     |
-+-------------+--------------+----------+
-</code></pre>
-<h3 id="sec:registry-the-upload-lane">Registry: the upload lane</h3>
-<p>The upload lane is the client-to-server mirror of the query family:
-instead of fetching result batches, a client streams
-<code>ducknng_quack_batch</code> tuples <em>into</em> a server table. Like <code>exec</code>, it is
-opt-in and exposes no surface until the host registers it.
-<code>ducknng_register_upload_methods(false)</code> registers it without an auth
-requirement (the no-argument form defaults the same way); it reuses the
-query family’s execution-subject admission, session owner tokens, and
-per-peer-identity limits.</p>
-<pre><code class="language-sql">-- Register the upload lane (false = no auth required), mirroring exec.
-SELECT ducknng_register_upload_methods(false) AS registered_upload;
--- The four upload-family methods are now advertised.
-SELECT name, family, response_mode, requires_auth, disabled
-FROM ducknng_list_methods()
-WHERE family = 'upload'
-ORDER BY name;
-+-------------------+
-| registered_upload |
-+-------------------+
-| true              |
-+-------------------+
-+---------------+--------+---------------+---------------+----------+
-|     name      | family | response_mode | requires_auth | disabled |
-+---------------+--------+---------------+---------------+----------+
-| upload_abort  | upload | metadata_only | false         | false    |
-| upload_append | upload | metadata_only | false         | false    |
-| upload_commit | upload | metadata_only | false         | false    |
-| upload_open   | upload | session_open  | false         | false    |
-+---------------+--------+---------------+---------------+----------+
-</code></pre>
-<p>The flow is <code>upload_open</code> → <code>upload_append</code>* → <code>upload_commit</code> (or
-<code>upload_abort</code>). <code>upload_open</code> takes JSON <code>{target_table, mode}</code> (v1
-appends to an existing table), acquires a session connection, begins a
-transaction, and opens a DuckDB appender. Each <code>upload_append</code> body is a
-counted control prefix (<code>[session_id u64 LE][token_len u16 LE][token]</code>)
-followed by a raw quack batch, which the server decodes straight into
-the session appender; the batch’s column names, order, and types must
-match the target table exactly, since the appender appends by ordinal.
-<code>upload_commit</code> flushes and commits; <code>upload_abort</code> — and any idle prune
-or shutdown — rolls the transaction back so partially uploaded rows
-never persist. The counted token is matched over its full length, and
-upload and query control methods reject each other’s sessions. The wire
-contract is pinned in <code>docs/protocol.md</code>. The ergonomic
-<code>ducknng_upload_table(url, source_query, target_table[, tls_config_id])</code>
-table function drives this end-to-end: it runs <code>source_query</code> locally
-and streams the result rows into <code>target_table</code> over the upload lane
-(the batch column names, order, and types must match the target),
-returning the uploaded row and client-sent byte counts. A runnable
-round-trip is in <code>test/sql/ducknng_upload_roundtrip.test</code>.</p>
-<h3 id="sec:synchronous-helpers">Synchronous helpers</h3>
-<pre><code class="language-sql">-- DDL statement over RPC.
-SELECT * FROM ducknng_run_rpc(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'CREATE TABLE rpc_demo_t(i INTEGER)',
-  0::UBIGINT
-);
--- DML over RPC.
-SELECT * FROM ducknng_run_rpc(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'INSERT INTO rpc_demo_t VALUES (10),(11),(12)',
-  0::UBIGINT
-);
--- Query rows over RPC — decoded as a table.
-SELECT *
-FROM ducknng_query_rpc(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT i, i &gt; 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
-  0::UBIGINT
-);
-+------+-------+--------------+----------------+-------------+
-|  ok  | error | rows_changed | statement_type | result_type |
-+------+-------+--------------+----------------+-------------+
-| true | NULL  | 0            | 7              | 2           |
-+------+-------+--------------+----------------+-------------+
-+------+-------+--------------+----------------+-------------+
-|  ok  | error | rows_changed | statement_type | result_type |
-+------+-------+--------------+----------------+-------------+
-| true | NULL  | 3            | 2              | 1           |
-+------+-------+--------------+----------------+-------------+
-+----+-------+
-| i  | gt_10 |
-+----+-------+
-| 10 | false |
-| 11 | true  |
-| 12 | true  |
-+----+-------+
-</code></pre>
-<p>The <code>_params</code> helpers carry a typed Arrow <code>STRUCT</code>; child order binds
-SQL <code>?</code> parameters and values are never interpolated into SQL text. Use
-explicit SQL type context for a null parameter, such as <code>?::BIGINT</code>.</p>
-<pre><code class="language-sql">SELECT rows_changed
-FROM ducknng_run_rpc_params(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'INSERT INTO rpc_demo_t VALUES (?)',
-  struct_pack(value := 13::INTEGER),
-  0::UBIGINT
-);
-SELECT i
-FROM ducknng_query_rpc_params(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT i FROM rpc_demo_t WHERE i &gt;= ? ORDER BY i',
-  struct_pack(minimum := 11::INTEGER),
-  0::UBIGINT
-);
-DESCRIBE SELECT *
-FROM ducknng_prepare_query_params(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT i FROM rpc_demo_t WHERE i &gt;= ?',
-  struct_pack(minimum := 11::INTEGER),
-  0::UBIGINT
-);
-+--------------+
-| rows_changed |
-+--------------+
-| 1            |
-+--------------+
-+----+
-| i  |
-+----+
-| 11 |
-| 12 |
-| 13 |
-+----+
-+-------------+-------------+------+------+---------+-------+
-| column_name | column_type | null | key  | default | extra |
-+-------------+-------------+------+------+---------+-------+
-| i           | INTEGER     | YES  | NULL | NULL    | NULL  |
-+-------------+-------------+------+------+---------+-------+
-</code></pre>
-<p>The query helpers discover the remote result schema during DuckDB bind,
-which may happen more than once; use them for read-only or idempotent
-SQL. The fixed-schema <code>run_rpc</code> helpers send <code>exec</code> during scan, so
-<code>EXPLAIN</code> does not perform the remote statement. This avoids bind-time
-mutation but does not make a network write exactly once: after a lost
-reply, retry policy belongs to the application.</p>
-<p>You can also request the Quack-derived batch serializer over the same
-session contract. Unlike upstream
-<a href="https://github.com/duckdb/duckdb-quack">Quack</a>, ducknng keeps transport
-choice separate from row serialization, so the same
-<code>ducknng_quack_batch</code> mode can ride over <code>http</code>, <code>tcp</code>, <code>ipc</code>, or <code>ws</code>.
-Version and schema compatibility belong to the negotiated ducknng
-session contract rather than to a suffix on the serializer token; full
-Quack protocol traffic uses <code>application/vnd.duckdb</code> messages and
-negotiates <code>quackVersion</code> during the connection exchange, but this fetch
-payload is not wrapped in that Quack connection envelope.
-<code>ducknng.fetch_batch_chunks</code> controls the default number of DuckDB
-chunks requested per fetch; it defaults to 12 and applies to Arrow IPC
-and <code>ducknng_quack_batch</code> alike unless the client sends an explicit
-<code>batch_rows</code> hint.</p>
-<pre><code class="language-sql">SELECT *
-FROM ducknng_query_rpc_mode(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT i, i &gt; 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
-  0::UBIGINT,
-  'ducknng_quack_batch'
-);
-+----+-------+
-| i  | gt_10 |
-+----+-------+
-| 10 | false |
-| 11 | true  |
-| 12 | true  |
-| 13 | true  |
-+----+-------+
-</code></pre>
-<p>The Quack-derived mode also carries nested DuckDB values through the
-same RPC/session lifecycle. Its decoder materializes DuckDB <code>CONSTANT</code>,
-<code>DICTIONARY</code>, and integer <code>SEQUENCE</code> vectors into flat C API output,
-including recursive dictionary values, while rejecting malformed
-selections, unbounded compressed expansion, and unsupported FSST
-vectors. Canonical chunks repeat and validate the <code>DataChunk</code>
-logical-type list. The pure-C encoder remains flat because DuckDB’s C
-API does not expose source compression state. A normal SQL query cannot
-reliably force a particular compressed source-vector shape through that
-API, so the executable compressed-vector fixtures are generated by
-<code>tools/quack_compressed_fixtures.R</code> and asserted in
-<code>test/sql/ducknng_body_codecs.test</code> rather than rendered as opaque
-hexadecimal output here.</p>
-<p>This is not a claim over every logical type in every DuckDB release.
-DuckDB v1.5.2 has <code>GEOMETRY</code> and <code>VARIANT</code>, but the current
-Quack-derived codec rejects both: geometry carries versioned format and
-optional CRS metadata, while that release’s C API has no
-<code>DUCKDB_TYPE_VARIANT</code> constructor or vector contract. They are not
-silently projected to <code>BLOB</code> or <code>STRUCT</code>.</p>
-<pre><code class="language-sql">SELECT st.a = 7 AS struct_ok,
-       st.xs = [1, 2, 3]::INTEGER[] AS nested_list_ok
-FROM ducknng_query_rpc_mode(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT {''a'': 7::INTEGER, ''xs'': [1,2,3]::INTEGER[]} AS st',
-  0::UBIGINT,
-  'ducknng_quack_batch'
-);
-+-----------+----------------+
-| struct_ok | nested_list_ok |
-+-----------+----------------+
-| true      | true           |
-+-----------+----------------+
-</code></pre>
-<p>Arrow IPC carries temporal, decimal, list, struct, union, large-string,
-large-binary, fixed-size-binary, and duration values through the same
-path. Supported mappings are documented in <code>docs/types.md</code>.</p>
-<pre><code class="language-sql">SELECT d = DATE '2024-01-02' AS date_ok,
-       ts = TIMESTAMP '2024-01-02 03:04:05.123456' AS ts_ok,
-       dec = 123.45::DECIMAL(10,2) AS decimal_ok,
-       xs[2] IS NULL AND xs[3] = 3 AS list_ok,
-       st.a = 7 AND st.b = 'bee' AS struct_ok
-FROM ducknng_query_rpc(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'SELECT DATE ''2024-01-02'' AS d,
-          TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
-          123.45::DECIMAL(10,2) AS dec,
-          [1, NULL, 3]::INTEGER[] AS xs,
-          {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
-  0::UBIGINT
-);
-+---------+-------+------------+---------+-----------+
-| date_ok | ts_ok | decimal_ok | list_ok | struct_ok |
-+---------+-------+------------+---------+-----------+
-| true    | true  | true       | true    | true      |
-+---------+-------+------------+---------+-----------+
-</code></pre>
-<p><code>ducknng_parse_body(...)</code> decodes content-type-tagged BLOBs. The
-built-in providers cover Arrow IPC, JSON, ducknng frames, the ducknng
-<code>application/vnd.ducknng.quack-batch</code> batch media type, and a text/raw
-fallback.</p>
-<pre><code class="language-sql">SELECT provider, output FROM ducknng_list_codecs() ORDER BY provider;
-SELECT a, b
-FROM ducknng_parse_body(
-  '[{&quot;a&quot;:1,&quot;b&quot;:&quot;x&quot;},{&quot;a&quot;:2,&quot;b&quot;:&quot;y&quot;}]'::BLOB,
-  'application/json; charset=utf-8'
-)
-ORDER BY a;
-+---------------------+-----------------------------+
-|      provider       |           output            |
-+---------------------+-----------------------------+
-| arrow_ipc           | dynamic table               |
-| csv                 | dynamic table               |
-| ducknng_frame       | decoded frame columns       |
-| ducknng_quack_batch | dynamic table               |
-| form                | name VARCHAR, value VARCHAR |
-| json                | dynamic table               |
-| ndjson              | dynamic table               |
-| parquet             | dynamic table               |
-| raw                 | body BLOB                   |
-| text                | body_text VARCHAR           |
-| tsv                 | dynamic table               |
-+---------------------+-----------------------------+
-+---+---+
-| a | b |
-+---+---+
-| 1 | x |
-| 2 | y |
-+---+---+
-</code></pre>
-<h3 id="sec:raw-frame-helpers">Raw frame helpers</h3>
-<p>The raw scalar forms return reply bytes as BLOBs.
-<code>ducknng_decode_frame(...)</code> projects all envelope fields, including the
-protocol status, plus the text payload. <code>ducknng_frame_status(...)</code>
-returns that status directly; it is distinct from an NNG transport error
-code.</p>
-<pre><code class="language-sql">-- Raw bytes from a socket-scoped request (show first 14 bytes as hex).
-SET VARIABLE req2 = (ducknng_open_socket('req')).socket_id;
-SET VARIABLE dialed2 = (ducknng_dial_socket(
-  getvariable('req2')::UBIGINT,
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  1000, 0::UBIGINT
-)).ok;
-SELECT substr(
-  hex(ducknng_request_socket_raw(
-    getvariable('req2')::UBIGINT,
-    from_hex('01000000000000000000000000000000000000000000'),
-    1000
-  )),
-  1, 28
-) AS first_14_bytes_hex;
--- Decode a manifest reply directly.
-SELECT ok, version, type_name, status, name,
-       position('&quot;name&quot;:&quot;exec&quot;' IN payload_text) &gt; 0 AS has_exec
-FROM ducknng_decode_frame(
-  ducknng_get_rpc_manifest_raw('ipc:///tmp/ducknng_readme_rpc.ipc', 0::UBIGINT)
-);
--- A malformed request returns an INVALID protocol status in its error frame.
-SELECT ducknng_frame_status(ducknng_request_raw(
-  'ipc:///tmp/ducknng_readme_rpc.ipc', from_hex('00'), 1000, 0::UBIGINT
-)) AS invalid_status;
-SELECT (ducknng_close_socket(getvariable('req2')::UBIGINT)).ok AS closed;
-
-
-+------------------------------+
-|      first_14_bytes_hex      |
-+------------------------------+
-| 0102040000000800000000000000 |
-+------------------------------+
-+------+---------+-----------+--------+----------+----------+
-|  ok  | version | type_name | status |   name   | has_exec |
-+------+---------+-----------+--------+----------+----------+
-| true | 1       | result    | 0      | manifest | true     |
-+------+---------+-----------+--------+----------+----------+
-+----------------+
-| invalid_status |
-+----------------+
-| 1              |
-+----------------+
-+--------+
-| closed |
-+--------+
-| true   |
-+--------+
-</code></pre>
-<h3 id="sec:aio-helpers">AIO helpers</h3>
-<p><code>ducknng_request_raw_aio(...)</code> and
-<code>ducknng_get_rpc_manifest_raw_aio(...)</code> return integer AIO handles
-immediately. <code>ducknng_aio_collect(...)</code> blocks until all handles are
-ready and returns one decoded-frame row per handle.
-<code>ducknng_aio_wait(...)</code> waits without consuming — the handle stays
-inspectable and droppable afterward. <code>ducknng_aio_collect_decoded(...)</code>
-projects envelope columns directly.</p>
-<pre><code class="language-sql">-- Launch manifest and exec requests in parallel.
-SET VARIABLE aio_manifest = ducknng_get_rpc_manifest_raw_aio(
-  'ipc:///tmp/ducknng_readme_rpc.ipc', 1000, 0::UBIGINT
-);
-SET VARIABLE aio_exec = ducknng_run_rpc_raw_aio(
-  'ipc:///tmp/ducknng_readme_rpc.ipc',
-  'CREATE TABLE IF NOT EXISTS rpc_aio_t(i INTEGER)',
-  1000, 0::UBIGINT
-);
-SELECT getvariable('aio_manifest') &gt; 0 AS manifest_launched,
-       getvariable('aio_exec') &gt; 0    AS exec_launched;
--- Collect both frames when ready.
-CREATE TEMP TABLE aio_results AS
-SELECT * FROM ducknng_aio_collect(
-  list_value(getvariable('aio_manifest'), getvariable('aio_exec')), 1000
-);
-SET VARIABLE frame_manifest = (SELECT frame FROM aio_results WHERE aio_id = getvariable('aio_manifest'));
-SET VARIABLE frame_exec     = (SELECT frame FROM aio_results WHERE aio_id = getvariable('aio_exec'));
-SELECT ok, type_name, name,
-       position('&quot;name&quot;:&quot;exec&quot;' IN payload_text) &gt; 0 AS has_exec
-FROM ducknng_decode_frame(getvariable('frame_manifest'));
-SELECT ok, type_name, name
-FROM ducknng_decode_frame(getvariable('frame_exec'));
--- collect_decoded projects envelope columns directly without a second decode call.
-SET VARIABLE aio_manifest2 = ducknng_get_rpc_manifest_raw_aio(
-  'ipc:///tmp/ducknng_readme_rpc.ipc', 1000, 0::UBIGINT
-);
-SELECT aio_id, ok, frame_ok, type_name, name
-FROM ducknng_aio_collect_decoded(list_value(getvariable('aio_manifest2')), 1000);
-SELECT ducknng_aio_drop(getvariable('aio_manifest')) AND
-       ducknng_aio_drop(getvariable('aio_exec')) AND
-       ducknng_aio_drop(getvariable('aio_manifest2')) AS dropped;
-DROP TABLE aio_results;
-SELECT ducknng_stop_server('rpc_demo');
-
-
-+-------------------+---------------+
-| manifest_launched | exec_launched |
-+-------------------+---------------+
-| true              | true          |
-+-------------------+---------------+
-
-
-
-+------+-----------+----------+----------+
-|  ok  | type_name |   name   | has_exec |
-+------+-----------+----------+----------+
-| true | result    | manifest | true     |
-+------+-----------+----------+----------+
-+------+-----------+------+
-|  ok  | type_name | name |
-+------+-----------+------+
-| true | result    | exec |
-+------+-----------+------+
-
-+--------+------+----------+-----------+----------+
-| aio_id |  ok  | frame_ok | type_name |   name   |
-+--------+------+----------+-----------+----------+
-| 6      | true | true     | result    | manifest |
-+--------+------+----------+-----------+----------+
-+---------+
-| dropped |
-+---------+
-| true    |
-+---------+
-
-+---------------------------------+
-| ducknng_stop_server('rpc_demo') |
-+---------------------------------+
-| true                            |
-+---------------------------------+
-</code></pre>
-<h2 id="sec:query-sessions">Query sessions</h2>
-<p>Query sessions decouple opening a query from fetching its result
-batches. The server holds the cursor; the client drives the fetch loop
-using <code>session_id</code> + <code>session_token</code>. The token is the bearer capability
-that authorizes fetch, close, and cancel.</p>
-<h3 id="sec:high-level-open-fetch-table-close">High-level (open / fetch_table / close)</h3>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'session_demo', 'ipc:///tmp/ducknng_readme_session.ipc', 1, 134217728, 300000, 0
-);
-CREATE TEMP TABLE sess AS
-SELECT *
-FROM ducknng_open_query(
-  'ipc:///tmp/ducknng_readme_session.ipc',
-  'SELECT 1 AS id UNION ALL SELECT 2 AS id ORDER BY id',
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
-);
-SET VARIABLE sid   = (SELECT session_id    FROM sess);
-SET VARIABLE stok  = (SELECT session_token FROM sess);
--- Decode first batch as rows directly.
-SELECT * FROM ducknng_fetch_query_table(
-  'ipc:///tmp/ducknng_readme_session.ipc',
-  getvariable('sid')::UBIGINT,
-  getvariable('stok')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
-);
--- Next fetch returns the exhausted control reply.
-SELECT ok, state, end_of_stream
-FROM ducknng_fetch_query(
-  'ipc:///tmp/ducknng_readme_session.ipc',
-  getvariable('sid')::UBIGINT,
-  getvariable('stok')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
-);
-SELECT ok, state
-FROM ducknng_close_query(
-  'ipc:///tmp/ducknng_readme_session.ipc',
-  getvariable('sid')::UBIGINT,
-  getvariable('stok')::VARCHAR,
-  0::UBIGINT
-);
-DROP TABLE sess;
-SELECT ducknng_stop_server('session_demo');
-+--------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_demo', 'ipc:///tmp/ducknng_readme_session.ipc', 1, 134217728, 300000, 0) |
-+--------------------------------------------------------------------------------------------------------+
-| true                                                                                                   |
-+--------------------------------------------------------------------------------------------------------+
-
-
-
-+----+
-| id |
-+----+
-| 1  |
-| 2  |
-+----+
-+------+-----------+---------------+
-|  ok  |   state   | end_of_stream |
-+------+-----------+---------------+
-| true | exhausted | true          |
-+------+-----------+---------------+
-+------+--------+
-|  ok  | state  |
-+------+--------+
-| true | closed |
-+------+--------+
-
-+-------------------------------------+
-| ducknng_stop_server('session_demo') |
-+-------------------------------------+
-| true                                |
-+-------------------------------------+
-</code></pre>
-<h3 id="sec:raw-frames-open-raw-fetch-raw-close-raw">Raw frames (open_raw / fetch_raw / close_raw)</h3>
-<p>The raw helpers return the reply envelope as a BLOB.
-<code>ducknng_frame_payload(...)</code> extracts the Arrow IPC bytes;
-<code>ducknng_parse_body(...)</code> turns them into rows.</p>
-<pre><code class="language-sql">SET VARIABLE session_raw_tls = ducknng_self_signed_tls_config('127.0.0.1', 365, 0);
-SELECT ducknng_start_server(
-  'session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000,
-  getvariable('session_raw_tls')::UBIGINT
-);
-SET VARIABLE session_raw_url = (
-  SELECT listen FROM ducknng_list_servers() WHERE name = 'session_raw'
-);
-SET VARIABLE raw_open = ducknng_open_query_raw(
-  getvariable('session_raw_url'),
-  'SELECT i, i * i AS sq FROM range(1, 4) AS t(i)',
-  0::UBIGINT, 0::UBIGINT, getvariable('session_raw_tls')::UBIGINT
-);
-SET VARIABLE raw_sid = (
-  SELECT json_extract(
-    ducknng_frame_payload_text(getvariable('raw_open')::BLOB)::JSON,
-    '$.session_id'
-  )::UBIGINT
-);
-SET VARIABLE raw_tok = (
-  SELECT json_extract_string(
-    ducknng_frame_payload_text(getvariable('raw_open')::BLOB)::JSON,
-    '$.session_token'
-  )
-);
-SET VARIABLE raw_fetch = ducknng_fetch_query_raw(
-  getvariable('session_raw_url'),
-  getvariable('raw_sid')::UBIGINT,
-  getvariable('raw_tok')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, getvariable('session_raw_tls')::UBIGINT
-);
-SELECT ducknng_frame_type_name(getvariable('raw_fetch')::BLOB)      AS type_name,
-       ducknng_frame_end_of_stream(getvariable('raw_fetch')::BLOB)  AS end_of_stream;
-SELECT *
-FROM ducknng_parse_body(
-  ducknng_frame_payload(getvariable('raw_fetch')::BLOB),
-  'application/vnd.apache.arrow.stream'
-);
-SET VARIABLE raw_close = ducknng_close_query_raw(
-  getvariable('session_raw_url'),
-  getvariable('raw_sid')::UBIGINT,
-  getvariable('raw_tok')::VARCHAR,
-  getvariable('session_raw_tls')::UBIGINT
-);
-SELECT position('&quot;state&quot;:&quot;closed&quot;' IN
-  ducknng_frame_payload_text(getvariable('raw_close')::BLOB)
-) &gt; 0 AS is_closed;
-SELECT ducknng_stop_server('session_raw');
-SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
-
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS &quot;UBIGINT&quot;)) |
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                  |
-+---------------------------------------------------------------------------------------------------------------------------------------+
-
-
-
-
-
-+-----------+---------------+
-| type_name | end_of_stream |
-+-----------+---------------+
-| result    | false         |
-+-----------+---------------+
-+---+----+
-| i | sq |
-+---+----+
-| 1 | 1  |
-| 2 | 4  |
-| 3 | 9  |
-+---+----+
-
-+-----------+
-| is_closed |
-+-----------+
-| true      |
-+-----------+
-+------------------------------------+
-| ducknng_stop_server('session_raw') |
-+------------------------------------+
-| true                               |
-+------------------------------------+
-+----------------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS &quot;UBIGINT&quot;)) |
-+----------------------------------------------------------------------------+
-| true                                                                       |
-+----------------------------------------------------------------------------+
-</code></pre>
-<h3 id="sec:async-open-aio-fetch-aio-close-aio-cancel-aio">Async (open_aio / fetch_aio / close_aio / cancel_aio)</h3>
-<p>Each session lifecycle step has a <code>_raw_aio</code> variant. The AIO handle is
-collected through <code>ducknng_aio_collect(...)</code> just like any other AIO
-handle.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'session_aio', 'ipc:///tmp/ducknng_readme_session_aio.ipc', 1, 134217728, 300000, 0
-);
-SET VARIABLE open_aio = ducknng_open_query_raw_aio(
-  'ipc:///tmp/ducknng_readme_session_aio.ipc',
-  'SELECT 99 AS id',
-  0::UBIGINT, 0::UBIGINT, 1000, 0::UBIGINT
-);
-CREATE TEMP TABLE open_collect AS
-SELECT * FROM ducknng_aio_collect(list_value(getvariable('open_aio')::UBIGINT), 1000);
-SET VARIABLE open_frame = (SELECT frame FROM open_collect);
-SET VARIABLE aio_sid = (
-  SELECT json_extract(payload_text::JSON, '$.session_id')::UBIGINT
-  FROM ducknng_decode_frame(getvariable('open_frame'))
-);
-SET VARIABLE aio_tok = (
-  SELECT json_extract_string(payload_text::JSON, '$.session_token')
-  FROM ducknng_decode_frame(getvariable('open_frame'))
-);
-SET VARIABLE close_aio = ducknng_close_query_raw_aio(
-  'ipc:///tmp/ducknng_readme_session_aio.ipc',
-  getvariable('aio_sid')::UBIGINT,
-  getvariable('aio_tok')::VARCHAR,
-  1000, 0::UBIGINT
-);
-CREATE TEMP TABLE close_collect AS
-SELECT * FROM ducknng_aio_collect(list_value(getvariable('close_aio')::UBIGINT), 1000);
-SET VARIABLE close_frame = (SELECT frame FROM close_collect);
-SELECT ok, type_name, name,
-       position('&quot;state&quot;:&quot;closed&quot;' IN payload_text) &gt; 0 AS is_closed
-FROM ducknng_decode_frame(getvariable('close_frame'));
-SELECT ducknng_aio_drop(getvariable('open_aio')::UBIGINT) AND
-       ducknng_aio_drop(getvariable('close_aio')::UBIGINT) AS dropped;
-DROP TABLE open_collect; DROP TABLE close_collect;
-SELECT ducknng_stop_server('session_aio');
-+-----------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_aio', 'ipc:///tmp/ducknng_readme_session_aio.ipc', 1, 134217728, 300000, 0) |
-+-----------------------------------------------------------------------------------------------------------+
-| true                                                                                                      |
-+-----------------------------------------------------------------------------------------------------------+
-
-
-
-
-
-
-
-
-+------+-----------+-------+-----------+
-|  ok  | type_name | name  | is_closed |
-+------+-----------+-------+-----------+
-| true | result    | close | true      |
-+------+-----------+-------+-----------+
-+---------+
-| dropped |
-+---------+
-| true    |
-+---------+
-
-+------------------------------------+
-| ducknng_stop_server('session_aio') |
-+------------------------------------+
-| true                               |
-+------------------------------------+
-</code></pre>
-<h2 id="sec:http-carrier">HTTP carrier</h2>
-<h3 id="sec:ducknng-ncurl-http-client-primitive"><code>ducknng_ncurl</code> — HTTP client primitive</h3>
-<p><code>ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)</code>
-is the low-level HTTP/HTTPS transport primitive. Its <code>headers_json</code>
-argument uses <code>[{&quot;name&quot;:&quot;...&quot;,&quot;value&quot;:&quot;...&quot;}]</code> arrays; header names must
-be HTTP tokens and values must not contain CRLF or other control
-characters. A local <code>nanonext</code> HTTPS server is started during README
-rendering for the TLS example; the server definition is shown because it
-is part of the example rather than hidden setup.</p>
-<pre><code class="language-r">library(nanonext)
-
-cert &lt;- write_cert(cn = '127.0.0.1')
-writeLines(cert$client[[1]], &quot;/tmp/ducknng_readme_http_demo_ca.pem&quot;)
-
-server &lt;- http_server(
-  url = 'https://127.0.0.1:18443',
-  handlers = list(
-    handler('/hello', function(req) {
-      list(status = 200L,
-           headers = c('Content-Type' = 'text/plain', 'X-Test' = 'hello'),
-           body = 'hello from nanonext https server')
-    }),
-    handler('/echo', function(req) {
-      list(status = 200L,
-           headers = c('Content-Type' = (
-             req$headers[['Content-Type']] %||% 'application/octet-stream'),
-             'X-Test' = 'echo'),
-           body = req$body)
-    }, method = 'POST')
-  ),
-  tls = tls_config(server = cert$server)
-)
-</code></pre>
-<pre><code class="language-sql">-- Register a client TLS handle that trusts the self-signed demo CA.
--- In client mode auth_mode = 0 still verifies the HTTPS server certificate.
-SET VARIABLE tls_http = ducknng_tls_config_from_files(
-  NULL, '/tmp/ducknng_readme_http_demo_ca.pem', NULL,
-  0
-);
--- GET request over HTTPS.
-SELECT ok, status, error, body_text
-FROM ducknng_ncurl(
-  'https://127.0.0.1:18443/hello',
-  NULL, NULL, NULL, 2000,
-  getvariable('tls_http')::UBIGINT
-);
--- POST with raw bytes; inspect echoed body and response headers.
-SET VARIABLE echo_hdrs = '[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/octet-stream&quot;}]';
-SELECT ok, status, hex(body) AS body_hex,
-       position('X-Test' IN headers_json) &gt; 0 AS has_x_test
-FROM ducknng_ncurl(
-  'https://127.0.0.1:18443/echo',
-  'POST',
-  getvariable('echo_hdrs'),
-  from_hex('01020304'),
-  2000,
-  getvariable('tls_http')::UBIGINT
-);
-SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
-
-+------+--------+-------+----------------------------------+
-|  ok  | status | error |            body_text             |
-+------+--------+-------+----------------------------------+
-| true | 200    | NULL  | hello from nanonext https server |
-+------+--------+-------+----------------------------------+
-
-+------+--------+----------+------------+
-|  ok  | status | body_hex | has_x_test |
-+------+--------+----------+------------+
-| true | 200    | 01020304 | true       |
-+------+--------+----------+------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_http') AS &quot;UBIGINT&quot;)) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
-</code></pre>
-<p><code>ducknng_ncurl_aio(...)</code> is the unary async form and still completes
-with the full response body. The <code>ducknng_ncurl_stream_open_aio(...)</code> /
-<code>ducknng_ncurl_stream_recv_aio(...)</code> family below is the incremental
-form; <code>ducknng_ncurl_table(...)</code> parses a complete response body through
-the codec layer.</p>
-<h3 id="sec:ducknng-start-server-on-http-and-https"><code>ducknng_start_server</code> on <code>http://</code> and <code>https://</code></h3>
-<p>Pointing <code>ducknng_start_server(...)</code> at an <code>http://</code> or <code>https://</code> URL
-mounts the framed RPC surface at the URL path. The higher-level
-synchronous request, RPC, and session helpers switch carriers
-automatically from the scheme; <code>contexts = 1</code> is required for the HTTP
-carrier.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, 0::UBIGINT
-);
-WITH m AS (
-  SELECT manifest
-  FROM ducknng_get_rpc_manifest('http://127.0.0.1:18444/_ducknng', 0::UBIGINT)
-  WHERE ok
-)
-SELECT json_extract_string(manifest::JSON, '$.server.name') AS server_name,
-       json_array_length(json_extract(manifest::JSON, '$.methods')) AS method_count
-FROM m;
--- ducknng_ncurl can call the framed RPC path directly too.
-SET VARIABLE http_frame = (
-  SELECT body FROM ducknng_ncurl(
-    'http://127.0.0.1:18444/_ducknng', 'POST',
-    '[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application/vnd.ducknng.frame&quot;}]',
-    from_hex('01000000000000000000000000000000000000000000'),
-    2000, 0::UBIGINT
-  )
-);
-SELECT ok, type_name, name FROM ducknng_decode_frame(getvariable('http_frame'));
-SELECT ducknng_stop_server('http_rpc');
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
-+-------------+--------------+
-| server_name | method_count |
-+-------------+--------------+
-| ducknng     | 12           |
-+-------------+--------------+
-
-+------+-----------+----------+
-|  ok  | type_name |   name   |
-+------+-----------+----------+
-| true | result    | manifest |
-+------+-----------+----------+
-+---------------------------------+
-| ducknng_stop_server('http_rpc') |
-+---------------------------------+
-| true                            |
-+---------------------------------+
-</code></pre>
-<h3 id="sec:custom-http-routes">Custom HTTP routes</h3>
-<p>HTTP and HTTPS services can register additional exact, prefix, or
-template routes beside the framed RPC mount. Route handlers are ordinary
-SQL queries that return one response row and can inspect the in-flight
-request through <code>ducknng_http_request()</code> and
-<code>ducknng_http_request_body()</code>.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, 0::UBIGINT
-);
-SELECT ducknng_register_http_route(
-  'http_routes', 'GET', '/healthz',
-  'SELECT * FROM ducknng_http_text(200, ''ok'')'
-);
-SELECT ducknng_register_http_route(
-  'http_routes', 'POST', '/echo',
-  'SELECT * FROM ducknng_http_text(
-     201,
-     (SELECT method || '' '' || path || '' x='' ||
-             coalesce(ducknng_http_query_param(''x''), '''') ||
-             '' body='' || coalesce(body_text, '''')
-      FROM ducknng_http_request(), ducknng_http_request_body()))'
-);
-SELECT ducknng_register_http_route_pattern(
-  'http_routes', 'GET', 'template',
-  '/tenant/{tenant_id}/items/{item_id}',
-  'SELECT * FROM ducknng_http_text(
-     200,
-     (SELECT ducknng_http_path_param(''tenant_id'') || '':'' ||
-             ducknng_http_path_param(''item_id'')
-      FROM ducknng_http_request()))'
-);
-+--------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+--------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                               |
-+--------------------------------------------------------------------------------------------------------------------+
-+---------------------------------------------------------------------------------------------------------------+
-| ducknng_register_http_route('http_routes', 'GET', '/healthz', 'SELECT * FROM ducknng_http_text(200, ''ok'')') |
-+---------------------------------------------------------------------------------------------------------------+
-| true                                                                                                          |
-+---------------------------------------------------------------------------------------------------------------+
-+--------------------------------------------------------------------+
-| ducknng_register_http_route('http_routes', 'POST', '/echo', 'SELECT * FROM ducknng_http_text(
-     201,
-     (SELECT method || '' '' || path || '' x='' ||
-             coalesce(ducknng_http_query_param(''x''), '''') ||
-             '' body='' || coalesce(body_text, '''')
-      FROM ducknng_http_request(), ducknng_http_request_body()))') |
-+--------------------------------------------------------------------+
-| true                                                               |
-+--------------------------------------------------------------------+
-+---------------------------------------+
-| ducknng_register_http_route_pattern('http_routes', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}', 'SELECT * FROM ducknng_http_text(
-     200,
-     (SELECT ducknng_http_path_param(''tenant_id'') || '':'' ||
-             ducknng_http_path_param(''item_id'')
-      FROM ducknng_http_request()))') |
-+---------------------------------------+
-| true                                  |
-+---------------------------------------+
-</code></pre>
-<pre><code class="language-sql">SELECT ok, status, body_text
-FROM ducknng_ncurl('http://127.0.0.1:18445/healthz', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-SELECT ok, status, body_text
-FROM ducknng_ncurl(
-  'http://127.0.0.1:18445/echo?x=1', 'POST',
-  '[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/plain&quot;}]',
-  'hello'::BLOB, 2000, 0::UBIGINT
-);
-SELECT ok, status, body_text
-FROM ducknng_ncurl(
-  'http://127.0.0.1:18445/tenant/alice/items/42', 'GET', NULL, NULL, 2000, 0::UBIGINT
-);
-SELECT service_name, method, match_kind, path
-FROM ducknng_list_http_routes()
-WHERE service_name = 'http_routes'
-ORDER BY match_kind, path;
-SELECT ducknng_stop_server('http_routes');
-+------+--------+-----------+
-|  ok  | status | body_text |
-+------+--------+-----------+
-| true | 200    | ok        |
-+------+--------+-----------+
-+------+--------+---------------------------+
-|  ok  | status |         body_text         |
-+------+--------+---------------------------+
-| true | 201    | POST /echo x=1 body=hello |
-+------+--------+---------------------------+
-+------+--------+-----------+
-|  ok  | status | body_text |
-+------+--------+-----------+
-| true | 200    | alice:42  |
-+------+--------+-----------+
-+--------------+--------+------------+-------------------------------------+
-| service_name | method | match_kind |                path                 |
-+--------------+--------+------------+-------------------------------------+
-| http_routes  | POST   | exact      | /echo                               |
-| http_routes  | GET    | exact      | /healthz                            |
-| http_routes  | GET    | template   | /tenant/{tenant_id}/items/{item_id} |
-+--------------+--------+------------+-------------------------------------+
-+------------------------------------+
-| ducknng_stop_server('http_routes') |
-+------------------------------------+
-| true                               |
-+------------------------------------+
-</code></pre>
-<p>Route handlers run on the <code>shared_serialized_connection</code> lane by
-default. Switch to <code>service_serialized_connection</code> or
-<code>request_connection</code> with <code>ducknng_set_service_execution_model(...)</code>
-before traffic arrives. The subscriber gateway walkthrough in
-<code>demo/subscriber_gateway.Rmd</code> (and <code>docs/subscriber_gateway_demo.md</code>)
-shows all three services sharing one DuckDB runtime without deadlocking
-because each uses <code>service_serialized_connection</code>.</p>
-<p>The runtime execution-connection pool opens a warm minimum and grows on
-demand up to a deterministic ceiling. Use the SQL controls below when a
-workload intentionally holds many query sessions or nested <code>query_rpc</code>
-scans at once.</p>
-<pre><code class="language-sql">SELECT ducknng_execution_pool_max() AS current_pool_max;
-SELECT ducknng_set_execution_pool_max(96) AS effective_pool_max;
-SELECT ducknng_execution_pool_max() AS updated_pool_max;
-SELECT ducknng_set_execution_pool_max(64) AS reset_pool_max;
-+------------------+
-| current_pool_max |
-+------------------+
-| 64               |
-+------------------+
-+--------------------+
-| effective_pool_max |
-+--------------------+
-| 96                 |
-+--------------------+
-+------------------+
-| updated_pool_max |
-+------------------+
-| 96               |
-+------------------+
-+----------------+
-| reset_pool_max |
-+----------------+
-| 64             |
-+----------------+
-</code></pre>
-<h3 id="sec:chunked-streaming-routes-sse">Chunked streaming routes (SSE)</h3>
-<p><code>ducknng_add_stream_route</code> registers a route that responds with HTTP
-chunked transfer encoding. The SQL query must return a <code>chunk</code> column;
-each non-null row is written to the client as a separate chunk before
-the terminator. <code>ducknng_format_sse(data, event, id, retry)</code> formats a
-single Server-Sent Events event string.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server(
-  'http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, 0::UBIGINT
-);
-SELECT ducknng_add_stream_route(
-  'http_sse', 'GET', '/events',
-  'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
-   FROM generate_series(1, 3) t(i)'
-);
-SELECT is_stream, stream_content_type
-FROM ducknng_list_http_routes()
-WHERE service_name = 'http_sse' AND path = '/events';
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
-+--------------------------------------+
-| ducknng_add_stream_route('http_sse', 'GET', '/events', 'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
-   FROM generate_series(1, 3) t(i)') |
-+--------------------------------------+
-| true                                 |
-+--------------------------------------+
-+-----------+----------------------------------+
-| is_stream |       stream_content_type        |
-+-----------+----------------------------------+
-| true      | text/event-stream; charset=utf-8 |
-+-----------+----------------------------------+
-</code></pre>
-<p><code>ducknng_ncurl</code> transparently reassembles the chunked response. The body
-is the concatenation of all SSE events written by the server.</p>
-<pre><code class="language-sql">SELECT ok, status, headers_json, body_text
-FROM ducknng_ncurl('http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT);
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
-|  ok  | status |                                                                          headers_json                                                                           | body_text |
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
-| true | 200    | [{&quot;name&quot;:&quot;Transfer-Encoding&quot;,&quot;value&quot;:&quot;chunked&quot;},{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;text/event-stream; charset=utf-8&quot;},{&quot;name&quot;:&quot;Cache-Control&quot;,&quot;value&quot;:&quot;no-cache&quot;}] | data: row 1
-
-data: row 2
-
-data: row 3
-
-          |
-+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------+
-</code></pre>
-<p>For incremental consumption, the open aio completes as soon as the
-response status and headers arrive. Each receive aio then returns raw
-application body bytes with HTTP chunk framing removed. Completion is a
-separate <code>end_of_stream = true</code> row, and the claimed stream is closed
-independently of its aio handles.</p>
-<pre><code class="language-sql">SET VARIABLE sse_open_aio = ducknng_ncurl_stream_open_aio(
-  'http://127.0.0.1:18446/events', 'GET', NULL, NULL, 2000, 0::UBIGINT
-);
-CREATE TEMP TABLE sse_open AS
-SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
-  list_value(getvariable('sse_open_aio')::UBIGINT), 2000
-);
-SET VARIABLE sse_stream = (SELECT stream_id FROM sse_open WHERE ok);
-SET VARIABLE sse_recv_1 = ducknng_ncurl_stream_recv_aio(
-  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
-);
-SELECT replace(decode(body), chr(10), '\\n') AS event, end_of_stream
-FROM ducknng_ncurl_stream_recv_aio_collect(
-  list_value(getvariable('sse_recv_1')::UBIGINT), 2000
-);
--- Further receives return the remaining events and finally explicit EOF.
-SET VARIABLE sse_recv_2 = ducknng_ncurl_stream_recv_aio(
-  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
-);
-SET VARIABLE sse_body_2 = (
-  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
-    list_value(getvariable('sse_recv_2')::UBIGINT), 2000
-  )
-);
-SET VARIABLE sse_recv_3 = ducknng_ncurl_stream_recv_aio(
-  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
-);
-SET VARIABLE sse_body_3 = (
-  SELECT body FROM ducknng_ncurl_stream_recv_aio_collect(
-    list_value(getvariable('sse_recv_3')::UBIGINT), 2000
-  )
-);
-SET VARIABLE sse_recv_eof = ducknng_ncurl_stream_recv_aio(
-  getvariable('sse_stream')::UBIGINT, 65536::UBIGINT, 2000
-);
-SELECT body, end_of_stream
-FROM ducknng_ncurl_stream_recv_aio_collect(
-  list_value(getvariable('sse_recv_eof')::UBIGINT), 2000
-);
-SELECT ducknng_ncurl_stream_close(getvariable('sse_stream')::UBIGINT);
-SELECT ducknng_aio_drop(getvariable('sse_open_aio')::UBIGINT)
-   AND ducknng_aio_drop(getvariable('sse_recv_1')::UBIGINT)
-   AND ducknng_aio_drop(getvariable('sse_recv_2')::UBIGINT)
-   AND ducknng_aio_drop(getvariable('sse_recv_3')::UBIGINT)
-   AND ducknng_aio_drop(getvariable('sse_recv_eof')::UBIGINT) AS dropped;
-DROP TABLE sse_open;
-SELECT ducknng_stop_server('http_sse');
-
-
-
-
-+-------------------+---------------+
-|       event       | end_of_stream |
-+-------------------+---------------+
-| data: row 1\\n\\n | false         |
-+-------------------+---------------+
-
-
-
-
-
-+------+---------------+
-| body | end_of_stream |
-+------+---------------+
-| NULL | true          |
-+------+---------------+
-+--------------------------------------------------------------------------+
-| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS &quot;UBIGINT&quot;)) |
-+--------------------------------------------------------------------------+
-| true                                                                     |
-+--------------------------------------------------------------------------+
-+---------+
-| dropped |
-+---------+
-| true    |
-+---------+
-
-+---------------------------------+
-| ducknng_stop_server('http_sse') |
-+---------------------------------+
-| true                            |
-+---------------------------------+
-</code></pre>
-<h2 id="sec:client-interop-nanonext-req-rep">Client interop: nanonext REQ/REP</h2>
-<p>This example shows a <code>nanonext</code> R client talking to a <code>ducknng</code> server
-using the versioned wire envelope directly. It covers frame encoding and
-decoding at the R level so the wire contract is explicit.</p>
-<h3 id="sec:frame-helpers">Frame helpers</h3>
-<pre><code class="language-r">write_u32le &lt;- function(x) writeBin(as.integer(x), raw(), size = 4L, endian = &quot;little&quot;)
-write_u64le &lt;- function(x) {
-  x &lt;- as.double(x)
-  c(write_u32le(x %% 2^32), write_u32le(floor(x / 2^32)))
-}
-read_u32le_bytes &lt;- function(x) sum(as.double(as.integer(x)) * 256^(0:3))
-read_u64le_bytes &lt;- function(x) read_u32le_bytes(x[1:4]) + 2^32 * read_u32le_bytes(x[5:8])
-read_u32le &lt;- function(buf, offset) read_u32le_bytes(buf[offset + 0:3])
-read_u64le &lt;- function(buf, offset) read_u64le_bytes(buf[offset + 0:7])
-
-encode_ducknng_exec_payload &lt;- function(sql, want_result = FALSE) {
-  raw_con &lt;- rawConnection(raw(), open = &quot;r+&quot;)
-  on.exit(close(raw_con), add = TRUE)
-  nanoarrow::write_nanoarrow(data.frame(sql = sql, want_result = want_result), raw_con)
-  rawConnectionValue(raw_con)
-}
-
-encode_ducknng_call_frame &lt;- function(method, payload, flags = 0L) {
-  m &lt;- charToRaw(method)
-  c(as.raw(1L), as.raw(1L), write_u32le(flags),
-    write_u32le(length(m)), write_u32le(0),
-    write_u64le(length(payload)), m, payload)
-}
-
-encode_ducknng_exec_request &lt;- function(sql, want_result = FALSE) {
-  encode_ducknng_call_frame(&quot;exec&quot;, encode_ducknng_exec_payload(sql, want_result))
-}
-
-decode_ducknng_exec_reply &lt;- function(buf) {
-  if (!is.raw(buf) || length(buf) &lt; 22L)
-    stop(&quot;ducknng reply frame was empty or truncated&quot;, call. = FALSE)
-  name_len    &lt;- read_u32le(buf, 7)
-  error_len   &lt;- read_u32le(buf, 11)
-  payload_len &lt;- read_u64le(buf, 15)
-  ns &lt;- 23L; es &lt;- ns + name_len; ps &lt;- es + error_len
-  payload &lt;- if (payload_len &gt; 0) buf[ps:(ps + payload_len - 1L)] else raw()
-  list(
-    version = as.integer(buf[1]), type = as.integer(buf[2]),
-    method  = rawToChar(buf[ns:(es - 1L)]),
-    error   = if (error_len &gt; 0) rawToChar(buf[es:(ps - 1L)]) else &quot;&quot;,
-    data    = if (payload_len &gt; 0) as.data.frame(nanoarrow::read_nanoarrow(payload)) else NULL
-  )
-}
-</code></pre>
-<h3 id="sec:start-a-server-dial-a-req-socket-run-remote-sql">Start a server, dial a REQ socket, run remote SQL</h3>
-<pre><code class="language-r">ext_path &lt;- normalizePath(&quot;build/release/ducknng.duckdb_extension&quot;)
-ipc_path &lt;- &quot;/tmp/ducknng_readme_exec.ipc&quot;
-ipc_url  &lt;- paste0(&quot;ipc://&quot;, ipc_path)
-unlink(ipc_path)
-
-db_con &lt;- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = &quot;true&quot;, allow_extensions_metadata_mismatch = &quot;true&quot;)))
-DBI::dbExecute(db_con, sprintf(&quot;LOAD '%s'&quot;, ext_path))
-[1] 0
-DBI::dbGetQuery(db_con, sprintf(
-  &quot;SELECT ducknng_start_server('sql_exec', '%s', 1, 134217728, 300000, 0::UBIGINT)&quot;, ipc_url
-))
-  ducknng_start_server('sql_exec', 'ipc:///tmp/ducknng_readme_exec.ipc', 1, 134217728, 300000, CAST(0 AS &quot;UBIGINT&quot;))
-1                                                                                                               TRUE
-DBI::dbGetQuery(db_con, &quot;SELECT ducknng_register_exec_method()&quot;)
-  ducknng_register_exec_method()
-1                           TRUE
-
-deadline &lt;- Sys.time() + 5
-while (!file.exists(ipc_path) &amp;&amp; Sys.time() &lt; deadline) Sys.sleep(0.1)
-req &lt;- nanonext::socket(&quot;req&quot;, dial = ipc_url)
-</code></pre>
-<pre><code class="language-r">send_recv &lt;- function(sock, frame, timeout_ms = 1000L) {
-  nanonext::send(sock, frame, mode = &quot;raw&quot;, block = timeout_ms)
-  decode_ducknng_exec_reply(nanonext::recv(sock, mode = &quot;raw&quot;, block = timeout_ms))
-}
-
-# DDL.
-send_recv(req, encode_ducknng_exec_request(
-  &quot;CREATE TABLE exec_demo(i INTEGER)&quot;
-))$data
-  rows_changed statement_type result_type
-1            0              7           2
-
-# DML.
-send_recv(req, encode_ducknng_exec_request(
-  &quot;INSERT INTO exec_demo VALUES (42),(99)&quot;
-))$data
-  rows_changed statement_type result_type
-1            2              2           1
-
-# Query with want_result = TRUE returns Arrow-decoded rows.
-send_recv(req, encode_ducknng_exec_request(
-  &quot;SELECT i, i &gt; 50 AS gt_50 FROM exec_demo ORDER BY i&quot;,
-  want_result = TRUE
-))$data
-   i gt_50
-1 42 FALSE
-2 99  TRUE
-</code></pre>
-<p>The same table is visible locally through the DuckDB connection that
-hosts the server:</p>
-<pre><code class="language-r">DBI::dbGetQuery(db_con, &quot;SELECT * FROM exec_demo ORDER BY i&quot;)
-   i
-1 42
-2 99
-</code></pre>
-<pre><code class="language-r">DBI::dbGetQuery(db_con, &quot;SELECT ducknng_stop_server('sql_exec')&quot;)
-  ducknng_stop_server('sql_exec')
-1                            TRUE
-close(req)
-DBI::dbDisconnect(db_con)
-unlink(ipc_path)
-</code></pre>
-<h2 id="sec:deployment-and-admission-policy">Deployment and admission policy</h2>
-<p><code>ducknng</code> defaults to default-open transport behavior. The application
-or deployment decides where the trust boundary is. For anything beyond
-process-local, filesystem-local, or loopback-only development, set the
-boundary deliberately before exposing a service.</p>
-<p>A strong direct-exposure baseline:</p>
-<ol>
-<li>Use <code>https://</code>, <code>wss://</code>, or <code>tls+tcp://</code> rather than plaintext
-network carriers.</li>
-<li>Create the TLS handle with <code>auth_mode = 2</code> so peers must present a
-verified client certificate.</li>
-<li>Configure a private CA or otherwise narrow certificate issuance so
-the trust root is not broader than the application.</li>
-<li>Set exact peer-identity and/or IP/CIDR allowlists before exposure
-with <code>ducknng_set_tls_peer_allowlist(...)</code> and the optional
-<code>ip_allowlist_json</code> startup argument.</li>
-<li>Set basic service resource limits with
-<code>ducknng_set_service_limits(name, max_open_sessions[, ...])</code> before
-exposing query sessions.</li>
-<li>Install a service-level SQL authorizer with
-<code>ducknng_set_service_authorizer(...)</code> when admission depends on
-deployment tables, tenants, method names, or HTTP metadata.</li>
-<li>Rotate policy dynamically with
-<code>ducknng_set_service_peer_allowlist(...)</code>,
-<code>ducknng_set_service_ip_allowlist(...)</code>,
-<code>ducknng_set_service_limits(...)</code>, and
-<code>ducknng_set_service_authorizer(...)</code>.</li>
-</ol>
-<p><code>exec</code> and query sessions run DuckDB SQL as the service process. Do not
-expose them to callers who are not already authorized to run that SQL.
-Profiles by use case:</p>
-<ul>
-<li><strong>Local development / single-user IPC</strong>: <code>inproc://</code>, loopback, or
-<code>ipc://</code> under a private directory; <code>exec</code> may be enabled for
-convenience.</li>
-<li><strong>Trusted service mesh</strong>: <code>tls+tcp://</code>, <code>wss://</code>, or <code>https://</code> with
-mTLS, exact peer allowlists, IP/CIDR allowlists, and service limits.</li>
-<li><strong>Shared or semi-trusted clients</strong>: authorize both <code>query_open</code> and
-<code>exec</code>; query sessions are streaming, not a read-only policy. Use
-deployment-level DuckDB/process controls for filesystem, extension
-loading, outbound network, and attachments.</li>
-<li><strong>Public/untrusted internet</strong>: do not expose raw DuckDB SQL directly.
-Put <code>ducknng</code> behind a gateway that authenticates, rate-limits, and
-maps users to fixed application operations.</li>
-</ul>
-<pre><code class="language-sql">-- Set a peer allowlist on the TLS handle before starting services with it.
-SELECT ducknng_set_tls_peer_allowlist(
-  1::UBIGINT,
-  '[&quot;tls:san:client-a.example&quot;,&quot;tls:san:client-b.example&quot;]'
-);
-
--- Start with an IP/CIDR allowlist installed before the listener accepts traffic.
-SELECT ducknng_start_server(
-  'sql_http', 'http://127.0.0.1:18444/_ducknng',
-  1, 134217728, 300000, 0::UBIGINT,
-  '[&quot;127.0.0.1/32&quot;]'
-);
-
--- Set a basic resource limit for query sessions.
-SELECT ducknng_set_service_limits('sql_http', 16::UBIGINT);
-
--- Add a flexible SQL callback for policy that depends on request context.
-SELECT ducknng_set_service_authorizer(
-  'sql_http',
-  'SELECT remote_ip = ''127.0.0.1'' AND rpc_method = ''manifest'' AS allow,
-          403 AS status, ''not authorized'' AS reason
-   FROM ducknng_auth_context()'
-);
-</code></pre>
-<p>Transport/carrier scheme reference:</p>
-<table>
-<thead>
-<tr>
-<th>Surface</th>
-<th>Accepted schemes</th>
-<th>TLS handle accepted on</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ducknng_start_server(...)</code></td>
-<td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code>, <code>http://</code>, <code>https://</code></td>
-<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
-</tr>
-<tr>
-<td>synchronous RPC/session helpers</td>
-<td>NNG schemes + <code>http://</code>, <code>https://</code></td>
-<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
-</tr>
-<tr>
-<td>raw RPC AIO helpers</td>
-<td>NNG schemes + <code>http://</code>, <code>https://</code></td>
-<td><code>tls+tcp://</code>, <code>wss://</code>, <code>https://</code></td>
-</tr>
-<tr>
-<td>generic socket APIs</td>
-<td><code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, <code>wss://</code></td>
-<td><code>tls+tcp://</code>, <code>wss://</code></td>
-</tr>
-<tr>
-<td>HTTP client helpers</td>
-<td><code>http://</code>, <code>https://</code></td>
-<td><code>https://</code></td>
-</tr>
-</tbody>
-</table>
-<p>Supplying a non-zero TLS handle on a non-TLS URL is rejected rather than
-silently ignored.</p>
-<p>For deeper write-ups see <code>docs/protocol.md</code>, <code>docs/manifest.md</code>,
-<code>docs/security.md</code>, <code>docs/registry.md</code>, <code>docs/transports.md</code>, and
-<code>docs/http.md</code>. <code>NEWS.md</code> summarizes landed changes.</p>
-<h2 id="sec:introspection-examples">Introspection examples</h2>
-<h3 id="sec:duckdb-log-entries">DuckDB log entries</h3>
-<p><code>ducknng_log_entries()</code> returns a snapshot of the most recent DuckDB log
-entries captured by the extension’s in-memory ring buffer (capacity
-512). The ring is populated via the DuckDB logger API. Log capture is
-not active by default; call <code>ducknng_enable_log_capture()</code> once to
-register the ring with DuckDB’s logger before querying the ring. Note:
-<code>ducknng_enable_log_capture()</code> is unsafe to call under DuckDB v1.5.2 due
-to a crash in the logger registration API; the example below is shown
-but not executed.</p>
-<pre><code class="language-sql">SELECT ducknng_enable_log_capture();
-
-SELECT ts, level, log_type, LEFT(message, 80) AS message
-FROM ducknng_log_entries()
-ORDER BY ts
-LIMIT 5;
-</code></pre>
-<h3 id="sec:nng-statistics">NNG statistics</h3>
-<p><code>ducknng_nng_stats()</code> exposes NNG’s process-wide statistics tree as
-rows. It is a low-level observability primitive: filter by statistic
-name, unit, or scope to inspect socket counters without making NNG types
-part of the public RPC method surface.</p>
-<pre><code class="language-sql">SELECT name, unit, count(*) AS rows
-FROM ducknng_nng_stats()
-WHERE name IN ('tx_bytes', 'rx_bytes', 'tx_msgs', 'rx_msgs')
-GROUP BY name, unit
-ORDER BY name, unit;
-+----------+----------+------+
-|   name   |   unit   | rows |
-+----------+----------+------+
-| rx_bytes | bytes    | 1    |
-| rx_msgs  | messages | 1    |
-| tx_bytes | bytes    | 1    |
-| tx_msgs  | messages | 1    |
-+----------+----------+------+
-</code></pre>
-<h3 id="sec:pipe-event-monitor">Pipe-event monitor</h3>
-<p>Each running service maintains a bounded ring of NNG pipe events
-(ADD_PRE, ADD_POST, REM_POST).
-<code>ducknng_read_monitor(name, after_seq, max_events)</code> pages through the
-ring. <code>ducknng_monitor_status(name)</code> returns ring and active-pipe
-counters.</p>
-<pre><code class="language-sql">SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
-SET VARIABLE monitor_url = (SELECT listen FROM ducknng_list_servers() WHERE name = 'monitor_demo');
-+------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS &quot;UBIGINT&quot;)) |
-+------------------------------------------------------------------------------------------------------+
-| true                                                                                                 |
-+------------------------------------------------------------------------------------------------------+
-</code></pre>
-<pre><code class="language-sql">-- Dial a REQ socket to generate pipe-connect events.
-SET VARIABLE monitor_req = (ducknng_open_socket('req')).socket_id;
-SELECT (ducknng_dial_socket(getvariable('monitor_req')::UBIGINT, getvariable('monitor_url'), 0, 0::UBIGINT)).ok AS dialed;
-
-+--------+
-| dialed |
-+--------+
-| true   |
-+--------+
-</code></pre>
-<pre><code class="language-sql">SELECT event_capacity, event_count, oldest_seq, newest_seq,
-       dropped_events, active_pipes, max_active_pipes
-FROM ducknng_monitor_status('monitor_demo');
-+----------------+-------------+------------+------------+----------------+--------------+------------------+
-| event_capacity | event_count | oldest_seq | newest_seq | dropped_events | active_pipes | max_active_pipes |
-+----------------+-------------+------------+------------+----------------+--------------+------------------+
-| 1024           | 2           | 1          | 2          | 0              | 1            | 0                |
-+----------------+-------------+------------+------------+----------------+--------------+------------------+
-</code></pre>
-<p><code>ducknng_list_pipes(name)</code> lists currently open NNG pipes for a service.</p>
-<pre><code class="language-sql">SELECT count(*) AS active_pipes,
-       bool_and(remote_addr IS NOT NULL) AS addresses_present,
-       bool_and(peer_identity IS NULL) AS anonymous
-FROM ducknng_list_pipes('monitor_demo');
-+--------------+-------------------+-----------+
-| active_pipes | addresses_present | anonymous |
-+--------------+-------------------+-----------+
-| 1            | true              | true      |
-+--------------+-------------------+-----------+
-</code></pre>
-<pre><code class="language-sql">SELECT ducknng_close_socket(getvariable('monitor_req')::UBIGINT);
-SELECT ducknng_stop_server('monitor_demo');
-+-------------------------------------------------------------------------------------------------------------------------+
-|                           ducknng_close_socket(CAST(getvariable('monitor_req') AS &quot;UBIGINT&quot;))                           |
-+-------------------------------------------------------------------------------------------------------------------------+
-| {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 5, 'payload': NULL, 'url': NULL} |
-+-------------------------------------------------------------------------------------------------------------------------+
-+-------------------------------------+
-| ducknng_stop_server('monitor_demo') |
-+-------------------------------------+
-| true                                |
-+-------------------------------------+
-</code></pre>
-<p>Client sockets can also opt into their own pipe-event ring. Enable
-monitoring before the socket listens or dials if you need to capture the
-first add event.</p>
-<pre><code class="language-sql">SELECT ducknng_monitor_socket(getvariable('socket_mon_a')::UBIGINT) AS monitoring_enabled;
-+--------------------+
-| monitoring_enabled |
-+--------------------+
-| true               |
-+--------------------+
-</code></pre>
-<pre><code class="language-sql">SELECT event, count(*) AS events
-FROM ducknng_read_socket_monitor(getvariable('socket_mon_a')::UBIGINT,
-                                 0::UBIGINT,
-                                 0::UBIGINT)
-GROUP BY event
-ORDER BY event;
-SELECT ducknng_socket_monitor_wait(getvariable('socket_mon_a')::UBIGINT,
-                                   0::UBIGINT,
-                                   1000::UBIGINT) &gt;= 1 AS saw_event;
-+-------+--------+
-| event | events |
-+-------+--------+
-| add   | 1      |
-+-------+--------+
-+-----------+
-| saw_event |
-+-----------+
-| true      |
-+-----------+
-</code></pre>
-<h2 id="sec:browser-and-webassembly">Browser and WebAssembly</h2>
-<p>ducknng builds as a duckdb-wasm side module, but a browser sandbox
-cannot offer raw sockets, so support follows the compiled capability
-contract rather than native assumptions. The release-supported <code>wasm_eh</code>
-lane covers extension load and scalar SQL, synchronous browser HTTP(S),
-real asynchronous unary Fetch with timeout and cancellation, body
-parsing, HTTPS/CORS, framed HTTP RPC/session routing, and the async
-ducknng-frame-over-WebSocket carrier. Incremental HTTP response streams,
-raw <code>tcp://</code>, <code>ipc://</code>, and native POSIX-style <code>tls+tcp://</code> remain
-unsupported in the browser.</p>
-<p>The browser checks are not run during README rendering because they
-require Docker, a staged duckdb-wasm site, and real Chromium. They are
-still literate, executable chunks; run them from the repository root
-when validating a wasm/browser change.</p>
-<pre><code class="language-bash">DUCKDB_WASM_PLATFORM=wasm_eh DUCKNNG_WASM_SERVE=0 \
-  scripts/start_duckdb_wasm_local_test.sh
-</code></pre>
-<pre><code class="language-bash">node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=conformance
-</code></pre>
-<p>The threaded runtime remains diagnostic rather than release-blocking. It
-can build and individual HTTP probes can pass, but repeated headless
-runs still expose extension-load, <code>inproc://</code> progress, and DuckDB-wasm
-JSON-autoload instability.</p>
-<pre><code class="language-bash">DUCKDB_WASM_PLATFORM=wasm_threads DUCKNNG_WASM_SERVE=0 \
-  scripts/start_duckdb_wasm_local_test.sh
-node test/browser/run_smoke.mjs .duckdb-wasm-local-artifacts/site \
-  --probes=load
-</code></pre>
-<p>Self-published unsigned release assets are built by the dedicated
-release workflow. Push release tags one at a time using
-<code>v&lt;ducknng-version&gt;-duckdb&lt;duckdb-version&gt;</code> so GitHub runs the binary
-matrix for each pinned DuckDB runtime.</p>
-<pre><code class="language-bash">gh workflow run ducknng-release-binaries.yml --ref main
-gh run list --workflow &quot;ducknng release binaries&quot; --limit 5
-</code></pre>
-<p>The browser transport matrix, the COOP/COEP requirements for the
-threaded runtime, and the smoke harness are tracked in <code>docs/wasm.md</code>,
-<code>docs/wasm_browser_transport_checklist.md</code>, and
-<code>test/browser/README.md</code>.</p>
-<h2 id="sec:status">Status</h2>
-<p>Version 0.1.2.9000. Every DuckDB chunk shown as runnable in this README
-is implemented, tested, and runs at render time. Browser/WebAssembly and
-release-matrix checks require external runtimes, so their exact commands
-are shown above and covered by the Playwright and GitHub Actions
-harnesses. The extension builds against DuckDB v1.5.2 using the C API
-only.</p>
-<h2 id="sec:references">References</h2>
-<ul>
-<li><a href="https://nng.nanomsg.org/">NNG</a> — underlying messaging library and
-transport family.</li>
-<li><a href="https://github.com/r-lib/nanonext"><code>nanonext</code></a> — main client/server
-ergonomics reference.</li>
-<li><a href="https://github.com/sounkou-bioinfo/mangoro"><code>mangoro</code></a> —
-thin-envelope + Arrow IPC RPC client.</li>
-<li><a href="https://github.com/duckdb/duckdb-quack"><code>quack</code></a> — DuckDB’s
-experimental Quack HTTP protocol extension.</li>
-<li><a href="https://github.com/tobilg/quack-protocol"><code>@quack-protocol/sdk</code></a> and
-<a href="https://github.com/gizmodata/adbc-driver-quack"><code>adbc-driver-quack</code></a>
-— related Quack client/codec implementations used as protocol
-references.</li>
-<li><a href="https://duckdb.org/docs/stable/clients/c/api">DuckDB C API</a> —
-extension and SQL integration boundary.</li>
-<li><a href="https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc">Apache Arrow
-IPC</a>
-— tabular payload format.</li>
-</ul>
+</div>
+</div>
+<div class="section-head">
+<h2 id="sec:layers">How it is layered</h2>
+<span>Each layer is separately contracted, so the one below can change without the one above.</span>
+</div>
+<div class="layer-stack">
+<div class="layer"><strong>Transport</strong><span>NNG sockets and listeners. Synchronous send and receive, one-shot AIO handles, pipe-event telemetry.</span></div>
+<div class="layer"><strong>Framed RPC</strong><span>A versioned envelope carrying Arrow IPC or JSON control text, with an explicit status byte. HTTP and HTTPS mount the same methods at a URL path.</span></div>
+<div class="layer"><strong>Policy</strong><span>Fast C admission: mTLS, exact peer-identity allowlists, IP and CIDR allowlists, per-service and per-principal limits, optional SQL authorizer.</span></div>
+<div class="layer"><strong>Codecs</strong><span>Content-type-tagged bodies: JSON, Arrow IPC, ducknng frames, the Quack batch media type, and text or raw fallback. User codecs extend the set.</span></div>
+</div>
+<div class="section-head">
+<h2 id="sec:where-next">Where next</h2>
+<span>Eight published contracts. Everything else lives in the repository.</span>
+</div>
+<div class="next-grid">
+<a href="protocol.html">Protocol<span>Envelope, statuses, session lifecycle</span></a>
+<a href="reference.html">Reference<span>Every SQL function</span></a>
+<a href="types.html">Types<span>What crosses the wire</span></a>
+<a href="transports.html">Transports<span>Choosing a carrier by URL</span></a>
+<a href="http.html">HTTP<span>The HTTP and HTTPS binding</span></a>
+<a href="browser.html">Browser<span>duckdb-wasm client scope</span></a>
+<a href="security.html">Security<span>Admission and the trust boundary</span></a>
+<a href="wasm/">Demo<span>Run ducknng in a tab</span></a>
+</div>
+<div class="callout">
+<strong>Status.</strong> ducknng is pre-1.0 and the SQL surface is still
+sealing. The protocol envelope, supported types, and lifetime rules in the
+pages above are binding; anything not written there is subject to change.
+</div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>

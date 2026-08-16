@@ -214,6 +214,255 @@ body {
   line-height: 1.45;
 }
 
+/* --- Landing page components ------------------------------------------- */
+
+.diagram {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.9rem;
+  margin: 0 0 2.5rem;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.diagram svg {
+  margin: 0 auto;
+  max-width: 780px;
+  width: 100%;
+}
+
+.section-head {
+  align-items: baseline;
+  border-bottom: 1px solid var(--dn-line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 2.75rem 0 1.5rem;
+  padding-bottom: 0.6rem;
+}
+
+.section-head h2 {
+  border: 0;
+  margin: 0;
+}
+
+.section-head span {
+  color: var(--dn-muted);
+  font-size: 0.95rem;
+}
+
+.steps {
+  counter-reset: dn-step;
+  display: grid;
+  gap: 1rem;
+  margin: 0 0 2.5rem;
+}
+
+.step {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.9rem;
+  padding: clamp(1rem, 2.5vw, 1.6rem);
+}
+
+.step-head {
+  align-items: center;
+  display: flex;
+  gap: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.step-num {
+  align-items: center;
+  background: var(--dn-teal);
+  border-radius: 50%;
+  color: #fff;
+  display: inline-flex;
+  flex: none;
+  font-size: 0.95rem;
+  font-weight: 800;
+  height: 1.9rem;
+  justify-content: center;
+  width: 1.9rem;
+}
+
+.step-head h3 {
+  margin: 0;
+}
+
+.step > p {
+  color: var(--dn-muted);
+  margin: 0 0 0.9rem 2.7rem;
+}
+
+.step-cols {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-left: 2.7rem;
+}
+
+.step-body {
+  margin-left: 2.7rem;
+}
+
+/* Says which DuckDB session a block runs in -- the distinction the old
+ * single-block tour hid. */
+.code-label {
+  align-items: center;
+  color: var(--dn-teal-dark);
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 800;
+  gap: 0.4rem;
+  letter-spacing: 0.07em;
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+}
+
+.code-label:before {
+  background: var(--dn-gold);
+  border-radius: 50%;
+  content: "";
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.code-label.client:before {
+  background: var(--dn-teal);
+}
+
+.step pre {
+  margin: 0 0 0.6rem;
+}
+
+/* Query results as real tables instead of the README's ASCII art, which
+ * overflowed the content column and was clipped. */
+table.res {
+  font-size: 0.86rem;
+  margin: 0.3rem 0 0;
+  width: auto;
+}
+
+table.res th,
+table.res td {
+  border: 1px solid var(--dn-line);
+  padding: 0.3rem 0.7rem;
+}
+
+table.res th {
+  background: var(--dn-surface);
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+table.res td {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.layer-stack {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 2.5rem;
+}
+
+.layer {
+  align-items: baseline;
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-left: 0.35rem solid var(--dn-teal);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 0.2rem 1.2rem;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  padding: 0.85rem 1.1rem;
+}
+
+.layer strong {
+  color: var(--dn-teal-dark);
+}
+
+.layer span {
+  color: var(--dn-muted);
+}
+
+.layer:nth-child(2) { border-left-color: #2a8fa0; }
+.layer:nth-child(3) { border-left-color: #6bb3bf; }
+.layer:nth-child(4) { border-left-color: var(--dn-gold); }
+
+.demo-strip {
+  align-items: center;
+  background:
+    radial-gradient(circle at 90% 20%, rgb(245 197 66 / 24%), transparent 40%),
+    linear-gradient(135deg, #f2fafc 0%, #ffffff 65%);
+  border: 1px solid var(--dn-line);
+  border-radius: 1rem;
+  display: grid;
+  gap: clamp(1rem, 3vw, 2.5rem);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: 0 0 2.5rem;
+  padding: clamp(1.2rem, 3vw, 2.2rem);
+}
+
+.demo-strip h2 {
+  margin-top: 0;
+}
+
+.demo-strip p {
+  color: var(--dn-muted);
+}
+
+.demo-strip pre {
+  margin: 0;
+}
+
+.next-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 2rem;
+}
+
+.next-grid a {
+  background: var(--dn-panel);
+  border: 1px solid var(--dn-line);
+  border-radius: 0.6rem;
+  color: var(--dn-teal-dark) !important;
+  font-weight: 700;
+  padding: 0.8rem 0.9rem;
+  text-decoration: none;
+}
+
+.next-grid a:hover {
+  border-color: var(--dn-teal);
+}
+
+.next-grid span {
+  color: var(--dn-muted);
+  display: block;
+  font-size: 0.83rem;
+  font-weight: 400;
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 860px) {
+  .step-cols,
+  .demo-strip,
+  .next-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .layer {
+    grid-template-columns: 1fr;
+  }
+
+  .step > p,
+  .step-cols,
+  .step-body {
+    margin-left: 0;
+  }
+}
+
 .callout {
   background: #fff9e8;
   border: 1px solid #ead49a;
@@ -325,7 +574,10 @@ pre > code .token.punctuation {
    * the first line. The TOC then sized row 1 to its own full height and the
    * first paragraph, sharing that row, was followed by hundreds of pixels of
    * blank space. Floating keeps every sibling in normal flow. */
-  .body {
+  /* Only reserve the column on pages that actually have a contents list. The
+   * landing page renders with toc disabled, and without :has() it kept an
+   * empty 290px indent. */
+  .body:has(#TOC) {
     padding-left: calc(var(--dn-pad) + var(--dn-toc-width) + var(--dn-toc-gap));
   }
 
