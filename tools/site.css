@@ -80,6 +80,17 @@ body {
   margin-bottom: 0.55em;
 }
 
+/* The hero and card grid are injected ahead of litedown's .body wrapper so they
+ * sit above the table of contents rather than below it. That puts them outside
+ * .body's padding, which this restores. */
+.hero-wrap {
+  padding: clamp(1rem, 3vw, 2.75rem) clamp(1rem, 3vw, 2.75rem) 0;
+}
+
+.hero-wrap .feature-grid {
+  margin-bottom: 0;
+}
+
 .hero {
   background:
     radial-gradient(circle at 92% 12%, rgb(245 197 66 / 26%), transparent 30%),

@@ -47,25 +47,30 @@ invisible(file.create(file.path(site_dir, ".nojekyll")))
 css <- normalizePath("tools/site.css", winslash = "/", mustWork = TRUE)
 header <- normalizePath("tools/site-header.html", winslash = "/", mustWork = TRUE)
 
-metadata <- c(
-  "---",
-  "output:",
-  "  html:",
-  "    options:",
-  "      toc: true",
-  "    meta:",
-  paste0(
-    "      css: [\"@default@1.14.69\", \"@article@1.14.69\", ",
-    "\"@site@1.14.69\", \"", css, "\"]"
-  ),
-  paste0("      include_before: \"", header, "\""),
-  "---"
-)
+build_metadata <- function(include_before) {
+  c(
+    "---",
+    "output:",
+    "  html:",
+    "    options:",
+    "      toc: true",
+    "    meta:",
+    paste0(
+      "      css: [\"@default@1.14.69\", \"@article@1.14.69\", ",
+      "\"@site@1.14.69\", \"", css, "\"]"
+    ),
+    paste0("      include_before: \"", include_before, "\""),
+    "---"
+  )
+}
 
 # The landing page leads with a hero and a card grid instead of the README's
 # plain heading. This lives here rather than in README.md so the GitHub view of
-# the README stays clean markdown.
+# the README stays clean markdown. It is appended to the nav header and injected
+# through include_before, which places it above litedown's table of contents;
+# passing it as markdown put the whole TOC ahead of the hero.
 hero <- c(
+  "<div class=\"hero-wrap\">",
   "<div class=\"hero\">",
   "<p class=\"eyebrow\">DuckDB extension &middot; pure C</p>",
   "<h1>DuckDB, on the network.</h1>",
@@ -113,7 +118,14 @@ hero <- c(
   "<span>A duckdb-wasm side module speaking the same protocol over HTTPS and",
   "WSS, with capability negotiation rather than simulation.</span></a>",
   "</div>",
-  ""
+  "</div>"
+)
+
+# The index gets the nav plus the hero; every other page gets the nav alone.
+index_header <- file.path(tempdir(), "ducknng-site-index-header.html")
+writeLines(
+  c(readLines(header, warn = FALSE, encoding = "UTF-8"), hero),
+  index_header
 )
 
 read_page <- function(name, source) {
@@ -131,15 +143,16 @@ read_page <- function(name, source) {
   while (length(markdown) > 0L && !nzchar(trimws(markdown[1]))) {
     markdown <- markdown[-1]
   }
-  c(hero, markdown)
+  markdown
 }
 
 for (name in names(pages)) {
   source <- pages[[name]]
   destination <- file.path(site_dir, paste0(name, ".html"))
+  include_before <- if (name == "index") index_header else header
   message("rendering ", source, " -> ", destination)
   litedown::mark(
-    text = c(metadata, read_page(name, source)),
+    text = c(build_metadata(include_before), read_page(name, source)),
     output = destination,
     meta = list("plain-title" = titles[[name]])
   )
