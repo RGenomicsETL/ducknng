@@ -8,6 +8,7 @@ duckdb_unittest_tempdir
 /.duckdb_wasm_docker_work/
 /.coverage/
 /.fuzz/
+/_site/
 venv
 community-extensions
 /.sync/

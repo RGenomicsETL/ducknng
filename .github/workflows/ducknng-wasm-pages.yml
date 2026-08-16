@@ -190,6 +190,10 @@ jobs:
           name: ducknng-wasm-pages-site
           path: .duckdb-wasm-pages-site
 
+      # The demo publishes into the wasm/ subdirectory so the documentation site
+      # (.github/workflows/pages.yml) can own the gh-pages root. force_orphan is
+      # deliberately absent: it rewrites the branch to a single commit and would
+      # delete the docs on every demo build.
       - name: Publish gh-pages branch
         if: github.event_name != 'pull_request'
         uses: peaceiris/actions-gh-pages@v4
@@ -197,5 +201,5 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: .duckdb-wasm-pages-site
-          force_orphan: true
+          destination_dir: wasm
           commit_message: Deploy ducknng wasm demo for ${{ github.sha }}

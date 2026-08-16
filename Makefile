@@ -1,4 +1,5 @@
 .PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
+.PHONY: site site-clean
 .PHONY: elf-export-check
 .PHONY: rpc_bench rpc_direct_bench rpc_bulk_compare rpc_upload_compare http_smoke ws_smoke subscriber_gateway_rdm
 .PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean quack-fixtures
@@ -229,6 +230,15 @@ else
 endif
 
 docs: rdm subscriber_gateway_rdm
+
+# Curated documentation site. Renders README.md plus the seven published
+# contracts from docs/ into _site/ with litedown; .github/workflows/pages.yml
+# publishes that directory to the gh-pages root.
+site:
+	Rscript scripts/build_docs_site.R
+
+site-clean:
+	rm -rf _site
 
 rpc_smoke_r:
 	@if command -v Rscript >/dev/null 2>&1; then \
