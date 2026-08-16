@@ -8,7 +8,9 @@
   --dn-teal-dark: #063f49;
   --dn-gold: #f5c542;
   --dn-code: #0d1726;
+  --dn-pad: clamp(1rem, 3vw, 2.75rem);
   --dn-toc-width: 250px;
+  --dn-toc-gap: 2.5rem;
 }
 
 html {
@@ -21,7 +23,7 @@ body {
 }
 
 .body {
-  padding: clamp(1rem, 3vw, 2.75rem);
+  padding: var(--dn-pad);
 }
 
 .site-nav {
@@ -85,7 +87,7 @@ body {
  * sit above the table of contents rather than below it. That puts them outside
  * .body's padding, which this restores. */
 .hero-wrap {
-  padding: clamp(1rem, 3vw, 2.75rem) clamp(1rem, 3vw, 2.75rem) 0;
+  padding: var(--dn-pad) var(--dn-pad) 0;
 }
 
 .hero-wrap .feature-grid {
@@ -305,34 +307,31 @@ pre > code .token.punctuation {
     max-width: 1340px;
   }
 
+  /* Reserve the contents column as left padding and float the TOC back into
+   * it with a negative margin. Do not use a grid here: the TOC is one child
+   * among hundreds of sibling blocks, so it can only span rows via
+   * `grid-row: 1 / -1`, and with no explicit rows declared `-1` resolves to
+   * the first line. The TOC then sized row 1 to its own full height and the
+   * first paragraph, sharing that row, was followed by hundreds of pixels of
+   * blank space. Floating keeps every sibling in normal flow. */
   .body {
-    align-items: start;
-    column-gap: clamp(1.5rem, 3vw, 3rem);
-    display: grid;
-    grid-template-columns: var(--dn-toc-width) minmax(0, 1fr);
-  }
-
-  .body > * {
-    grid-column: 2;
-    min-width: 0;
+    padding-left: calc(var(--dn-pad) + var(--dn-toc-width) + var(--dn-toc-gap));
   }
 
   body:not(.pagesjs) #TOC {
     border: 0;
     border-right: 1px solid var(--dn-line);
     border-radius: 0;
-    float: none;
+    float: left;
     font-size: 0.87rem;
-    grid-column: 1;
-    grid-row: 1 / -1;
     line-height: 1.45;
-    margin: 0;
+    margin: 0 0 1rem calc(-1 * (var(--dn-toc-width) + var(--dn-toc-gap)));
     max-height: calc(100vh - 3rem);
     overflow-y: auto;
     padding: 0 1.1rem 0 0;
     position: sticky;
     top: 1.5rem;
-    width: auto;
+    width: var(--dn-toc-width);
   }
 
   #TOC a {
