@@ -7,10 +7,11 @@
 <p class="eyebrow">DuckDB extension &middot; pure C</p>
 <h1 class="unlisted">DuckDB, on the network.</h1>
 <p class="lede">
-ducknng binds the <a href="https://nng.nanomsg.org/">NNG</a> scalability
-protocols into DuckDB: framed RPC with Arrow and Quack payloads, query
-sessions, mTLS and policy admission in C, and an HTTP carrier &mdash; so one
-DuckDB session can serve or call another.
+ducknng turns a DuckDB session into an <a href="https://nng.nanomsg.org/">NNG</a>
+service &mdash; and into an NNG client. Framed RPC with Arrow and Quack
+payloads, query sessions, mTLS and policy admission in C, and an HTTP carrier.
+Anything that speaks NNG, WebSocket, or HTTP can call it: nanonext from R,
+a browser, your own client in any language, or another DuckDB.
 </p>
 <p class="hero-actions">
 <a class="button primary" href="#sec:get-started">Get started</a>
@@ -25,30 +26,39 @@ DuckDB session can serve or call another.
 </div>
 
 <div class="diagram">
-<svg viewBox="0 0 780 200" role="img" aria-label="Two DuckDB sessions exchanging a framed request and reply over a URL-selected transport">
+<svg viewBox="0 0 780 258" role="img" aria-label="Any NNG, WebSocket, or HTTP peer exchanging framed calls and result batches with a DuckDB session running ducknng, over a URL-selected transport">
   <defs>
     <marker id="dn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#0b6b7a"/>
     </marker>
+    <marker id="dn-arrow-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6bb3bf"/>
+    </marker>
   </defs>
-  <rect x="8" y="40" width="210" height="120" rx="12" fill="#ffffff" stroke="#d7dee6"/>
-  <text x="113" y="72" text-anchor="middle" font-size="15" font-weight="700" fill="#063f49">DuckDB session</text>
-  <text x="113" y="94" text-anchor="middle" font-size="12.5" fill="#5c6a76">client</text>
-  <text x="113" y="126" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#0b6b7a">ducknng_query_rpc()</text>
-
-  <rect x="562" y="40" width="210" height="120" rx="12" fill="#ffffff" stroke="#d7dee6"/>
-  <text x="667" y="72" text-anchor="middle" font-size="15" font-weight="700" fill="#063f49">DuckDB session</text>
-  <text x="667" y="94" text-anchor="middle" font-size="12.5" fill="#5c6a76">server</text>
-  <text x="667" y="126" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#0b6b7a">ducknng_start_server()</text>
-
-  <line x1="228" y1="82" x2="552" y2="82" stroke="#0b6b7a" stroke-width="2" marker-end="url(#dn-arrow)"/>
-  <text x="390" y="72" text-anchor="middle" font-size="12.5" fill="#063f49">framed call &middot; Arrow or Quack</text>
-
-  <line x1="552" y1="122" x2="228" y2="122" stroke="#6bb3bf" stroke-width="2" marker-end="url(#dn-arrow)"/>
-  <text x="390" y="142" text-anchor="middle" font-size="12.5" fill="#5c6a76">result batches &middot; end-of-stream</text>
-
-  <rect x="300" y="160" width="180" height="30" rx="15" fill="#f5f8fa" stroke="#d7dee6"/>
-  <text x="390" y="180" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#063f49">tls+tcp://host:port</text>
+  <text x="8" y="16" font-size="11" font-weight="800" letter-spacing="0.07em" fill="#0b6b7a">ANY NNG, WEBSOCKET, OR HTTP PEER</text>
+  <g font-size="12.5" fill="#063f49" font-family="ui-monospace,monospace">
+    <rect x="8" y="26" width="222" height="32" rx="8" fill="#ffffff" stroke="#d7dee6"/>
+    <text x="22" y="47">nanonext (R)</text>
+    <rect x="8" y="64" width="222" height="32" rx="8" fill="#ffffff" stroke="#d7dee6"/>
+    <text x="22" y="85">pynng · Go · Rust · C</text>
+    <rect x="8" y="102" width="222" height="32" rx="8" fill="#ffffff" stroke="#d7dee6"/>
+    <text x="22" y="123">browser (duckdb-wasm)</text>
+    <rect x="8" y="140" width="222" height="32" rx="8" fill="#ffffff" stroke="#d7dee6"/>
+    <text x="22" y="161">another DuckDB session</text>
+  </g>
+  <path d="M240,42 q10,0 10,12 v82 q0,12 10,12" fill="none" stroke="#d7dee6" stroke-width="1.5"/>
+  <path d="M240,156 q10,0 10,-12 v-82 q0,-12 10,-12" fill="none" stroke="#d7dee6" stroke-width="1.5"/>
+  <rect x="530" y="42" width="242" height="114" rx="12" fill="#ffffff" stroke="#d7dee6"/>
+  <text x="651" y="76" text-anchor="middle" font-size="15" font-weight="700" fill="#063f49">DuckDB session</text>
+  <text x="651" y="97" text-anchor="middle" font-size="12.5" fill="#5c6a76">running ducknng</text>
+  <text x="651" y="130" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="#0b6b7a">ducknng_start_server()</text>
+  <line x1="270" y1="82" x2="520" y2="82" stroke="#0b6b7a" stroke-width="2" marker-end="url(#dn-arrow)"/>
+  <text x="395" y="72" text-anchor="middle" font-size="12.5" fill="#063f49">framed call · Arrow or Quack</text>
+  <line x1="520" y1="122" x2="270" y2="122" stroke="#6bb3bf" stroke-width="2" marker-end="url(#dn-arrow-b)"/>
+  <text x="395" y="142" text-anchor="middle" font-size="12.5" fill="#5c6a76">result batches · end-of-stream</text>
+  <rect x="196" y="186" width="388" height="30" rx="15" fill="#f5f8fa" stroke="#d7dee6"/>
+  <text x="390" y="206" text-anchor="middle" font-size="11.5" font-family="ui-monospace,monospace" fill="#063f49">ipc:// · tcp:// · tls+tcp:// · ws:// · wss:// · http://</text>
+  <text x="390" y="238" text-anchor="middle" font-size="12" fill="#5c6a76">Either side may be DuckDB: ducknng is a client as well as a server.</text>
 </svg>
 </div>
 
