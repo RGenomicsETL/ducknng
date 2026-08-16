@@ -59,6 +59,10 @@ build_metadata <- function(include_before) {
       "      css: [\"@default@1.14.69\", \"@article@1.14.69\", ",
       "\"@site@1.14.69\", \"", css, "\"]"
     ),
+    # Marks the contents entry for the section currently in view. Targets #TOC
+    # directly, so it works with the grid sidebar in tools/site.css and does not
+    # need litedown's sidenote script (which also relocates footnotes).
+    "      js: [\"@toc-highlight@1.14.69\"]",
     paste0("      include_before: \"", include_before, "\""),
     "---"
   )
