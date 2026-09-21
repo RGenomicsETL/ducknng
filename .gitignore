@@ -13,3 +13,5 @@ venv
 community-extensions
 /.sync/
 /.pi/
+__pycache__/
+*.pyc
