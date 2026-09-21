@@ -568,6 +568,58 @@ order, and types must match the target), returning the uploaded row and
 client-sent byte counts. A runnable round-trip is in
 `test/sql/ducknng_upload_roundtrip.test`.
 
+### Registry: SQL-defined methods
+
+A host can publish its own manifest-visible methods whose handlers are SQL it
+owns. `ducknng_register_sql_method(name, handler_sql, request_schema_json)`
+adds a method to the `sql_method` family; callers send one JSON object and never
+SQL. The handler's statements run in one transaction, each may bind the payload
+through its single parameter, and the first value of the last statement is the
+JSON reply. `ducknng_request_subject()` tells the handler who is calling; with
+mTLS it carries the verified peer identity.
+
+```{duckdb collapse=TRUE, comment=""}
+CREATE TABLE notes (author VARCHAR, body VARCHAR);
+
+SELECT ducknng_register_sql_method(
+  'add_note',
+  'INSERT INTO notes
+     SELECT coalesce(s.subject, ''anonymous''), $1::JSON->>''body''
+     FROM (SELECT 1) LEFT JOIN ducknng_request_subject() s ON true
+   ; SELECT to_json(struct_pack(notes := count(*))) FROM notes',
+  '{"type":"object","required":["body"],
+    "properties":{"body":{"type":"string"}}}'
+) AS registered;
+
+SELECT name, family, request_payload_format, requires_auth
+FROM ducknng_list_methods()
+WHERE family = 'sql_method';
+```
+
+A JSON call frame is the 22-byte envelope header followed by the method name
+and payload. The macro below builds one so the call runs from SQL:
+
+```{duckdb collapse=TRUE, comment=""}
+CREATE MACRO le_hex(n, width) AS array_to_string(list_transform(range(width),
+  lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')), '');
+CREATE MACRO json_call(method, payload) AS from_hex(
+  '0101' || '04000000' || le_hex(octet_length(encode(method)), 4) ||
+  '00000000' || le_hex(octet_length(encode(payload)), 8) ||
+  hex(encode(method)) || hex(encode(payload)));
+
+SELECT ducknng_start_server('notes', 'inproc://ducknng_notes', 1,
+  134217728, 300000, 0::UBIGINT) AS started;
+
+SELECT ducknng_frame_type_name(f) AS type, ducknng_frame_payload_text(f) AS reply
+FROM (SELECT ducknng_request_raw('inproc://ducknng_notes',
+  json_call('add_note', '{"body":"hello from a JSON call"}'),
+  2000, 0::UBIGINT) AS f);
+
+SELECT author, body FROM notes;
+
+SELECT ducknng_stop_server('notes') AS stopped;
+```
+
 ### Synchronous helpers
 
 ```{duckdb collapse=TRUE, comment=""}
@@ -1313,7 +1365,7 @@ ipc_path <- "/tmp/ducknng_readme_exec.ipc"
 ipc_url  <- paste0("ipc://", ipc_path)
 unlink(ipc_path)
 
-db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true")))
+db_con <- DBI::dbConnect(suppressMessages(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true"))))
 DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 DBI::dbGetQuery(db_con, sprintf(
   "SELECT ducknng_start_server('sql_exec', '%s', 1, 134217728, 300000, 0::UBIGINT)", ipc_url

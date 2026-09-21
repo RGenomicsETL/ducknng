@@ -36,6 +36,7 @@ This file is generated from `function_catalog/functions.yaml`.
 |---|---|---|---|---|
 | `ducknng_register_exec_method` | scalar | `[requires_auth]` | `BOOLEAN` | Register the built-in exec RPC method explicitly. |
 | `ducknng_register_upload_methods` | scalar | `[requires_auth]` | `BOOLEAN` | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
+| `ducknng_register_sql_method` | scalar | `name, handler_sql, request_schema_json[, requires_auth]` | `BOOLEAN` | Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send only a JSON object payload. |
 | `ducknng_set_method_auth` | scalar | `name, requires_auth` | `BOOLEAN` | Set descriptor-level verified-peer-identity authorization for a registered RPC method. |
 | `ducknng_unregister_method` | scalar | `name` | `BOOLEAN` | Unregister a method from the runtime registry. |
 | `ducknng_unregister_family` | scalar | `family` | `UBIGINT` | Unregister all methods in a family and return the number removed. |
@@ -81,6 +82,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_set_service_ip_allowlist` | scalar | `name, cidrs_json` | `BOOLEAN` | Dynamically set the IP/CIDR remote-address allowlist for a running service. |
 | `ducknng_set_service_limits` | scalar | `name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]` | `BOOLEAN` | Set service resource limits. |
 | `ducknng_auth_context` | table |  | `TABLE(phase VARCHAR, service_name VARCHAR, transport_family VARCHAR, scheme VARCHAR, listen VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, tls_verified BOOLEAN, peer_identity VARCHAR, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, http_method VARCHAR, http_path VARCHAR, content_type VARCHAR, body_bytes UBIGINT, rpc_method VARCHAR, rpc_type VARCHAR, payload_bytes UBIGINT)` | Expose the current request context to a SQL authorization callback. |
+| `ducknng_request_subject` | table |  | `TABLE(peer_identity VARCHAR, principal VARCHAR, subject VARCHAR, claims_json VARCHAR, authenticated BOOLEAN)` | Expose the verified caller of the RPC request whose SQL is running, such as a SQL method handler. |
 | `ducknng_set_service_authorizer` | scalar | `name, authorizer_sql` | `BOOLEAN` | Install or clear a service-level SQL authorization callback evaluated uniformly for framed RPC requests before method dispatch. |
 | `ducknng_self_signed_tls_config` | scalar | `common_name, valid_days, auth_mode` | `UBIGINT` | Generate a self-signed development certificate and register it as a TLS config handle. |
 | `ducknng_tls_config_from_pem` | scalar | `cert_pem, key_pem, ca_pem, password, auth_mode` | `UBIGINT` | Register a TLS config handle from in-memory PEM material. |

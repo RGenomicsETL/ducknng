@@ -566,6 +566,14 @@ FUNCTIONS = [
         "table",
         "Return the current request's auth context: peer_identity, peer_addr, authenticated columns.",
     ),
+    af(
+        "ducknng_request_subject",
+        "table",
+        ATH,
+        "request_subject()",
+        "table",
+        "Return the verified caller of the running RPC request: peer_identity, principal, subject, claims_json, authenticated.",
+    ),
     # ---- Monitoring ----
     af(
         "ducknng_read_monitor",
@@ -776,6 +784,14 @@ FUNCTIONS = [
         "register_upload_methods(require_auth)",
         "BOOLEAN",
         "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
+    ),
+    af(
+        "ducknng_register_sql_method",
+        "scalar",
+        REG,
+        "register_sql_method(name, handler_sql, request_schema_json, require_auth)",
+        "BOOLEAN",
+        "Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send a JSON object payload.",
     ),
     af(
         "ducknng_set_method_auth",

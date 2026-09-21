@@ -3,6 +3,7 @@
 #include "ducknng_registry.h"
 #include "ducknng_runtime.h"
 #include "ducknng_service.h"
+#include "ducknng_sql_method.h"
 #include "ducknng_util.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -200,6 +201,51 @@ static void ducknng_register_upload_methods_scalar(duckdb_function_info info,
             return;
         }
         ducknng_mutex_unlock(&ctx->rt->mu);
+        out[row] = true;
+    }
+}
+
+static void ducknng_register_sql_method_scalar(duckdb_function_info info,
+    duckdb_data_chunk input, duckdb_vector output) {
+    ducknng_sql_context *ctx;
+    bool *out;
+    idx_t count;
+    idx_t ncols;
+    idx_t row;
+
+    ctx = (ducknng_sql_context *)duckdb_scalar_function_get_extra_info(info);
+    if (ducknng_reject_scalar_inside_authorizer(info, ctx)) return;
+    if (!ctx || !ctx->rt) {
+        duckdb_scalar_function_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+
+    out = (bool *)duckdb_vector_get_data(output);
+    count = duckdb_data_chunk_get_size(input);
+    ncols = duckdb_data_chunk_get_column_count(input);
+
+    for (row = 0; row < count; row++) {
+        char *name = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 0), row);
+        char *handler_sql = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 1), row);
+        char *schema = arg_varchar_dup(duckdb_data_chunk_get_vector(input, 2), row);
+        int requires_auth = ncols > 3 ?
+            (arg_bool(duckdb_data_chunk_get_vector(input, 3), row, false) ? 1 : 0) : 0;
+        char *errmsg = NULL;
+        int ok;
+
+        ducknng_mutex_lock(&ctx->rt->mu);
+        ok = ducknng_runtime_register_sql_method(ctx->rt, name, handler_sql, schema,
+            requires_auth, &errmsg);
+        ducknng_mutex_unlock(&ctx->rt->mu);
+        if (name) duckdb_free(name);
+        if (handler_sql) duckdb_free(handler_sql);
+        if (schema) duckdb_free(schema);
+        if (!ok) {
+            duckdb_scalar_function_set_error(info,
+                errmsg ? errmsg : "ducknng: failed to register SQL method");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
         out[row] = true;
     }
 }
@@ -550,6 +596,9 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
     duckdb_type method_auth_types[2] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN};
     duckdb_type method_family_types[1] = {DUCKDB_TYPE_VARCHAR};
     duckdb_type register_exec_auth_types[1] = {DUCKDB_TYPE_BOOLEAN};
+    duckdb_type register_sql_method_types[4] = {
+        DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BOOLEAN
+    };
 
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 0,
             ducknng_register_exec_method_scalar, ctx, NULL, DUCKDB_TYPE_BOOLEAN)) {
@@ -557,6 +606,16 @@ int ducknng_register_sql_registry(duckdb_connection con, ducknng_sql_context *ct
     }
     if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_exec_method", 1,
             ducknng_register_exec_method_scalar, ctx, register_exec_auth_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_sql_method", 3,
+            ducknng_register_sql_method_scalar, ctx, register_sql_method_types,
+            DUCKDB_TYPE_BOOLEAN)) {
+        return 0;
+    }
+    if (!DUCKNNG_REGISTER_VOLATILE_SCALAR(con, "ducknng_register_sql_method", 4,
+            ducknng_register_sql_method_scalar, ctx, register_sql_method_types,
             DUCKDB_TYPE_BOOLEAN)) {
         return 0;
     }

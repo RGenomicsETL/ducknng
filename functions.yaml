@@ -600,6 +600,15 @@
       "examples": []
     },
     {
+      "name": "ducknng_request_subject",
+      "kind": "table",
+      "category": "Admission",
+      "signature": "request_subject()",
+      "returns": "table",
+      "description": "Return the verified caller of the running RPC request: peer_identity, principal, subject, claims_json, authenticated.",
+      "examples": []
+    },
+    {
       "name": "ducknng_read_monitor",
       "kind": "table",
       "category": "Monitoring",
@@ -831,6 +840,15 @@
       "signature": "register_upload_methods(require_auth)",
       "returns": "BOOLEAN",
       "description": "Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.",
+      "examples": []
+    },
+    {
+      "name": "ducknng_register_sql_method",
+      "kind": "scalar",
+      "category": "Method Registry",
+      "signature": "register_sql_method(name, handler_sql, request_schema_json, require_auth)",
+      "returns": "BOOLEAN",
+      "description": "Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send a JSON object payload.",
       "examples": []
     },
     {

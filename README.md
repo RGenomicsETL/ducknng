@@ -584,14 +584,15 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Method Registry
 
-| name                              | kind   | arguments             | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | description                                                                                 |
-|-----------------------------------|--------|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `ducknng_register_exec_method`    | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in exec RPC method explicitly.                                           |
-| `ducknng_register_upload_methods` | scalar | `[requires_auth]`     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly. |
-| `ducknng_set_method_auth`         | scalar | `name, requires_auth` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Set descriptor-level verified-peer-identity authorization for a registered RPC method.      |
-| `ducknng_unregister_method`       | scalar | `name`                | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister a method from the runtime registry.                                              |
-| `ducknng_unregister_family`       | scalar | `family`              | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister all methods in a family and return the number removed.                           |
-| `ducknng_list_methods`            | table  |                       | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry.                          |
+| name                              | kind   | arguments                                                 | returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | description                                                                                                                   |
+|-----------------------------------|--------|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_register_exec_method`    | scalar | `[requires_auth]`                                         | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in exec RPC method explicitly.                                                                             |
+| `ducknng_register_upload_methods` | scalar | `[requires_auth]`                                         | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register the built-in upload lane RPC methods (upload_open/append/commit/abort) explicitly.                                   |
+| `ducknng_register_sql_method`     | scalar | `name, handler_sql, request_schema_json[, requires_auth]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send only a JSON object payload. |
+| `ducknng_set_method_auth`         | scalar | `name, requires_auth`                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Set descriptor-level verified-peer-identity authorization for a registered RPC method.                                        |
+| `ducknng_unregister_method`       | scalar | `name`                                                    | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister a method from the runtime registry.                                                                                |
+| `ducknng_unregister_family`       | scalar | `family`                                                  | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Unregister all methods in a family and return the number removed.                                                             |
+| `ducknng_list_methods`            | table  |                                                           | `TABLE(name VARCHAR, family VARCHAR, summary VARCHAR, transport_pattern VARCHAR, request_payload_format VARCHAR, response_payload_format VARCHAR, response_mode VARCHAR, session_behavior VARCHAR, request_schema_json VARCHAR, response_schema_json VARCHAR, requires_auth BOOLEAN, requires_session BOOLEAN, opens_session BOOLEAN, closes_session BOOLEAN, mutates_state BOOLEAN, idempotent BOOLEAN, deprecated BOOLEAN, disabled BOOLEAN, accepted_request_flags UINTEGER, emitted_reply_flags UINTEGER, max_request_bytes UBIGINT, max_reply_bytes UBIGINT, version_introduced INTEGER)` | List the currently registered RPC methods in the runtime registry.                                                            |
 
 ## Primitive Transport
 
@@ -633,6 +634,7 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_set_service_ip_allowlist`   | scalar | `name, cidrs_json`                                                                                                                                                                                                         | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Dynamically set the IP/CIDR remote-address allowlist for a running service.                                                     |
 | `ducknng_set_service_limits`         | scalar | `name, max_open_sessions[, max_active_pipes[, max_inflight_requests[, max_sessions_per_peer_identity[, max_inflight_per_peer_identity[, max_reply_bytes_per_peer_identity[, max_session_open_rate_per_peer_identity]]]]]]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Set service resource limits.                                                                                                    |
 | `ducknng_auth_context`               | table  |                                                                                                                                                                                                                            | `TABLE(phase VARCHAR, service_name VARCHAR, transport_family VARCHAR, scheme VARCHAR, listen VARCHAR, remote_addr VARCHAR, remote_ip VARCHAR, remote_port INTEGER, tls_verified BOOLEAN, peer_identity VARCHAR, peer_allowlist_active BOOLEAN, ip_allowlist_active BOOLEAN, sql_authorizer_active BOOLEAN, http_method VARCHAR, http_path VARCHAR, content_type VARCHAR, body_bytes UBIGINT, rpc_method VARCHAR, rpc_type VARCHAR, payload_bytes UBIGINT)` | Expose the current request context to a SQL authorization callback.                                                             |
+| `ducknng_request_subject`            | table  |                                                                                                                                                                                                                            | `TABLE(peer_identity VARCHAR, principal VARCHAR, subject VARCHAR, claims_json VARCHAR, authenticated BOOLEAN)`                                                                                                                                                                                                                                                                                                                                             | Expose the verified caller of the RPC request whose SQL is running, such as a SQL method handler.                               |
 | `ducknng_set_service_authorizer`     | scalar | `name, authorizer_sql`                                                                                                                                                                                                     | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Install or clear a service-level SQL authorization callback evaluated uniformly for framed RPC requests before method dispatch. |
 | `ducknng_self_signed_tls_config`     | scalar | `common_name, valid_days, auth_mode`                                                                                                                                                                                       | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Generate a self-signed development certificate and register it as a TLS config handle.                                          |
 | `ducknng_tls_config_from_pem`        | scalar | `cert_pem, key_pem, ca_pem, password, auth_mode`                                                                                                                                                                           | `UBIGINT`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Register a TLS config handle from in-memory PEM material.                                                                       |
@@ -1071,6 +1073,87 @@ and streams the result rows into `target_table` over the upload lane
 (the batch column names, order, and types must match the target),
 returning the uploaded row and client-sent byte counts. A runnable
 round-trip is in `test/sql/ducknng_upload_roundtrip.test`.
+
+### Registry: SQL-defined methods
+
+A host can publish its own manifest-visible methods whose handlers are
+SQL it owns.
+`ducknng_register_sql_method(name, handler_sql, request_schema_json)`
+adds a method to the `sql_method` family; callers send one JSON object
+and never SQL. The handler’s statements run in one transaction, each may
+bind the payload through its single parameter, and the first value of
+the last statement is the JSON reply. `ducknng_request_subject()` tells
+the handler who is calling; with mTLS it carries the verified peer
+identity.
+
+``` sql
+CREATE TABLE notes (author VARCHAR, body VARCHAR);
+SELECT ducknng_register_sql_method(
+  'add_note',
+  'INSERT INTO notes
+     SELECT coalesce(s.subject, ''anonymous''), $1::JSON->>''body''
+     FROM (SELECT 1) LEFT JOIN ducknng_request_subject() s ON true
+   ; SELECT to_json(struct_pack(notes := count(*))) FROM notes',
+  '{"type":"object","required":["body"],
+    "properties":{"body":{"type":"string"}}}'
+) AS registered;
+SELECT name, family, request_payload_format, requires_auth
+FROM ducknng_list_methods()
+WHERE family = 'sql_method';
+
++------------+
+| registered |
++------------+
+| true       |
++------------+
++----------+------------+------------------------+---------------+
+|   name   |   family   | request_payload_format | requires_auth |
++----------+------------+------------------------+---------------+
+| add_note | sql_method | json                   | false         |
++----------+------------+------------------------+---------------+
+```
+
+A JSON call frame is the 22-byte envelope header followed by the method
+name and payload. The macro below builds one so the call runs from SQL:
+
+``` sql
+CREATE MACRO le_hex(n, width) AS array_to_string(list_transform(range(width),
+  lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')), '');
+CREATE MACRO json_call(method, payload) AS from_hex(
+  '0101' || '04000000' || le_hex(octet_length(encode(method)), 4) ||
+  '00000000' || le_hex(octet_length(encode(payload)), 8) ||
+  hex(encode(method)) || hex(encode(payload)));
+SELECT ducknng_start_server('notes', 'inproc://ducknng_notes', 1,
+  134217728, 300000, 0::UBIGINT) AS started;
+SELECT ducknng_frame_type_name(f) AS type, ducknng_frame_payload_text(f) AS reply
+FROM (SELECT ducknng_request_raw('inproc://ducknng_notes',
+  json_call('add_note', '{"body":"hello from a JSON call"}'),
+  2000, 0::UBIGINT) AS f);
+SELECT author, body FROM notes;
+SELECT ducknng_stop_server('notes') AS stopped;
+
+
++---------+
+| started |
++---------+
+| true    |
++---------+
++--------+-------------+
+|  type  |    reply    |
++--------+-------------+
+| result | {"notes":1} |
++--------+-------------+
++-----------+------------------------+
+|  author   |          body          |
++-----------+------------------------+
+| anonymous | hello from a JSON call |
++-----------+------------------------+
++---------+
+| stopped |
++---------+
+| true    |
++---------+
+```
 
 ### Synchronous helpers
 
@@ -1817,7 +1900,7 @@ SELECT ducknng_stop_server('http_rpc');
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
-| ducknng     | 12           |
+| ducknng     | 13           |
 +-------------+--------------+
 
 +------+-----------+----------+
@@ -2194,7 +2277,7 @@ ipc_path <- "/tmp/ducknng_readme_exec.ipc"
 ipc_url  <- paste0("ipc://", ipc_path)
 unlink(ipc_path)
 
-db_con <- DBI::dbConnect(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true")))
+db_con <- DBI::dbConnect(suppressMessages(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true"))))
 DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 [1] 0
 DBI::dbGetQuery(db_con, sprintf(
