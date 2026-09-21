@@ -22,6 +22,12 @@ http_smoke: release
 ws_smoke: release
 	python3 test/ws_smoke.py build/release/ducknng.duckdb_extension
 
+durable_workflow_smoke:
+	python3 test/durable_workflows_smoke.py
+
+durable_workflow_r_smoke:
+	Rscript test/durable_workflows_smoke.R
+
 subscriber_gateway_rdm: release
 	R -e "rmarkdown::render('demo/subscriber_gateway.Rmd')"
 

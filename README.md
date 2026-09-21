@@ -422,6 +422,20 @@ SELECT ducknng_drop_tls_config(getvariable('tour_tls')::UBIGINT);
 +---------------------------------------------------------------------+
 ```
 
+## Checkpointed workflow example
+
+[`examples/durable_workflows/`](examples/durable_workflows/) contains a
+runnable Absurd-style task, lease, checkpoint, sleep, retry, and
+cached-event state machine. Its operations are single DuckDB statements,
+so workers can run them locally or through the existing ducknng query
+RPC. It is deliberately not a Temporal-compatible event-history/replay
+engine, and its documentation states the lease-overlap and
+external-side-effect limits explicitly.
+
+Run the Python concurrency and recovery smoke with
+`make durable_workflow_smoke`. An R implementation using DBI, duckdb,
+and jsonlite is exercised by `make durable_workflow_r_smoke`.
+
 ## Development
 
 Prerequisites: a C compiler, CMake, Python 3, and R with the `rmarkdown`
