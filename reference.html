@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.10">
+<meta name="generator" content="litedown 0.11">
 <title>SQL function reference · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -745,11 +745,19 @@ tbody td:first-child code {
 <h4 id="sec:ducknng-get-rpc-manifest-url-tls-config-id"><code>ducknng_get_rpc_manifest(url, tls_config_id)</code></h4>
 <p>Request the RPC method manifest from a remote server.</p>
 <h4 id="sec:ducknng-query-rpc-url-sql-tls-config-id"><code>ducknng_query_rpc(url, sql, tls_config_id)</code></h4>
-<p>Execute SQL on a remote server and return result rows. For SELECT: opens session + auto-fetch. For DML: returns rows_changed.</p>
+<p>Run read-only or idempotent remote SQL through a query session and return its rows.</p>
+<h4 id="sec:ducknng-query-rpc-params-url-sql-params-tls-config-id"><code>ducknng_query_rpc_params(url, sql, params, tls_config_id)</code></h4>
+<p>Run one parameterized read-only or idempotent remote statement and return its rows.</p>
+<h4 id="sec:ducknng-prepare-query-url-sql-tls-config-id"><code>ducknng_prepare_query(url, sql, tls_config_id)</code></h4>
+<p>Prepare one remote statement without executing it and expose its result schema.</p>
+<h4 id="sec:ducknng-prepare-query-params-url-sql-params-tls-config-id"><code>ducknng_prepare_query_params(url, sql, params, tls_config_id)</code></h4>
+<p>Bind a typed parameter tuple and expose the prepared remote result schema without execution.</p>
 <h4 id="sec:ducknng-upload-table-url-source-query-target-table-tls-config-id"><code>ducknng_upload_table(url, source_query, target_table[, tls_config_id])</code></h4>
 <p>Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.</p>
 <h4 id="sec:ducknng-run-rpc-url-sql-tls-config-id"><code>ducknng_run_rpc(url, sql, tls_config_id)</code></h4>
 <p>Execute SQL via the exec method. Returns rows_changed + metadata.</p>
+<h4 id="sec:ducknng-run-rpc-params-url-sql-params-tls-config-id"><code>ducknng_run_rpc_params(url, sql, params, tls_config_id)</code></h4>
+<p>Execute one parameterized statement through exec and return rows_changed plus metadata.</p>
 <h4 id="sec:ducknng-open-query-url-sql-batch-rows-batch-bytes-tls-config-id"><code>ducknng_open_query(url, sql, batch_rows, batch_bytes, tls_config_id)</code></h4>
 <p>Open a remote query session. Returns session_id + session_token needed for fetch/close/cancel.</p>
 <h4 id="sec:ducknng-fetch-query-table-url-session-id-session-token-batch-rows-batch-bytes-tls-config-id"><code>ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)</code></h4>
@@ -878,6 +886,8 @@ tbody td:first-child code {
 <p>Register a SQL authorizer callback for a service. The handler receives query text and returns allow/deny.</p>
 <h4 id="sec:ducknng-auth-context"><code>ducknng_auth_context()</code></h4>
 <p>Return the current request’s auth context: peer_identity, peer_addr, authenticated columns.</p>
+<h4 id="sec:ducknng-request-subject"><code>ducknng_request_subject()</code></h4>
+<p>Return the verified caller of the running RPC request: peer_identity, principal, subject, claims_json, authenticated.</p>
 <h3 id="sec:monitoring">Monitoring</h3>
 <h4 id="sec:ducknng-read-monitor-name-after-seq-max-events"><code>ducknng_read_monitor(name, after_seq, max_events)</code></h4>
 <p>Read pipe events from a service’s event monitor ring buffer.</p>
@@ -896,6 +906,8 @@ tbody td:first-child code {
 <p>Register (or re-register) the default exec method. Pass TRUE to enable by default.</p>
 <h4 id="sec:ducknng-register-upload-methods-require-auth"><code>ducknng_register_upload_methods(require_auth)</code></h4>
 <p>Register (or re-register) the upload lane methods (upload_open/append/commit/abort). Pass TRUE to require auth.</p>
+<h4 id="sec:ducknng-register-sql-method-name-handler-sql-request-schema-json-require-auth"><code>ducknng_register_sql_method(name, handler_sql, request_schema_json, require_auth)</code></h4>
+<p>Register or replace a manifest-visible RPC method whose handler is server-owned SQL; callers send a JSON object payload.</p>
 <h4 id="sec:ducknng-set-method-auth-method-name-require-auth"><code>ducknng_set_method_auth(method_name, require_auth)</code></h4>
 <p>Set auth requirement for an RPC method.</p>
 <h4 id="sec:ducknng-unregister-method-method-name"><code>ducknng_unregister_method(method_name)</code></h4>
