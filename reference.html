@@ -792,6 +792,8 @@ tbody td:first-child code {
 <p>Register prefix or template-matched route. match_kind: ‘prefix’ or ‘template’. {param} accessible via ducknng_http_path_param.</p>
 <h4 id="sec:ducknng-add-stream-route-service-name-method-path-handler-sql-content-type"><code>ducknng_add_stream_route(service_name, method, path, handler_sql, content_type)</code></h4>
 <p>Register a chunked-streaming route. Handler SQL must return ‘chunk’ column. Each row written as HTTP chunk. Default content-type: text/event-stream.</p>
+<h4 id="sec:ducknng-add-event-route-service-name-path-handler-sql-heartbeat-ms"><code>ducknng_add_event_route(service_name, path, handler_sql, heartbeat_ms)</code></h4>
+<p>Register a GET route that relays one NNG PUB/SUB subscription as Server-Sent Events. Handler SQL returns url and optionally topic, event, and tls_config_id.</p>
 <h4 id="sec:ducknng-register-http-static-service-name-url-prefix-directory-path"><code>ducknng_register_http_static(service_name, url_prefix, directory_path)</code></h4>
 <p>Serve static files from a directory under a URL prefix.</p>
 <h4 id="sec:ducknng-unregister-http-route-service-name-method-path"><code>ducknng_unregister_http_route(service_name, method, path)</code></h4>
@@ -917,6 +919,8 @@ tbody td:first-child code {
 <h3 id="sec:frame-helpers">Frame Helpers</h3>
 <h4 id="sec:ducknng-decode-frame-data"><code>ducknng_decode_frame(data)</code></h4>
 <p>Decode a ducknng protocol frame into type, name, payload_text, error_text, and raw payload.</p>
+<h4 id="sec:ducknng-encode-rpc-call-method-payload"><code>ducknng_encode_rpc_call(method, payload)</code></h4>
+<p>Build the call frame for one manifest-declared JSON method; send it with ducknng_request_raw().</p>
 <h4 id="sec:ducknng-frame-payload-data"><code>ducknng_frame_payload(data)</code></h4>
 <p>Extract the frame payload BLOB from a ducknng protocol frame.</p>
 <h4 id="sec:ducknng-frame-payload-text-data"><code>ducknng_frame_payload_text(data)</code></h4>
