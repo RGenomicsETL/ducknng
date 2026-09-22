@@ -1,10 +1,16 @@
-.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke subscriber_gateway_rdm
+.PHONY: clean clean_all check_news docs function_catalog rdm rpc_smoke rpc_smoke_r http_smoke event_route_smoke event_route_race subscriber_gateway_rdm
 
 rpc_smoke: check_configure
 	$(TEST_RUNNER_RELEASE)
 
 http_smoke: release
 	python3 test/http_smoke.py build/release/ducknng.duckdb_extension
+
+event_route_smoke: release
+	./configure/venv/bin/python3 test/event_route_smoke.py build/release/ducknng.duckdb_extension
+
+event_route_race: release
+	./configure/venv/bin/python3 test/event_route_race.py build/release/ducknng.duckdb_extension
 
 durable_workflow_smoke:
 	python3 test/durable_workflows_smoke.py
