@@ -1,7 +1,7 @@
 .PHONY: clean clean_all check_news docs function_catalog wasm_matrix rdm rpc_smoke rpc_smoke_r
 .PHONY: site site-clean
 .PHONY: elf-export-check
-.PHONY: rpc_bench rpc_direct_bench rpc_bulk_compare rpc_upload_compare http_smoke ws_smoke subscriber_gateway_rdm
+.PHONY: rpc_bench rpc_direct_bench rpc_bulk_compare rpc_upload_compare http_smoke ws_smoke event_route_smoke event_route_race subscriber_gateway_rdm
 .PHONY: prop prop-quick prop-regression prop-asan prop-ubsan prop-sanitize prop-clean quack-fixtures
 .PHONY: quack-coverage quack-mcdc quack-mcdc-check quack-mcdc-clean
 .PHONY: fuzz fuzz-asan fuzz-ubsan fuzz-clean
@@ -21,6 +21,12 @@ http_smoke: release
 
 ws_smoke: release
 	python3 test/ws_smoke.py build/release/ducknng.duckdb_extension
+
+event_route_smoke: release
+	./configure/venv/bin/python3 test/event_route_smoke.py build/release/ducknng.duckdb_extension
+
+event_route_race: release
+	./configure/venv/bin/python3 test/event_route_race.py build/release/ducknng.duckdb_extension
 
 durable_workflow_smoke:
 	python3 test/durable_workflows_smoke.py

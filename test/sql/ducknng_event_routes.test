@@ -1,0 +1,337 @@
+# name: test/sql/ducknng_event_routes.test
+# group: [ducknng]
+
+require ducknng
+
+# An event route relays one NNG PUB/SUB subscription to an HTTP client as
+# Server-Sent Events. The handler SQL names the subscription per request.
+
+query I
+SELECT ducknng_start_server('events_api', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+----
+true
+
+statement ok
+SET VARIABLE events_base = replace(
+  (SELECT listen FROM ducknng_list_servers() WHERE name = 'events_api')::VARCHAR, '/_ducknng', '')
+
+statement ok
+SET VARIABLE events_pub = (SELECT (ducknng_open_socket('pub')).socket_id)
+
+query I
+SELECT (ducknng_listen_socket(getvariable('events_pub'), 'inproc://ducknng_event_routes', 1048576, 0::UBIGINT)).ok
+----
+true
+
+# The topic comes from the query string; without one the handler returns no
+# row, which is a 404.
+query I
+SELECT ducknng_add_event_route('events_api', '/events',
+  'SELECT ''inproc://ducknng_event_routes'' AS url,
+          ducknng_http_query_param(''topic'') AS topic,
+          ''hint'' AS event
+   WHERE ducknng_http_query_param(''topic'') IS NOT NULL',
+  60000)
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/quiet',
+  'SELECT ''inproc://ducknng_event_routes'' AS url, ''nothing-matches''::BLOB AS topic', 100)
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/no-url', 'SELECT 1 AS topic')
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_api', '/refused',
+  'SELECT ''ipc:///nonexistent/ducknng_event_routes.ipc'' AS url')
+----
+true
+
+query IIIII
+SELECT method, is_event_route, event_heartbeat_ms, is_stream, stream_content_type IS NULL
+FROM ducknng_list_http_routes()
+WHERE service_name = 'events_api' AND path = '/events'
+----
+GET	true	60000	false	true
+
+statement error
+SELECT ducknng_add_event_route('events_api', '/too-fast', 'SELECT 1', 50)
+----
+heartbeat_ms must be between 100 and 300000
+
+query II
+SELECT status, body_text LIKE '%no subscription%'
+FROM ducknng_ncurl(getvariable('events_base') || '/events', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+404	true
+
+query II
+SELECT status, body_text LIKE '%url column%'
+FROM ducknng_ncurl(getvariable('events_base') || '/no-url', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+500	true
+
+query II
+SELECT status, body_text LIKE '%could not subscribe%'
+FROM ducknng_ncurl(getvariable('events_base') || '/refused', 'GET', NULL, NULL, 5000, 0::UBIGINT)
+----
+503	true
+
+# A subscribed stream announces itself, then carries each matching message.
+statement ok
+CREATE TEMP TABLE ev_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  getvariable('events_base') || '/events?topic=alpha', 'GET', NULL, NULL, 5000, 0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE ev_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_open_aio), 5000)
+
+query III
+SELECT ok, status, position('text/event-stream' IN headers_json) > 0
+FROM ev_open
+----
+true	200	true
+
+statement ok
+CREATE TEMP TABLE ev_recv(seq INTEGER, aio_id UBIGINT)
+
+statement ok
+INSERT INTO ev_recv SELECT 1, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM ev_open), 65536::UBIGINT, 5000)
+
+query II
+SELECT ok, body = (': ready' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_recv WHERE seq = 1), 5000)
+----
+true	true
+
+# The stream holds no request slot while it is open.
+query I
+SELECT ducknng_service_inflight('events_api')
+----
+0
+
+# A message on another topic is filtered by the SUB socket.
+query II
+SELECT (ducknng_send_socket_raw(getvariable('events_pub'), 'beta:ignored'::BLOB, 1000)).ok,
+       (ducknng_send_socket_raw(getvariable('events_pub'), 'alpha:one'::BLOB, 1000)).ok
+----
+true	true
+
+statement ok
+INSERT INTO ev_recv SELECT 2, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM ev_open), 65536::UBIGINT, 5000)
+
+query II
+SELECT ok, body = ('event: hint' || chr(10) || 'data: alpha:one' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_recv WHERE seq = 2), 5000)
+----
+true	true
+
+# Lines of a multi-line message become separate data lines.
+query I
+SELECT (ducknng_send_socket_raw(getvariable('events_pub'),
+  ('alpha' || chr(13) || chr(10) || 'two' || chr(13) || 'three')::BLOB, 1000)).ok
+----
+true
+
+statement ok
+INSERT INTO ev_recv SELECT 3, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM ev_open), 65536::UBIGINT, 5000)
+
+query II
+SELECT ok, body = ('event: hint' || chr(10) || 'data: alpha' || chr(10) || 'data: two' || chr(10) ||
+  'data: three' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_recv WHERE seq = 3), 5000)
+----
+true	true
+
+# A message that is not UTF-8 text is reported, not forwarded.
+query I
+SELECT (ducknng_send_socket_raw(getvariable('events_pub'), from_hex('616c706861ff00'), 1000)).ok
+----
+true
+
+statement ok
+INSERT INTO ev_recv SELECT 4, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM ev_open), 65536::UBIGINT, 5000)
+
+query II
+SELECT ok, body = (': skipped a message that is not UTF-8 text' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_recv WHERE seq = 4), 5000)
+----
+true	true
+
+# A quiet stream sends keep-alive comments at its heartbeat.
+statement ok
+CREATE TEMP TABLE quiet_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  getvariable('events_base') || '/quiet', 'GET', NULL, NULL, 5000, 0::UBIGINT
+) AS aio_id
+
+statement ok
+CREATE TEMP TABLE quiet_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list_value(aio_id) FROM quiet_open_aio), 5000)
+
+statement ok
+CREATE TEMP TABLE quiet_recv(seq INTEGER, aio_id UBIGINT)
+
+statement ok
+INSERT INTO quiet_recv SELECT 1, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM quiet_open), 65536::UBIGINT, 5000)
+
+query I
+SELECT ok FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM quiet_recv WHERE seq = 1), 5000)
+----
+true
+
+statement ok
+INSERT INTO quiet_recv SELECT 2, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM quiet_open), 65536::UBIGINT, 5000)
+
+query II
+SELECT ok, body = (': keepalive' || chr(10) || chr(10))::BLOB
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM quiet_recv WHERE seq = 2), 5000)
+----
+true	true
+
+# Stopping the server ends open streams instead of waiting for them.
+query I
+SELECT ducknng_stop_server('events_api')
+----
+true
+
+statement ok
+INSERT INTO ev_recv SELECT 5, ducknng_ncurl_stream_recv_aio(
+  (SELECT stream_id FROM ev_open), 65536::UBIGINT, 5000)
+
+query I
+SELECT coalesce(end_of_stream, false) OR NOT ok
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  (SELECT list_value(aio_id) FROM ev_recv WHERE seq = 5), 5000)
+----
+true
+
+query I
+SELECT ducknng_ncurl_stream_close(stream_id) FROM ev_open
+----
+true
+
+query I
+SELECT ducknng_ncurl_stream_close(stream_id) FROM quiet_open
+----
+true
+
+query I
+SELECT bool_and(ducknng_aio_drop(aio_id))
+FROM (SELECT aio_id FROM ev_recv UNION ALL SELECT aio_id FROM quiet_recv
+      UNION ALL SELECT aio_id FROM ev_open_aio UNION ALL SELECT aio_id FROM quiet_open_aio)
+----
+true
+
+query I
+SELECT (ducknng_close_socket(getvariable('events_pub'))).ok
+----
+true
+
+# Stopping a server with many open relays ends every stream promptly.
+# test/event_route_race.py drives stops that race relays still starting.
+query I
+SELECT ducknng_start_server('events_race', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+----
+true
+
+statement ok
+SET VARIABLE race_base = replace(
+  (SELECT listen FROM ducknng_list_servers() WHERE name = 'events_race')::VARCHAR, '/_ducknng', '')
+
+statement ok
+SET VARIABLE race_pub = (SELECT (ducknng_open_socket('pub')).socket_id)
+
+query I
+SELECT (ducknng_listen_socket(getvariable('race_pub'), 'inproc://ducknng_event_race', 1048576, 0::UBIGINT)).ok
+----
+true
+
+query I
+SELECT ducknng_add_event_route('events_race', '/events',
+  'SELECT ''inproc://ducknng_event_race'' AS url', 60000)
+----
+true
+
+statement ok
+CREATE TEMP TABLE race_open_aio AS
+SELECT ducknng_ncurl_stream_open_aio(
+  getvariable('race_base') || '/events', 'GET', NULL, NULL, 5000, 0::UBIGINT
+) AS aio_id
+FROM range(8)
+
+statement ok
+CREATE TEMP TABLE race_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect((SELECT list(aio_id) FROM race_open_aio), 5000)
+
+statement ok
+INSERT INTO race_open
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  (SELECT list(aio_id) FROM race_open_aio WHERE aio_id NOT IN (SELECT aio_id FROM race_open)), 5000)
+
+query I
+SELECT count(*) FILTER (WHERE ok AND status = 200) FROM race_open
+----
+8
+
+query I
+SELECT ducknng_stop_server('events_race')
+----
+true
+
+statement ok
+CREATE TEMP TABLE race_recv AS
+SELECT 1 AS seq, ducknng_ncurl_stream_recv_aio(stream_id, 65536::UBIGINT, 5000) AS aio_id FROM race_open
+
+query I
+SELECT count(*) FILTER (WHERE body = (': ready' || chr(10) || chr(10))::BLOB)
+FROM ducknng_ncurl_stream_recv_aio_collect((SELECT list(aio_id) FROM race_recv WHERE seq = 1), 5000)
+----
+8
+
+statement ok
+INSERT INTO race_recv
+SELECT 2, ducknng_ncurl_stream_recv_aio(stream_id, 65536::UBIGINT, 5000) FROM race_open
+
+query I
+SELECT count(*) FILTER (WHERE end_of_stream OR NOT ok)
+FROM ducknng_ncurl_stream_recv_aio_collect((SELECT list(aio_id) FROM race_recv WHERE seq = 2), 5000)
+----
+8
+
+query I
+SELECT bool_and(ducknng_ncurl_stream_close(stream_id)) FROM race_open
+----
+true
+
+query I
+SELECT bool_and(ducknng_aio_drop(aio_id))
+FROM (SELECT aio_id FROM race_open_aio UNION ALL SELECT aio_id FROM race_recv)
+----
+true
+
+query I
+SELECT (ducknng_close_socket(getvariable('race_pub'))).ok
+----
+true

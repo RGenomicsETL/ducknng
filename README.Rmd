@@ -596,23 +596,17 @@ FROM ducknng_list_methods()
 WHERE family = 'sql_method';
 ```
 
-A JSON call frame is the 22-byte envelope header followed by the method name
-and payload. The macro below builds one so the call runs from SQL:
+`ducknng_encode_rpc_call(method, payload)` builds the JSON call frame, the
+22-byte envelope header followed by the method name and payload, so the call
+runs from SQL:
 
 ```{duckdb collapse=TRUE, comment=""}
-CREATE MACRO le_hex(n, width) AS array_to_string(list_transform(range(width),
-  lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')), '');
-CREATE MACRO json_call(method, payload) AS from_hex(
-  '0101' || '04000000' || le_hex(octet_length(encode(method)), 4) ||
-  '00000000' || le_hex(octet_length(encode(payload)), 8) ||
-  hex(encode(method)) || hex(encode(payload)));
-
 SELECT ducknng_start_server('notes', 'inproc://ducknng_notes', 1,
   134217728, 300000, 0::UBIGINT) AS started;
 
 SELECT ducknng_frame_type_name(f) AS type, ducknng_frame_payload_text(f) AS reply
 FROM (SELECT ducknng_request_raw('inproc://ducknng_notes',
-  json_call('add_note', '{"body":"hello from a JSON call"}'),
+  ducknng_encode_rpc_call('add_note', '{"body":"hello from a JSON call"}'),
   2000, 0::UBIGINT) AS f);
 
 SELECT author, body FROM notes;
@@ -1303,6 +1297,87 @@ SELECT ducknng_aio_drop(getvariable('sse_open_aio')::UBIGINT)
 DROP TABLE sse_open;
 
 SELECT ducknng_stop_server('http_sse');
+```
+
+### Event routes (SSE from a subscription)
+
+A stream route writes the rows of one query and ends. An event route instead
+relays an NNG PUB/SUB subscription for as long as the client stays connected.
+`ducknng_add_event_route(service_name, path, handler_sql[, heartbeat_ms])`
+registers a `GET` route whose handler SQL runs once per request and names the
+subscription: a `url` to dial, and optionally a `topic` prefix, an `event`
+name, and a `tls_config_id`. Returning no row answers 404. After the handler
+runs, the stream holds no DuckDB connection: a relay thread owns the SUB socket
+and writes each message as one Server-Sent Event, with a keep-alive comment
+after `heartbeat_ms` of silence.
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_start_server(
+  'http_events', 'http://127.0.0.1:18447/_ducknng', 1, 134217728, 300000, 0::UBIGINT
+) AS started;
+
+SET VARIABLE events_pub = (SELECT (ducknng_open_socket('pub')).socket_id);
+SELECT (ducknng_listen_socket(getvariable('events_pub'),
+  'inproc://ducknng_readme_events', 1048576, 0::UBIGINT)).ok AS listening;
+
+SELECT ducknng_add_event_route('http_events', '/events',
+  'SELECT ''inproc://ducknng_readme_events'' AS url,
+          ducknng_http_query_param(''topic'') AS topic,
+          ''price'' AS event
+   WHERE ducknng_http_query_param(''topic'') IS NOT NULL'
+) AS registered;
+
+SELECT path, is_event_route, event_heartbeat_ms
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_events';
+```
+
+The stream opens with a `: ready` comment once the subscription is connected.
+Messages whose topic does not match never reach the client:
+
+```{duckdb collapse=TRUE, comment=""}
+SET VARIABLE events_open_aio = ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:18447/events?topic=duck', 'GET', NULL, NULL, 2000, 0::UBIGINT
+);
+CREATE TEMP TABLE events_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  list_value(getvariable('events_open_aio')::UBIGINT), 2000
+);
+SET VARIABLE events_stream = (SELECT stream_id FROM events_open WHERE ok);
+
+SET VARIABLE events_ready = ducknng_ncurl_stream_recv_aio(
+  getvariable('events_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS first_chunk
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('events_ready')::UBIGINT), 2000
+);
+
+SELECT (ducknng_send_socket_raw(getvariable('events_pub'), 'goose 3.10'::BLOB, 1000)).ok
+   AND (ducknng_send_socket_raw(getvariable('events_pub'), 'duck 4.25'::BLOB, 1000)).ok
+   AS published;
+
+SET VARIABLE events_next = ducknng_ncurl_stream_recv_aio(
+  getvariable('events_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS event
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('events_next')::UBIGINT), 2000
+);
+```
+
+Stopping the server closes every relay's subscription, so open streams end
+rather than delaying the stop:
+
+```{duckdb collapse=TRUE, comment=""}
+SELECT ducknng_stop_server('http_events') AS stopped;
+
+SELECT ducknng_ncurl_stream_close(getvariable('events_stream')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_open_aio')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_ready')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_next')::UBIGINT) AS closed;
+DROP TABLE events_open;
+SELECT (ducknng_close_socket(getvariable('events_pub'))).ok AS closed_pub;
 ```
 
 ## Client interop: nanonext REQ/REP

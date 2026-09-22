@@ -596,32 +596,33 @@ This file is generated from `function_catalog/functions.yaml`.
 
 ## Primitive Transport
 
-| name                          | kind   | arguments                                       | returns                                                                                                                                                                   | description                                                                                         |
-|-------------------------------|--------|-------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `ducknng_open_socket`         | scalar | `protocol`                                      | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Open a client socket handle for a supported NNG protocol.                                           |
-| `ducknng_dial_socket`         | scalar | `socket_id, url, timeout_ms, tls_config_id`     | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Dial a URL using an opened socket handle.                                                           |
-| `ducknng_listen_socket`       | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Bind a socket handle to a listen URL and start its NNG listener.                                    |
-| `ducknng_close_socket`        | scalar | `socket_id`                                     | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Close a client socket handle.                                                                       |
-| `ducknng_send_socket_raw`     | scalar | `socket_id, frame, timeout_ms`                  | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Send one raw frame through an active socket handle.                                                 |
-| `ducknng_recv_socket_raw`     | scalar | `socket_id, timeout_ms`                         | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Receive one raw frame from an active socket handle.                                                 |
-| `ducknng_subscribe_socket`    | scalar | `socket_id, topic`                              | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Register a raw topic prefix on a sub socket.                                                        |
-| `ducknng_unsubscribe_socket`  | scalar | `socket_id, topic`                              | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Remove a raw topic prefix from a sub socket.                                                        |
-| `ducknng_list_sockets`        | table  |                                                 | `TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)`           | List client socket handles in the runtime.                                                          |
-| `ducknng_request`             | table  | `url, payload, timeout_ms, tls_config_id`       | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)`                                                                            | Perform a one-shot raw request and return a structured result row.                                  |
-| `ducknng_request_socket`      | table  | `socket_id, payload, timeout_ms`                | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)`                                                                            | Perform a raw request through a previously dialed socket handle and return a structured result row. |
-| `ducknng_request_raw`         | scalar | `url, payload, timeout_ms, tls_config_id`       | `BLOB`                                                                                                                                                                    | Perform a one-shot raw request and return the raw reply frame bytes.                                |
-| `ducknng_request_socket_raw`  | scalar | `socket_id, payload, timeout_ms`                | `BLOB`                                                                                                                                                                    | Perform a raw request through a dialed socket handle and return the raw reply frame bytes.          |
-| `ducknng_decode_frame`        | table  | `frame`                                         | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns.                      |
-| `ducknng_frame_payload`       | scalar | `frame`                                         | `BLOB`                                                                                                                                                                    | Extract the payload bytes from one raw ducknng frame.                                               |
-| `ducknng_frame_payload_text`  | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.               |
-| `ducknng_frame_error_text`    | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the protocol-level error text from a raw ducknng error frame.                               |
-| `ducknng_frame_version`       | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the protocol version field from one raw ducknng frame.                                      |
-| `ducknng_frame_type`          | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the numeric reply type field from one raw ducknng frame.                                    |
-| `ducknng_frame_status`        | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the protocol status from one raw ducknng frame.                                             |
-| `ducknng_frame_flags`         | scalar | `frame`                                         | `UINTEGER`                                                                                                                                                                | Extract the reply flags bitset from one raw ducknng frame.                                          |
-| `ducknng_frame_type_name`     | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the symbolic reply type name from one raw ducknng frame.                                    |
-| `ducknng_frame_name`          | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the method or reply name field from one raw ducknng frame.                                  |
-| `ducknng_frame_end_of_stream` | scalar | `frame`                                         | `BOOLEAN`                                                                                                                                                                 | Report whether one raw ducknng frame carries the end-of-stream reply flag.                          |
+| name                          | kind   | arguments                                       | returns                                                                                                                                                                   | description                                                                                                               |
+|-------------------------------|--------|-------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| `ducknng_open_socket`         | scalar | `protocol`                                      | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Open a client socket handle for a supported NNG protocol.                                                                 |
+| `ducknng_dial_socket`         | scalar | `socket_id, url, timeout_ms, tls_config_id`     | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Dial a URL using an opened socket handle.                                                                                 |
+| `ducknng_listen_socket`       | scalar | `socket_id, url, recv_max_bytes, tls_config_id` | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Bind a socket handle to a listen URL and start its NNG listener.                                                          |
+| `ducknng_close_socket`        | scalar | `socket_id`                                     | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Close a client socket handle.                                                                                             |
+| `ducknng_send_socket_raw`     | scalar | `socket_id, frame, timeout_ms`                  | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Send one raw frame through an active socket handle.                                                                       |
+| `ducknng_recv_socket_raw`     | scalar | `socket_id, timeout_ms`                         | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Receive one raw frame from an active socket handle.                                                                       |
+| `ducknng_subscribe_socket`    | scalar | `socket_id, topic`                              | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Register a raw topic prefix on a sub socket.                                                                              |
+| `ducknng_unsubscribe_socket`  | scalar | `socket_id, topic`                              | `STRUCT(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, socket_id UBIGINT, payload BLOB, url VARCHAR)`                                           | Remove a raw topic prefix from a sub socket.                                                                              |
+| `ducknng_list_sockets`        | table  |                                                 | `TABLE(socket_id UBIGINT, protocol VARCHAR, url VARCHAR, open BOOLEAN, connected BOOLEAN, listening BOOLEAN, send_timeout_ms INTEGER, recv_timeout_ms INTEGER)`           | List client socket handles in the runtime.                                                                                |
+| `ducknng_request`             | table  | `url, payload, timeout_ms, tls_config_id`       | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)`                                                                            | Perform a one-shot raw request and return a structured result row.                                                        |
+| `ducknng_request_socket`      | table  | `socket_id, payload, timeout_ms`                | `TABLE(ok BOOLEAN, error VARCHAR, nng_error INTEGER, nng_error_message VARCHAR, payload BLOB)`                                                                            | Perform a raw request through a previously dialed socket handle and return a structured result row.                       |
+| `ducknng_request_raw`         | scalar | `url, payload, timeout_ms, tls_config_id`       | `BLOB`                                                                                                                                                                    | Perform a one-shot raw request and return the raw reply frame bytes.                                                      |
+| `ducknng_request_socket_raw`  | scalar | `socket_id, payload, timeout_ms`                | `BLOB`                                                                                                                                                                    | Perform a raw request through a dialed socket handle and return the raw reply frame bytes.                                |
+| `ducknng_decode_frame`        | table  | `frame`                                         | `TABLE(ok BOOLEAN, error VARCHAR, version UTINYINT, type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR, payload BLOB, payload_text VARCHAR)` | Decode a raw ducknng frame into envelope fields and extracted payload columns.                                            |
+| `ducknng_encode_rpc_call`     | scalar | `method, payload`                               | `BLOB`                                                                                                                                                                    | Build the version-1 call frame for one manifest-declared JSON method, the encoding counterpart of ducknng_decode_frame(). |
+| `ducknng_frame_payload`       | scalar | `frame`                                         | `BLOB`                                                                                                                                                                    | Extract the payload bytes from one raw ducknng frame.                                                                     |
+| `ducknng_frame_payload_text`  | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the payload as UTF-8 text when a raw ducknng frame carries a textual payload.                                     |
+| `ducknng_frame_error_text`    | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the protocol-level error text from a raw ducknng error frame.                                                     |
+| `ducknng_frame_version`       | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the protocol version field from one raw ducknng frame.                                                            |
+| `ducknng_frame_type`          | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the numeric reply type field from one raw ducknng frame.                                                          |
+| `ducknng_frame_status`        | scalar | `frame`                                         | `UTINYINT`                                                                                                                                                                | Extract the protocol status from one raw ducknng frame.                                                                   |
+| `ducknng_frame_flags`         | scalar | `frame`                                         | `UINTEGER`                                                                                                                                                                | Extract the reply flags bitset from one raw ducknng frame.                                                                |
+| `ducknng_frame_type_name`     | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the symbolic reply type name from one raw ducknng frame.                                                          |
+| `ducknng_frame_name`          | scalar | `frame`                                         | `VARCHAR`                                                                                                                                                                 | Extract the method or reply name field from one raw ducknng frame.                                                        |
+| `ducknng_frame_end_of_stream` | scalar | `frame`                                         | `BOOLEAN`                                                                                                                                                                 | Report whether one raw ducknng frame carries the end-of-stream reply flag.                                                |
 
 ## Transport Security
 
@@ -674,7 +675,8 @@ This file is generated from `function_catalog/functions.yaml`.
 | `ducknng_register_http_route_pattern`   | scalar      | `service_name, method, match_kind, path_pattern, handler_sql[, request_max_bytes]` | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register one low-level HTTP route pattern beside the framed RPC mount using exact, prefix, or template matching.       |
 | `ducknng_unregister_http_route`         | scalar      | `service_name, method, path`                                                       | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Remove one previously registered exact-path HTTP route from a service.                                                 |
 | `ducknng_unregister_http_route_pattern` | scalar      | `service_name, method, match_kind, path_pattern`                                   | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Remove one previously registered prefix, template, or explicit exact route pattern from a service.                     |
-| `ducknng_list_http_routes`              | table       |                                                                                    | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR, auth_require_identity BOOLEAN, static_dir_path VARCHAR, auth_allow_identities_json VARCHAR)`                                                                                                                       | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
+| `ducknng_add_event_route`               | scalar      | `service_name, path, handler_sql[, heartbeat_ms]`                                  | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register a GET route that relays one NNG PUB/SUB subscription to the HTTP client as Server-Sent Events.                |
+| `ducknng_list_http_routes`              | table       |                                                                                    | `TABLE(service_id UBIGINT, route_id UBIGINT, request_max_bytes UBIGINT, service_name VARCHAR, method VARCHAR, match_kind VARCHAR, path VARCHAR, handler_sql VARCHAR, auth_require_identity BOOLEAN, static_dir_path VARCHAR, auth_allow_identities_json VARCHAR, is_stream BOOLEAN, stream_content_type VARCHAR, is_event_route BOOLEAN, event_heartbeat_ms UINTEGER)`                  | List the currently registered HTTP routes across running services, including their match kind and stored path pattern. |
 | `ducknng_set_http_route_auth`           | scalar      | `service_name, method, path[, require_identity[, allow_identities_json]]`          | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Set authentication requirements on a registered HTTP route.                                                            |
 | `ducknng_register_http_static`          | scalar      | `service_name, path_prefix, dir_path`                                              | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register a prefix route that serves static files from a directory on the server filesystem.                            |
 | `ducknng_register_http_worker`          | scalar      | `service_name, worker_name, sql, interval_ms`                                      | `BOOLEAN`                                                                                                                                                                                                                                                                                                                                                                               | Register a background SQL worker that runs on a recurring interval while the HTTP service is active.                   |
@@ -1113,26 +1115,19 @@ WHERE family = 'sql_method';
 +----------+------------+------------------------+---------------+
 ```
 
-A JSON call frame is the 22-byte envelope header followed by the method
-name and payload. The macro below builds one so the call runs from SQL:
+`ducknng_encode_rpc_call(method, payload)` builds the JSON call frame,
+the 22-byte envelope header followed by the method name and payload, so
+the call runs from SQL:
 
 ``` sql
-CREATE MACRO le_hex(n, width) AS array_to_string(list_transform(range(width),
-  lambda i: lpad(to_hex((n::UBIGINT >> (8 * i)::UBIGINT) & 255::UBIGINT), 2, '0')), '');
-CREATE MACRO json_call(method, payload) AS from_hex(
-  '0101' || '04000000' || le_hex(octet_length(encode(method)), 4) ||
-  '00000000' || le_hex(octet_length(encode(payload)), 8) ||
-  hex(encode(method)) || hex(encode(payload)));
 SELECT ducknng_start_server('notes', 'inproc://ducknng_notes', 1,
   134217728, 300000, 0::UBIGINT) AS started;
 SELECT ducknng_frame_type_name(f) AS type, ducknng_frame_payload_text(f) AS reply
 FROM (SELECT ducknng_request_raw('inproc://ducknng_notes',
-  json_call('add_note', '{"body":"hello from a JSON call"}'),
+  ducknng_encode_rpc_call('add_note', '{"body":"hello from a JSON call"}'),
   2000, 0::UBIGINT) AS f);
 SELECT author, body FROM notes;
 SELECT ducknng_stop_server('notes') AS stopped;
-
-
 +---------+
 | started |
 +---------+
@@ -2215,6 +2210,139 @@ SELECT ducknng_stop_server('http_sse');
 +---------------------------------+
 ```
 
+### Event routes (SSE from a subscription)
+
+A stream route writes the rows of one query and ends. An event route
+instead relays an NNG PUB/SUB subscription for as long as the client
+stays connected.
+`ducknng_add_event_route(service_name, path, handler_sql[, heartbeat_ms])`
+registers a `GET` route whose handler SQL runs once per request and
+names the subscription: a `url` to dial, and optionally a `topic`
+prefix, an `event` name, and a `tls_config_id`. Returning no row answers
+404. After the handler runs, the stream holds no DuckDB connection: a
+relay thread owns the SUB socket and writes each message as one
+Server-Sent Event, with a keep-alive comment after `heartbeat_ms` of
+silence.
+
+``` sql
+SELECT ducknng_start_server(
+  'http_events', 'http://127.0.0.1:18447/_ducknng', 1, 134217728, 300000, 0::UBIGINT
+) AS started;
+SET VARIABLE events_pub = (SELECT (ducknng_open_socket('pub')).socket_id);
+SELECT (ducknng_listen_socket(getvariable('events_pub'),
+  'inproc://ducknng_readme_events', 1048576, 0::UBIGINT)).ok AS listening;
+SELECT ducknng_add_event_route('http_events', '/events',
+  'SELECT ''inproc://ducknng_readme_events'' AS url,
+          ducknng_http_query_param(''topic'') AS topic,
+          ''price'' AS event
+   WHERE ducknng_http_query_param(''topic'') IS NOT NULL'
+) AS registered;
+SELECT path, is_event_route, event_heartbeat_ms
+FROM ducknng_list_http_routes()
+WHERE service_name = 'http_events';
++---------+
+| started |
++---------+
+| true    |
++---------+
+
++-----------+
+| listening |
++-----------+
+| true      |
++-----------+
++------------+
+| registered |
++------------+
+| true       |
++------------+
++---------+----------------+--------------------+
+|  path   | is_event_route | event_heartbeat_ms |
++---------+----------------+--------------------+
+| /events | true           | 15000              |
++---------+----------------+--------------------+
+```
+
+The stream opens with a `: ready` comment once the subscription is
+connected. Messages whose topic does not match never reach the client:
+
+``` sql
+SET VARIABLE events_open_aio = ducknng_ncurl_stream_open_aio(
+  'http://127.0.0.1:18447/events?topic=duck', 'GET', NULL, NULL, 2000, 0::UBIGINT
+);
+CREATE TEMP TABLE events_open AS
+SELECT * FROM ducknng_ncurl_stream_open_aio_collect(
+  list_value(getvariable('events_open_aio')::UBIGINT), 2000
+);
+SET VARIABLE events_stream = (SELECT stream_id FROM events_open WHERE ok);
+SET VARIABLE events_ready = ducknng_ncurl_stream_recv_aio(
+  getvariable('events_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS first_chunk
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('events_ready')::UBIGINT), 2000
+);
+SELECT (ducknng_send_socket_raw(getvariable('events_pub'), 'goose 3.10'::BLOB, 1000)).ok
+   AND (ducknng_send_socket_raw(getvariable('events_pub'), 'duck 4.25'::BLOB, 1000)).ok
+   AS published;
+SET VARIABLE events_next = ducknng_ncurl_stream_recv_aio(
+  getvariable('events_stream')::UBIGINT, 65536::UBIGINT, 2000
+);
+SELECT replace(decode(body), chr(10), '\\n') AS event
+FROM ducknng_ncurl_stream_recv_aio_collect(
+  list_value(getvariable('events_next')::UBIGINT), 2000
+);
+
+
+
+
++---------------+
+|  first_chunk  |
++---------------+
+| : ready\\n\\n |
++---------------+
++-----------+
+| published |
++-----------+
+| true      |
++-----------+
+
++--------------------------------------+
+|                event                 |
++--------------------------------------+
+| event: price\\ndata: duck 4.25\\n\\n |
++--------------------------------------+
+```
+
+Stopping the server closes every relay’s subscription, so open streams
+end rather than delaying the stop:
+
+``` sql
+SELECT ducknng_stop_server('http_events') AS stopped;
+SELECT ducknng_ncurl_stream_close(getvariable('events_stream')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_open_aio')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_ready')::UBIGINT)
+   AND ducknng_aio_drop(getvariable('events_next')::UBIGINT) AS closed;
+DROP TABLE events_open;
+SELECT (ducknng_close_socket(getvariable('events_pub'))).ok AS closed_pub;
++---------+
+| stopped |
++---------+
+| true    |
++---------+
++--------+
+| closed |
++--------+
+| true   |
++--------+
+
++------------+
+| closed_pub |
++------------+
+| true       |
++------------+
+```
+
 ## Client interop: nanonext REQ/REP
 
 This example shows a `nanonext` R client talking to a `ducknng` server
@@ -2539,7 +2667,7 @@ SELECT ducknng_stop_server('monitor_demo');
 +-------------------------------------------------------------------------------------------------------------------------+
 |                           ducknng_close_socket(CAST(getvariable('monitor_req') AS "UBIGINT"))                           |
 +-------------------------------------------------------------------------------------------------------------------------+
-| {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 5, 'payload': NULL, 'url': NULL} |
+| {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 6, 'payload': NULL, 'url': NULL} |
 +-------------------------------------------------------------------------------------------------------------------------+
 +-------------------------------------+
 | ducknng_stop_server('monitor_demo') |
