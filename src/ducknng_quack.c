@@ -2408,8 +2408,11 @@ int ducknng_result_next_chunks_to_quack_message(duckdb_result result,
 #endif
 
 /* Materialized-result variant of the above: encodes up to max_chunks starting at
- * *inout_chunk_index using the non-deprecated duckdb_result_get_chunk /
- * duckdb_result_chunk_count, advancing the index. The streaming variant relies on
+ * *inout_chunk_index using duckdb_result_get_chunk / duckdb_result_chunk_count,
+ * advancing the index. Both are deprecated since DuckDB v1.0.0 but remain in the
+ * stable C API v1.5.6 vtable; they are kept because the upload client rewinds the
+ * index to re-encode an oversized batch, and the forward-only duckdb_fetch_chunk
+ * cannot do that without buffering chunks. The streaming variant relies on
  * duckdb_stream_fetch_chunk, which yields nothing for a materialized duckdb_query
  * result; the upload client runs source_query with duckdb_query and iterates here.
  * Sets *has_chunk when a batch was produced; returns 0 with *has_chunk=0 once the

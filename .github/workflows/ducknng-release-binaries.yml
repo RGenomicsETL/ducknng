@@ -506,6 +506,8 @@ jobs:
 
           These binaries are unsigned and are not DuckDB community-signed extension builds.
           Native DuckDB hosts must be opened with allow_unsigned_extensions = true before LOAD.
+          Save the native asset as ducknng.duckdb_extension before LOAD: DuckDB derives the
+          entrypoint symbol from the file name, so the published name does not load.
           The wasm_eh asset is a duckdb-wasm side module for the wasm_eh runtime, not a native LOAD target.
           EOF
           echo "asset_base=${asset_base}" >> "$GITHUB_OUTPUT"
@@ -569,4 +571,4 @@ jobs:
             - `windows_amd64_mingw` built with Rtools/MinGW and smoke-loaded through R
             - `wasm_eh`
 
-            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, then `LOAD` the downloaded `.duckdb_extension` file. Linux and Windows artifacts are smoke-loaded in the workflow; macOS artifacts are target-architecture build artifacts. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.
+            These assets are unsigned and are not DuckDB community-signed extension builds. Open native DuckDB connections with `allow_unsigned_extensions = true`, save the downloaded `.duckdb_extension` file as `ducknng.duckdb_extension` (DuckDB derives the entrypoint symbol from the file name), then `LOAD` it. Linux and Windows artifacts are smoke-loaded in the workflow; macOS artifacts are target-architecture build artifacts. The `wasm_eh` asset is a duckdb-wasm side module for the `wasm_eh` runtime rather than a native shared library.

@@ -44,9 +44,9 @@ types have canonical wire projections rather than identical logical types:
   `DECIMAL(38,0)`. Values outside that decimal domain are not representable.
 - `UUID` and `ENUM` are emitted as UTF-8 and return as `VARCHAR`.
 - `TIME WITH TIME ZONE` returns as `TIME`; its offset is not preserved.
-- `TIMESTAMP WITH TIME ZONE` uses an Arrow timezone timestamp and returns as
-  DuckDB `TIMESTAMP WITH TIME ZONE`; the instant is preserved, not an original
-  named-zone identity.
+- Arrow timestamps with timezone metadata return as microsecond DuckDB
+  `TIMESTAMP WITH TIME ZONE`, without an original named-zone identity.
+  Nanosecond input truncates toward zero to microsecond precision.
 - Ordinary DuckDB strings and blobs are emitted as `utf8` and `binary` even
   though the receiver also accepts large and fixed-size variants.
 

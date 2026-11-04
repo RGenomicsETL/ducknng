@@ -63,8 +63,7 @@ PROP_COMMON_CFLAGS := \
 	-std=c99 -g -O1 -Wall -Wextra -Wno-unused-function -D_DEFAULT_SOURCE \
 	-DDUCKDB_EXTENSION_API_VERSION_MAJOR=1 \
 	-DDUCKDB_EXTENSION_API_VERSION_MINOR=5 \
-	-DDUCKDB_EXTENSION_API_VERSION_PATCH=2 \
-	-DDUCKDB_EXTENSION_API_VERSION_UNSTABLE=v1.5.2 \
+	-DDUCKDB_EXTENSION_API_VERSION_PATCH=6 \
 	-DTHEFT_USE_FLOATING_POINT=0 \
 	-DDUCKNNG_CORE_ONLY=1 \
 	-ffunction-sections -fdata-sections \
@@ -189,8 +188,7 @@ FUZZ_COMMON_CFLAGS := \
 	-std=c99 -g -O1 -Wall -Wextra -Wno-unused-function -D_DEFAULT_SOURCE \
 	-DDUCKDB_EXTENSION_API_VERSION_MAJOR=1 \
 	-DDUCKDB_EXTENSION_API_VERSION_MINOR=5 \
-	-DDUCKDB_EXTENSION_API_VERSION_PATCH=2 \
-	-DDUCKDB_EXTENSION_API_VERSION_UNSTABLE=v1.5.2 \
+	-DDUCKDB_EXTENSION_API_VERSION_PATCH=6 \
 	-DDUCKNNG_CORE_ONLY=1 \
 	-fvisibility=hidden -ffunction-sections -fdata-sections \
 	-Isrc/include \
@@ -291,31 +289,43 @@ rpc_upload_compare: release
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 EXTENSION_NAME=ducknng
-# USE_UNSTABLE_C_API=1 is required to access the DuckDB Arrow conversion API
-# (duckdb_to_arrow_schema, duckdb_data_chunk_to_arrow, duckdb_schema_from_arrow,
-# duckdb_data_chunk_from_arrow) and the error-data API (duckdb_create_error_data,
-# duckdb_error_data_message, duckdb_error_data_has_error). These functions live
-# behind DUCKDB_EXTENSION_API_VERSION_UNSTABLE in the extension vtable and are
-# used in src/ducknng_ipc_out.c to replace ~530 lines of hand-written per-type
-# Arrow encoding with correct, DuckDB-maintained conversions.
-USE_UNSTABLE_C_API=1
+# ducknng targets the stable C extension API v1.5.6. DuckDB v1.5.6 stabilized
+# every V1 group ducknng previously took from the unstable vtable (Arrow
+# conversion, error data, vectors, values, scalar bind/init state, file system,
+# logger, config options, prepared-statement columns). The metadata footer is
+# therefore C_STRUCT with C API version v1.5.6, and one binary loads on every
+# DuckDB runtime that serves C API v1.5.6, including the v2.0 LTS line. Do not
+# set USE_UNSTABLE_C_API: DuckDB v2.0 routes a C_STRUCT_UNSTABLE footer to the
+# separate C API v2 entrypoint (<name>_init_c_api_v2), which ducknng does not
+# export.
+USE_UNSTABLE_C_API=
 
-# Target DuckDB version — must match DUCKDB_HEADER_VERSION so the unstable
-# vtable layout seen at compile time matches the runtime vtable provided by the
-# host.  Both the Python sqllogictest runner and the R duckdb package in use
-# are v1.5.2, so all three version pins are kept in sync here.
-TARGET_DUCKDB_VERSION=v1.5.2
+# Stable C API version the extension targets. This is an API version, not a
+# runtime pin: the extension loads on any DuckDB that supports this version.
+TARGET_DUCKDB_VERSION=v1.5.6
 
-# DuckDB version used by the Python sqllogictest runner — must match TARGET_DUCKDB_VERSION
-DUCKDB_TEST_VERSION=1.5.2
+# DuckDB version used by the Python sqllogictest runner. Any runtime that
+# supports C API v1.5.6 is valid; the release line is tested on v2.0.0.
+DUCKDB_TEST_VERSION=2.0.0
 
-# Actual DuckDB release to fetch headers from for compilation
-DUCKDB_HEADER_VERSION=v1.5.2
+# Headers come from the v1.5.6 tag, not v2.0.0. DuckDB v2.0.0 appended two
+# slots (duckdb_create_timestamp_tz_ns, duckdb_get_timestamp_tz_ns) inside the
+# v1.5.6 band, so v2.0.0 headers yield a vtable two pointers longer than the one
+# a v1.5.6 runtime provides. The v1.5.6 layout is a prefix of both.
+DUCKDB_HEADER_VERSION=v1.5.6
 
 all: configure release
 
 include extension-ci-tools/makefiles/c_api_extensions/base.Makefile
 include extension-ci-tools/makefiles/c_api_extensions/c_cpp.Makefile
+
+# CMake keeps -D values in CMakeCache.txt, and extension-ci-tools passes
+# DUCKDB_EXTENSION_API_VERSION_UNSTABLE only for unstable builds. Clear it on
+# stable builds so a build tree last configured as unstable cannot compile the
+# unstable surface into a binary whose footer says C_STRUCT.
+ifneq ($(USE_UNSTABLE_C_API),1)
+CMAKE_EXTRA_BUILD_FLAGS += -UDUCKDB_EXTENSION_API_VERSION_UNSTABLE
+endif
 
 BASE_HEADER_URL=https://raw.githubusercontent.com/duckdb/duckdb/$(DUCKDB_HEADER_VERSION)/src/include
 DUCKDB_C_HEADER_URL=$(BASE_HEADER_URL)/duckdb.h

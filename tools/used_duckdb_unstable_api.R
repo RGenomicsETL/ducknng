@@ -3,10 +3,9 @@
 #
 # The DuckDB extension vtable (duckdb_extension.h) annotates each group of
 # function pointers with a "// Version <group>" comment.  Groups whose name
-# starts with "unstable" are not part of the v1.0 stable ABI contract and
-# require USE_UNSTABLE_C_API=1 at build time.  This script cross-references
-# those entries against the ducknng C sources so the current unstable surface
-# is always visible and auditable.
+# starts with "unstable" require USE_UNSTABLE_C_API=1 at build time. This script
+# cross-references those entries against the ducknng C sources. A stable build
+# must report no unstable dependencies.
 #
 # Usage (from the repo root):
 #   source("tools/used_duckdb_unstable_api.R")

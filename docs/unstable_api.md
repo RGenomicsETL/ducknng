@@ -2,7 +2,31 @@
 
 This document records findings from a systematic review of all `unstable_*` API groups in
 `duckdb_extension.h` and `duckdb.h`, with a recommendation per group on whether and how
-`ducknng` should use each one. Because these APIs pin binaries to one exact DuckDB version, the operational branch and binary-release workflow is documented in `docs/release_branches.md`.
+`ducknng` should use each one. The operational branch and binary-release workflow is documented in `docs/release_branches.md`.
+
+## Status since DuckDB v1.5.6 and v2.0
+
+DuckDB v1.5.6 moved every V1 group below that `ducknng` adopted into the stable C API, at
+version v1.5.6. The v1.5.6 and v2.0.0 headers no longer carry an unstable V1 surface: each
+function's `history:` block reads `unstable: v1.x` then `stable: v1.5.6`. `ducknng` therefore
+builds with `TARGET_DUCKDB_VERSION=v1.5.6` and without `USE_UNSTABLE_C_API`. The metadata footer is
+`C_STRUCT` with C API version v1.5.6, and the same binary loads on DuckDB v1.5.6 and v2.0.0. The
+group-by-group notes below are kept as the adoption record; read "unstable" in them as "stabilized
+in v1.5.6".
+
+Three facts constrain this choice. First, DuckDB v2.0 interprets a `C_STRUCT_UNSTABLE` footer as
+C API v2 and looks for `<name>_init_c_api_v2`, which `ducknng` does not export, so an unstable
+build cannot load on v2.0 at all. Second, the headers come from v1.5.6, not v2.0.0: v2.0.0 appends
+`duckdb_create_timestamp_tz_ns` and `duckdb_get_timestamp_tz_ns` inside the same v1.5.6 band, so a
+v2.0.0-header build copies a vtable two pointers longer than a v1.5.6 host provides. Third, C API
+v2 (`duckdb_extension_v2.h`, `duckdb_v2_*`) is a separate API family with owned instance and
+connection handles; DuckDB has not declared it stable, and moving to it would mean rewriting the
+DuckDB-facing layer.
+
+DuckDB v2.0 adds `TIMESTAMPTZ_NS` (type id 42). The v1.5.6 headers do not name it. Arrow emit
+handles it through `duckdb_data_chunk_to_arrow`, the Arrow receive path decodes
+`timestamp[ns, tz]` into microsecond `TIMESTAMP_TZ`, and the Quack-derived codec rejects it at
+bind time.
 
 ---
 
@@ -301,9 +325,16 @@ inside query sessions because that would change the internal session contract an
 reintroduce the performance path this boundary exists to avoid.
 
 **Recommendation: EXCEPTION ONLY.** Keep the pending-result streaming exception
-isolated in the compatibility boundary and avoid all other deprecated entrypoints.
-When DuckDB provides a replacement, update the boundary rather than adding branches
-at query, session, or codec call sites.
+isolated in the compatibility boundary. When DuckDB provides a replacement, update the
+boundary rather than adding branches at query, session, or codec call sites. DuckDB
+v1.5.6 and v2.0.0 still have no undeprecated pending-plus-streaming entrypoint; both
+deprecated functions remain in the stable v1.5.6 vtable.
+
+The second deprecated dependency is `duckdb_result_chunk_count` plus
+`duckdb_result_get_chunk` in `ducknng_result_materialized_chunks_to_quack_payload`
+(`src/ducknng_quack.c`). The upload client rewinds the chunk index to re-encode an
+oversized batch with fewer chunks. The forward-only `duckdb_fetch_chunk` cannot replay
+chunks without buffering them, so random access stays until that loop is redesigned.
 
 ---
 
@@ -476,7 +507,7 @@ end-to-end contract is covered by `test/sql/ducknng_parameter_binding.test`.
 | `unstable_new_catalog_interface` | NOT applicable | — |
 | `unstable_instance_cache` | NOT applicable | — |
 | `unstable_new_append_functions` | NOT applicable | — |
-| `unstable_deprecated` | EXCEPTION | Pending-result streaming is isolated in `ducknng_duckdb_streaming_compat.c`; avoid all other deprecated entrypoints |
+| `unstable_deprecated` | EXCEPTION | Pending-result streaming is isolated in `ducknng_duckdb_streaming_compat.c`; random-access materialized chunks serve the upload re-encode loop in `ducknng_quack.c`; avoid all other deprecated entrypoints |
 
 ---
 

@@ -82,11 +82,11 @@ SELECT (ducknng_dial_socket(
   1000, getvariable('tour_tls')::UBIGINT
 )).ok AS dialed;
 
-+-------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS "UBIGINT")) |
-+-------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                    |
-+-------------------------------------------------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tour', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('tour_tls') AS UBIGINT)) |
++-----------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                  |
++-----------------------------------------------------------------------------------------------------------------------+
 
 +------------------+
 | tls_listen_ready |
@@ -190,11 +190,11 @@ SET VARIABLE tour_http_reply = (
 SELECT ok, type_name, name,
        json_array_length(json_extract(payload_text::JSON, '$.methods')) AS method_count
 FROM ducknng_decode_frame(getvariable('tour_http_reply')::BLOB);
-+------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                             |
-+------------------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tour_http', 'http://127.0.0.1:18440/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++----------------------------------------------------------------------------------------------------------------+
+| true                                                                                                           |
++----------------------------------------------------------------------------------------------------------------+
 
 +------+-----------+----------+--------------+
 |  ok  | type_name |   name   | method_count |
@@ -415,11 +415,11 @@ SELECT ducknng_drop_tls_config(getvariable('tour_tls')::UBIGINT);
 +-----------------------------+
 | true                        |
 +-----------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tour_tls') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 ## Checkpointed workflow example
@@ -467,45 +467,33 @@ make docs
 
 `make configure` downloads the DuckDB C API headers at the version
 pinned in the Makefile (`DUCKDB_HEADER_VERSION`) and sets up CMake. The
-extension targets `TARGET_DUCKDB_VERSION`. It builds with
-`USE_UNSTABLE_C_API=1` to access DuckDB’s native Arrow conversion API
-(`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`) in the
-result-to-IPC emit path. The only deprecated-entrypoint exception is the
+extension targets the stable C extension API named by
+`TARGET_DUCKDB_VERSION` (v1.5.6), which includes DuckDB’s native Arrow
+conversion API (`duckdb_to_arrow_schema`, `duckdb_data_chunk_to_arrow`)
+used in the result-to-IPC emit path, so one binary loads on DuckDB
+v1.5.6 and v2.0. The deprecated-entrypoint exceptions are the
 pending-result streaming pair, isolated in
-`src/ducknng_duckdb_streaming_compat.c`, because DuckDB v1.5.2 does not
-yet expose an undeprecated C API for pending execution with incremental
-chunk delivery. Query sessions do not silently fall back to materialized
-results; when DuckDB provides a replacement streaming API, that
-compatibility boundary is the single place to change. `make rpc_bench`
-keeps the existing raw-RPC microbench path. `make rpc_bulk_compare` now
-renders `bench/rpc_bulk_compare.md`, a benchmark report that records
-machine details, compares ducknng RPC over `http`, `tcp`, `ipc`, and
-`ws` in both `arrow_ipc_stream` and `ducknng_quack_batch` modes,
-compares Quack over its public client/server path, and includes
-concurrent reader, writer, and mixed reader/writer RPC slices. The
-writer slice is a set-oriented remote SQL write dispatch benchmark, not
-a client-side bulk append protocol. The report generates a local TPC-H
-dataset if needed and installs `quack` from `core_nightly`. The unstable
-functions in use are tracked by `tools/used_duckdb_unstable_api.R`; the
-table below is generated fresh on every README render:
+`src/ducknng_duckdb_streaming_compat.c` because DuckDB v2.0 still has no
+undeprecated C API for pending execution with incremental chunk
+delivery, and the random-access materialized chunk pair used by the
+upload client’s re-encode loop. Query sessions do not silently fall back
+to materialized results; when DuckDB provides a replacement streaming
+API, that compatibility boundary is the single place to change.
+`make rpc_bench` keeps the existing raw-RPC microbench path.
+`make rpc_bulk_compare` now renders `bench/rpc_bulk_compare.md`, a
+benchmark report that records machine details, compares ducknng RPC over
+`http`, `tcp`, `ipc`, and `ws` in both `arrow_ipc_stream` and
+`ducknng_quack_batch` modes, compares Quack over its public
+client/server path, and includes concurrent reader, writer, and mixed
+reader/writer RPC slices. The writer slice is a set-oriented remote SQL
+write dispatch benchmark, not a client-side bulk append protocol. The
+report generates a local TPC-H dataset if needed and installs `quack`
+from `core_nightly`. `make docs` requires a DuckDB CLI and R `duckdb`
+package that support C API v1.5.6. It uses `duckdb` from `PATH`; set
+`DUCKDB_CLI` to select another CLI. `tools/used_duckdb_unstable_api.R`
+checks for unstable API dependencies on every README render:
 
-| ABI group                                      | Functions used                                                                                                                                                                                                                                                                                                                          | Count |
-|------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------:|
-| `unstable_deprecated`                          | `duckdb_pending_prepared_streaming`, `duckdb_result_chunk_count`, `duckdb_result_get_chunk`, `duckdb_stream_fetch_chunk`                                                                                                                                                                                                                |     4 |
-| `unstable_new_append_functions`                | `duckdb_appender_error_data`                                                                                                                                                                                                                                                                                                            |     1 |
-| `unstable_new_arrow_functions`                 | `duckdb_data_chunk_to_arrow`, `duckdb_to_arrow_schema`                                                                                                                                                                                                                                                                                  |     2 |
-| `unstable_new_config_options_functions`        | `duckdb_client_context_get_config_option`, `duckdb_config_option_set_default_scope`, `duckdb_config_option_set_default_value`, `duckdb_config_option_set_description`, `duckdb_config_option_set_name`, `duckdb_config_option_set_type`, `duckdb_create_config_option`, `duckdb_destroy_config_option`, `duckdb_register_config_option` |     9 |
-| `unstable_new_error_data_functions`            | `duckdb_destroy_error_data`, `duckdb_error_data_has_error`, `duckdb_error_data_message`                                                                                                                                                                                                                                                 |     3 |
-| `unstable_new_logger_functions`                | `duckdb_create_log_storage`, `duckdb_destroy_log_storage`, `duckdb_log_storage_set_extra_data`, `duckdb_log_storage_set_name`, `duckdb_log_storage_set_write_log_entry`, `duckdb_register_log_storage`                                                                                                                                  |     6 |
-| `unstable_new_open_connect_functions`          | `duckdb_client_context_get_connection_id`, `duckdb_connection_get_arrow_options`, `duckdb_connection_get_client_context`, `duckdb_destroy_arrow_options`, `duckdb_destroy_client_context`                                                                                                                                               |     5 |
-| `unstable_new_prepared_statement_functions`    | `duckdb_prepared_statement_column_count`, `duckdb_prepared_statement_column_logical_type`, `duckdb_prepared_statement_column_name`                                                                                                                                                                                                      |     3 |
-| `unstable_new_query_execution_functions`       | `duckdb_result_get_arrow_options`                                                                                                                                                                                                                                                                                                       |     1 |
-| `unstable_new_scalar_function_functions`       | `duckdb_scalar_function_bind_set_error`, `duckdb_scalar_function_get_bind_data`, `duckdb_scalar_function_get_client_context`, `duckdb_scalar_function_set_bind`, `duckdb_scalar_function_set_bind_data`, `duckdb_scalar_function_set_bind_data_copy`                                                                                    |     6 |
-| `unstable_new_scalar_function_state_functions` | `duckdb_scalar_function_set_init`                                                                                                                                                                                                                                                                                                       |     1 |
-| `unstable_new_string_functions`                | `duckdb_valid_utf8_check`                                                                                                                                                                                                                                                                                                               |     1 |
-| `unstable_new_table_function_functions`        | `duckdb_table_function_get_client_context`                                                                                                                                                                                                                                                                                              |     1 |
-| `unstable_new_value_functions`                 | `duckdb_create_map_value`, `duckdb_create_time_ns`, `duckdb_create_union_value`                                                                                                                                                                                                                                                         |     3 |
-| `unstable_new_vector_functions`                | `duckdb_create_selection_vector`, `duckdb_create_vector`, `duckdb_destroy_selection_vector`, `duckdb_destroy_vector`, `duckdb_selection_vector_get_data_ptr`, `duckdb_unsafe_vector_assign_string_element_len`, `duckdb_vector_copy_sel`                                                                                                |     7 |
+No unstable DuckDB C extension API entries were detected.
 
 `make test_release` runs the SQL test suite with DuckDB’s test runner.
 All tests live under `test/sql/` as `.test` files. The public function
@@ -853,11 +841,11 @@ FROM ducknng_decode_frame(
 SELECT ducknng_stop_server('tls_demo');
 SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 
-+---------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_demo', 'tls+tcp://127.0.0.1:45453', 1, 134217728, 300000, CAST(getvariable('tls_self') AS "UBIGINT")) |
-+---------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                            |
-+---------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tls_demo', 'tls+tcp://127.0.0.1:45453', 1, 134217728, 300000, CAST(getvariable('tls_self') AS UBIGINT)) |
++-------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                          |
++-------------------------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -868,11 +856,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_self')::UBIGINT);
 +---------------------------------+
 | true                            |
 +---------------------------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_self') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_self') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 File-backed material uses
@@ -908,11 +896,11 @@ FROM ducknng_decode_frame(
 SELECT ducknng_stop_server('tls_files_demo');
 SELECT ducknng_drop_tls_config(getvariable('tls_files')::UBIGINT);
 
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('tls_files_demo', 'tls+tcp://127.0.0.1:45454', 1, 134217728, 300000, CAST(getvariable('tls_files') AS "UBIGINT")) |
-+----------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                   |
-+----------------------------------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('tls_files_demo', 'tls+tcp://127.0.0.1:45454', 1, 134217728, 300000, CAST(getvariable('tls_files') AS UBIGINT)) |
++--------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                 |
++--------------------------------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -923,11 +911,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_files')::UBIGINT);
 +---------------------------------------+
 | true                                  |
 +---------------------------------------+
-+----------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_files') AS "UBIGINT")) |
-+----------------------------------------------------------------------+
-| true                                                                 |
-+----------------------------------------------------------------------+
++--------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_files') AS UBIGINT)) |
++--------------------------------------------------------------------+
+| true                                                               |
++--------------------------------------------------------------------+
 ```
 
 ### WebSocket (`ws://`, `wss://`)
@@ -950,11 +938,11 @@ FROM ducknng_decode_frame(
   )
 );
 SELECT ducknng_stop_server('ws_demo');
-+--------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+--------------------------------------------------------------------------------------------------------------+
-| true                                                                                                         |
-+--------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('ws_demo', 'ws://127.0.0.1:45455/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++------------------------------------------------------------------------------------------------------------+
+| true                                                                                                       |
++------------------------------------------------------------------------------------------------------------+
 +------+-----------+----------+
 |  ok  | type_name |   name   |
 +------+-----------+----------+
@@ -1653,11 +1641,11 @@ SELECT position('"state":"closed"' IN
 SELECT ducknng_stop_server('session_raw');
 SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
 
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
-+---------------------------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                                                  |
-+---------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('session_raw', 'tls+tcp://127.0.0.1:0', 1, 134217728, 300000, CAST(getvariable('session_raw_tls') AS UBIGINT)) |
++-------------------------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                                                |
++-------------------------------------------------------------------------------------------------------------------------------------+
 
 
 
@@ -1686,11 +1674,11 @@ SELECT ducknng_drop_tls_config(getvariable('session_raw_tls')::UBIGINT);
 +------------------------------------+
 | true                               |
 +------------------------------------+
-+----------------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS "UBIGINT")) |
-+----------------------------------------------------------------------------+
-| true                                                                       |
-+----------------------------------------------------------------------------+
++--------------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('session_raw_tls') AS UBIGINT)) |
++--------------------------------------------------------------------------+
+| true                                                                     |
++--------------------------------------------------------------------------+
 ```
 
 ### Async (open_aio / fetch_aio / close_aio / cancel_aio)
@@ -1843,11 +1831,11 @@ SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
 +------+--------+----------+------------+
 | true | 200    | 01020304 | true       |
 +------+--------+----------+------------+
-+---------------------------------------------------------------------+
-| ducknng_drop_tls_config(CAST(getvariable('tls_http') AS "UBIGINT")) |
-+---------------------------------------------------------------------+
-| true                                                                |
-+---------------------------------------------------------------------+
++-------------------------------------------------------------------+
+| ducknng_drop_tls_config(CAST(getvariable('tls_http') AS UBIGINT)) |
++-------------------------------------------------------------------+
+| true                                                              |
++-------------------------------------------------------------------+
 ```
 
 `ducknng_ncurl_aio(...)` is the unary async form and still completes
@@ -1887,11 +1875,11 @@ SET VARIABLE http_frame = (
 );
 SELECT ok, type_name, name FROM ducknng_decode_frame(getvariable('http_frame'));
 SELECT ducknng_stop_server('http_rpc');
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_rpc', 'http://127.0.0.1:18444/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++---------------------------------------------------------------------------------------------------------------+
+| true                                                                                                          |
++---------------------------------------------------------------------------------------------------------------+
 +-------------+--------------+
 | server_name | method_count |
 +-------------+--------------+
@@ -1944,11 +1932,11 @@ SELECT ducknng_register_http_route_pattern(
              ducknng_http_path_param(''item_id'')
       FROM ducknng_http_request()))'
 );
-+--------------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+--------------------------------------------------------------------------------------------------------------------+
-| true                                                                                                               |
-+--------------------------------------------------------------------------------------------------------------------+
++------------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_routes', 'http://127.0.0.1:18445/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++------------------------------------------------------------------------------------------------------------------+
+| true                                                                                                             |
++------------------------------------------------------------------------------------------------------------------+
 +---------------------------------------------------------------------------------------------------------------+
 | ducknng_register_http_route('http_routes', 'GET', '/healthz', 'SELECT * FROM ducknng_http_text(200, ''ok'')') |
 +---------------------------------------------------------------------------------------------------------------+
@@ -2082,11 +2070,11 @@ SELECT ducknng_add_stream_route(
 SELECT is_stream, stream_content_type
 FROM ducknng_list_http_routes()
 WHERE service_name = 'http_sse' AND path = '/events';
-+-----------------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS "UBIGINT")) |
-+-----------------------------------------------------------------------------------------------------------------+
-| true                                                                                                            |
-+-----------------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------+
+| ducknng_start_server('http_sse', 'http://127.0.0.1:18446/_ducknng', 1, 134217728, 300000, CAST(0 AS UBIGINT)) |
++---------------------------------------------------------------------------------------------------------------+
+| true                                                                                                          |
++---------------------------------------------------------------------------------------------------------------+
 +--------------------------------------+
 | ducknng_add_stream_route('http_sse', 'GET', '/events', 'SELECT ducknng_format_sse(''row '' || i::VARCHAR) AS chunk
    FROM generate_series(1, 3) t(i)') |
@@ -2192,11 +2180,11 @@ SELECT ducknng_stop_server('http_sse');
 +------+---------------+
 | NULL | true          |
 +------+---------------+
-+--------------------------------------------------------------------------+
-| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS "UBIGINT")) |
-+--------------------------------------------------------------------------+
-| true                                                                     |
-+--------------------------------------------------------------------------+
++------------------------------------------------------------------------+
+| ducknng_ncurl_stream_close(CAST(getvariable('sse_stream') AS UBIGINT)) |
++------------------------------------------------------------------------+
+| true                                                                   |
++------------------------------------------------------------------------+
 +---------+
 | dropped |
 +---------+
@@ -2405,14 +2393,16 @@ ipc_path <- "/tmp/ducknng_readme_exec.ipc"
 ipc_url  <- paste0("ipc://", ipc_path)
 unlink(ipc_path)
 
-db_con <- DBI::dbConnect(suppressMessages(duckdb::duckdb(config = list(allow_unsigned_extensions = "true", allow_extensions_metadata_mismatch = "true"))))
+db_con <- DBI::dbConnect(suppressMessages(duckdb::duckdb(
+  config = list(allow_unsigned_extensions = "true")
+)))
 DBI::dbExecute(db_con, sprintf("LOAD '%s'", ext_path))
 [1] 0
 DBI::dbGetQuery(db_con, sprintf(
   "SELECT ducknng_start_server('sql_exec', '%s', 1, 134217728, 300000, 0::UBIGINT)", ipc_url
 ))
-  ducknng_start_server('sql_exec', 'ipc:///tmp/ducknng_readme_exec.ipc', 1, 134217728, 300000, CAST(0 AS "UBIGINT"))
-1                                                                                                               TRUE
+  ducknng_start_server('sql_exec', 'ipc:///tmp/ducknng_readme_exec.ipc', 1, 134217728, 300000, CAST(0 AS UBIGINT))
+1                                                                                                             TRUE
 DBI::dbGetQuery(db_con, "SELECT ducknng_register_exec_method()")
   ducknng_register_exec_method()
 1                           TRUE
@@ -2570,9 +2560,10 @@ entries captured by the extension’s in-memory ring buffer (capacity
 512). The ring is populated via the DuckDB logger API. Log capture is
 not active by default; call `ducknng_enable_log_capture()` once to
 register the ring with DuckDB’s logger before querying the ring. Note:
-`ducknng_enable_log_capture()` is unsafe to call under DuckDB v1.5.2 due
-to a crash in the logger registration API; the example below is shown
-but not executed.
+`ducknng_enable_log_capture()` is unsafe to call: it registers the ring
+against the database handle DuckDB lends only for the duration of
+extension load, and it crashes on DuckDB v1.5.2, v1.5.6, and v2.0.0. The
+example below is shown but not executed.
 
 ``` sql
 SELECT ducknng_enable_log_capture();
@@ -2617,11 +2608,11 @@ counters.
 ``` sql
 SELECT ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, 0::UBIGINT);
 SET VARIABLE monitor_url = (SELECT listen FROM ducknng_list_servers() WHERE name = 'monitor_demo');
-+------------------------------------------------------------------------------------------------------+
-| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS "UBIGINT")) |
-+------------------------------------------------------------------------------------------------------+
-| true                                                                                                 |
-+------------------------------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------+
+| ducknng_start_server('monitor_demo', 'tcp://127.0.0.1:0', 1, 134217728, 30000, CAST(0 AS UBIGINT)) |
++----------------------------------------------------------------------------------------------------+
+| true                                                                                               |
++----------------------------------------------------------------------------------------------------+
 ```
 
 ``` sql
@@ -2665,7 +2656,7 @@ FROM ducknng_list_pipes('monitor_demo');
 SELECT ducknng_close_socket(getvariable('monitor_req')::UBIGINT);
 SELECT ducknng_stop_server('monitor_demo');
 +-------------------------------------------------------------------------------------------------------------------------+
-|                           ducknng_close_socket(CAST(getvariable('monitor_req') AS "UBIGINT"))                           |
+|                            ducknng_close_socket(CAST(getvariable('monitor_req') AS UBIGINT))                            |
 +-------------------------------------------------------------------------------------------------------------------------+
 | {'ok': true, 'error': NULL, 'nng_error': NULL, 'nng_error_message': NULL, 'socket_id': 6, 'payload': NULL, 'url': NULL} |
 +-------------------------------------------------------------------------------------------------------------------------+
@@ -2771,8 +2762,8 @@ Version 0.1.2.9000. Every DuckDB chunk shown as runnable in this README
 is implemented, tested, and runs at render time. Browser/WebAssembly and
 release-matrix checks require external runtimes, so their exact commands
 are shown above and covered by the Playwright and GitHub Actions
-harnesses. The extension builds against DuckDB v1.5.2 using the C API
-only.
+harnesses. The extension builds against the stable DuckDB C extension
+API v1.5.6 only and loads on DuckDB v1.5.6 and v2.0.
 
 ## References
 

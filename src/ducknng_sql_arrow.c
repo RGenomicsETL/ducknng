@@ -927,11 +927,20 @@ static int ducknng_sql_arrow_assign_column_at(duckdb_vector vec,
         int64_t mul = schema_view.time_unit == NANOARROW_TIME_UNIT_SECOND ? 1000000LL :
             (schema_view.time_unit == NANOARROW_TIME_UNIT_MILLI ? 1000LL : 1LL);
         if (schema_view.timezone && schema_view.timezone[0]) {
+            /* Zoned timestamps of every unit land in microsecond TIMESTAMP_TZ.
+             * Nanoseconds truncate toward zero, matching DuckDB's own
+             * TIMESTAMPTZ_NS -> TIMESTAMPTZ cast and the scalar path above. */
             duckdb_timestamp *out = (duckdb_timestamp *)duckdb_vector_get_data(vec);
+            int nano = schema_view.time_unit == NANOARROW_TIME_UNIT_NANO;
             for (i = 0; i < count; i++) {
                 idx_t dst = dst_offset + i;
-                if (ArrowArrayViewIsNull(col_view, src_offset + i)) ducknng_sql_arrow_set_null(vec, dst);
-                else out[dst].micros = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i) * mul;
+                int64_t raw;
+                if (ArrowArrayViewIsNull(col_view, src_offset + i)) {
+                    ducknng_sql_arrow_set_null(vec, dst);
+                    continue;
+                }
+                raw = (int64_t)ArrowArrayViewGetIntUnsafe(col_view, src_offset + i);
+                out[dst].micros = nano ? raw / 1000LL : raw * mul;
             }
             return 0;
         }
