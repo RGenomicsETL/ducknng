@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>Supported types · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -686,10 +686,15 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
-<div id="TOC">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
+<nav id="TOC">
 <ul>
 <li><a href="#chp:ducknng-type-contract">ducknng type contract</a>
 <ul>
@@ -700,7 +705,7 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
+</nav>
 <h1 id="chp:ducknng-type-contract">ducknng type contract</h1>
 <p><code>ducknng</code> moves tables through two negotiated row codecs. Arrow IPC is the
 portable default. <code>ducknng_quack_batch</code> preserves DuckDB chunks for DuckDB-aware
@@ -799,9 +804,9 @@ types have canonical wire projections rather than identical logical types:</p>
 <code>DECIMAL(38,0)</code>. Values outside that decimal domain are not representable.</li>
 <li><code>UUID</code> and <code>ENUM</code> are emitted as UTF-8 and return as <code>VARCHAR</code>.</li>
 <li><code>TIME WITH TIME ZONE</code> returns as <code>TIME</code>; its offset is not preserved.</li>
-<li><code>TIMESTAMP WITH TIME ZONE</code> uses an Arrow timezone timestamp and returns as
-DuckDB <code>TIMESTAMP WITH TIME ZONE</code>; the instant is preserved, not an original
-named-zone identity.</li>
+<li>Arrow timestamps with timezone metadata return as microsecond DuckDB
+<code>TIMESTAMP WITH TIME ZONE</code>, without an original named-zone identity.
+Nanosecond input truncates toward zero to microsecond precision.</li>
 <li>Ordinary DuckDB strings and blobs are emitted as <code>utf8</code> and <code>binary</code> even
 though the receiver also accepts large and fixed-size variants.</li>
 </ul>
@@ -849,7 +854,9 @@ materialization.</p>
 <p>Dictionary-preserving round trips, Arrow extension-type semantics, and run-end
 encoded arrays are not supported. <code>ENUM</code> is deliberately normalized to UTF-8;
 arbitrary extension metadata is not treated as an executable type registry.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>

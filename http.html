@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>HTTP carrier · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -669,7 +669,7 @@ tbody td:first-child code {
   }
 }
 </style>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.73/css/prism-xcode.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.146/css/prism-xcode.min.css">
 </head>
 <body>
 <nav class="site-nav" aria-label="Project">
@@ -687,10 +687,15 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
-<div id="TOC">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
+<nav id="TOC">
 <ul>
 <li><a href="#chp:ducknng-http-and-https-transport-adapter-contract">ducknng HTTP and HTTPS transport adapter contract</a>
 <ul>
@@ -705,7 +710,7 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
+</nav>
 <h1 id="chp:ducknng-http-and-https-transport-adapter-contract">ducknng HTTP and HTTPS transport adapter contract</h1>
 <p>This document defines the first concrete HTTP and HTTPS transport design for <code>ducknng</code>. It is binding for the HTTP/HTTPS carrier exposed through <code>ducknng_start_server(...)</code>, for the low-level <code>ducknng_ncurl(...)</code> helpers, and for the URL-routed synchronous request, RPC, and session helpers that now use the same carrier automatically when the URL scheme is <code>http</code> or <code>https</code>. The purpose of the document is to keep that surface aligned with the manifest, session, and Arrow contracts instead of letting the project grow a second RPC API that drifts away from the existing method model.</p>
 <p>The governing rule is the same one stated in <code>docs/protocol.md</code> and <code>docs/transports.md</code>: HTTP is a transport adapter, not a second protocol. It changes how the bytes travel. It does not change the registry-backed method set, the query-session lifecycle, or the Arrow-versus-JSON payload contract.</p>
@@ -870,7 +875,9 @@ ducknng_http_binary(status, body)
 <p>Human-friendly convenience routes such as <code>GET /manifest</code> are deferred. They may later be added as transport conveniences that internally map onto the same registry-backed methods, but they are not part of the first binding.</p>
 <p>Additional HTTP-carrier WebSocket application APIs, application-level SSE/NDJSON parsers, browser asset serving, and mixed HTTP-plus-static routing are deferred. They belong to broader web-toolkit work and should not be smuggled into the first RPC carrier implementation. This does not conflict with the separate NNG <code>ws://</code> and <code>wss://</code> transport schemes, which remain part of the NNG adapter rather than this HTTP carrier.</p>
 <p>The low-level route layer is now part of the public SQL surface, including additive exact, prefix, and template matching plus small request-accessor and response-builder helpers. Event routes relay one NNG publish/subscribe subscription as Server-Sent Events and are specified in <code>docs/http_server_framework.md</code>. Richer web-toolkit features are still deferred. Static asset serving, route-local authentication policy, other HTTP-carrier WebSocket/SSE/NDJSON work, worker lifecycle management, and application gateway products must remain additive layers beside the frame carrier. They must not mint method copies such as <code>http_exec</code>, <code>http_query_open</code>, or <code>http_fetch</code>, and they must not change the frame endpoint’s <code>POST application/vnd.ducknng.frame</code> contract.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>Protocol specification · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -686,10 +686,15 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
-<div id="TOC">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
+<nav id="TOC">
 <ul>
 <li><a href="#chp:ducknng-protocol-specification">ducknng protocol specification</a>
 <ul>
@@ -713,7 +718,7 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
+</nav>
 <h1 id="chp:ducknng-protocol-specification">ducknng protocol specification</h1>
 <p>This document is binding for <code>ducknng</code> protocol work. New transport or data-plane behavior should either conform to this specification or update it deliberately before implementation proceeds. The purpose of the specification is to keep <code>ducknng</code> framed as a DuckDB-backed SQL and RPC server whose transport is NNG, whose tabular payload codec is Arrow IPC through nanoarrow C, and whose public capability surface is declared through a predefined manifest.</p>
 <p>The protocol is intentionally layered. NNG defines the current socket pattern and delivery model, the <code>ducknng</code> envelope defines how requests and replies are named and correlated semantically, the payload format defines whether a message body contains Arrow IPC or JSON, and the method contract defines what a named operation means. Keeping those layers separate is required because it lets the project evolve without sliding back into ad hoc operation-specific binary blobs. The transport-facing interface is explicitly modeled over <code>nanonext</code> as the ergonomic reference point for NNG req/rep usage, while the thin-envelope plus Arrow-IPC-payload RPC direction is explicitly informed by projects such as <code>mangoro</code>. In particular, transport selection should be autodetected from the URL scheme rather than expressed through transport-specific function proliferation: the same operation-oriented API already accepts <code>inproc://</code>, <code>ipc://</code>, <code>tcp://</code>, <code>tls+tcp://</code>, <code>ws://</code>, and <code>wss://</code> on the NNG side, with the HTTP family documented separately in <code>docs/transports.md</code>.</p>
@@ -778,7 +783,9 @@ tbody td:first-child code {
 <p><strong>Dynamic-schema table helpers</strong> throw at bind time when required configuration is absent, because DuckDB requires the result schema to be fixed at bind time and a NULL schema cannot be returned.</p>
 <p><strong>Scalar frame accessors</strong> (<code>ducknng_frame_error_text</code>, <code>ducknng_frame_name</code>, <code>ducknng_frame_type</code>, and similar) return NULL for absent or invalid frames rather than throwing. This is the correct SQL behavior for projection and filtering use cases.</p>
 <p><strong>Frame envelope errors</strong> carry two distinct values. The high byte of the control word carries a ducknng protocol status such as <code>INVALID</code>, <code>NOT_FOUND</code>, or <code>SQL_ERROR</code>; the counted <code>error</code> field carries human-readable UTF-8 detail. This protocol status is not an NNG transport error. Wire-level frames do not carry <code>nng_error</code> as an envelope field; the numeric NNG transport code lives in the collect row that delivered the frame, not inside the frame payload itself.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>

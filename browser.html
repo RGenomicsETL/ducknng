@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>Browser support · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -686,10 +686,15 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
-<div id="TOC">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
+<nav id="TOC">
 <ul>
 <li><a href="#chp:browser-support-contract">Browser support contract</a>
 <ul>
@@ -702,7 +707,7 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
+</nav>
 <h1 id="chp:browser-support-contract">Browser support contract</h1>
 <p><code>ducknng</code> supports browser clients through the <code>duckdb-wasm</code> <code>wasm_eh</code> side-module target. Support is capability-driven: the active network backend reports one compiled descriptor through <code>ducknng_transport_capabilities()</code> and <code>ducknng_list_transport_capabilities()</code>, and the Chromium conformance runner executes every capability reported as <code>supported</code>. A capability reported as <code>unsupported</code> is skipped rather than simulated. <code>experimental</code> capabilities run as non-gating diagnostics.</p>
 <p>The release-supported browser client scope is extension loading, scalar SQL, whole-response HTTP and HTTPS, real asynchronous unary Fetch with timeout and cancellation, body-codec table helpers, framed RPC and query sessions over HTTP, and asynchronous ducknng-frame-over-WebSocket RPC over <code>ws://</code> and <code>wss://</code>. Browser HTTPS and WSS use the browser trust store. Supplying a ducknng TLS handle is rejected rather than silently ignored.</p>
@@ -737,7 +742,9 @@ tbody td:first-child code {
 <h2 id="sec:hosting-and-artifacts">Hosting and artifacts</h2>
 <p>The local harness serves COOP/COEP and no-cache headers. GitHub Pages uses a same-origin mirror of the CI-built side module because direct release assets may not provide the CORS/CORP response headers required by a cross-origin-isolated threaded runtime. The rolling Pages artifact is demo provenance, not a stable binary release channel.</p>
 <p>The detailed build commands, target matrix, and evidence log are in <code>docs/wasm.md</code>. <code>docs/wasm_browser_transport_checklist.md</code> records the completed browser-client scope and explicit non-goals. <code>test/browser/README.md</code> documents the executable probes.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>

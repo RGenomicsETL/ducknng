@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>Transports · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -686,9 +686,14 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
 <h1 id="chp:ducknng-transport-adapters-and-carrier-boundaries">ducknng transport adapters and carrier boundaries</h1>
 <p>This document defines the transport-family boundary for <code>ducknng</code>. It is intentionally narrower than <code>docs/protocol.md</code>: the protocol document defines the manifest methods, session lifecycle, and payload rules, while this document defines how those same contracts are carried over concrete transport adapters.</p>
 <p>The core rule is simple. Transport adapters may change how bytes move, but they do not change what the bytes mean. The <code>ducknng</code> envelope remains the method layer, Arrow IPC remains the tabular payload layer, JSON remains the control-metadata layer, and the manifest remains the source of truth for public RPC methods. A new transport adapter is therefore not a license to mint parallel method names or alternate session semantics.</p>
@@ -750,7 +755,9 @@ tbody td:first-child code {
 <p>The same rule holds for Arrow record batches. The HTTP adapter does not reinterpret row batches as ad hoc JSON arrays or text serialization just because the outer transport is HTTP. When a method returns Arrow IPC or <code>ducknng_quack_batch</code> over NNG, it returns the same row payload over HTTP. When a method returns JSON control metadata over NNG, it returns JSON control metadata over HTTP. Content headers may help a client understand the body, but they do not replace the method contract.</p>
 <p>The intended code boundary is therefore three-way. Transport-family parsing belongs in transport-neutral code such as <code>ducknng_transport.c</code>. NNG-specific socket, listener, TLS, peer-identity extraction from NNG pipes, and aio details belong in <code>ducknng_nng_compat.c</code>. HTTP-specific client/server details and peer-identity extraction from HTTP connections belong in <code>ducknng_http_compat.c</code>. The SQL layer should choose a transport family once from the URL scheme and then hand off to the appropriate adapter instead of scattering scheme-specific branches through session, wire, or Arrow code.</p>
 <p>Because this transport-family split is explicit, <code>http://</code> and <code>https://</code> URLs are rejected by the generic NNG socket layer rather than being silently passed into NNG operations. At the same time, the synchronous request, RPC, and session helpers now route over those schemes through the HTTP adapter, while the unary and incremental ncurl families remain the low-level HTTP/HTTPS transport primitives. <code>ws://</code> and <code>wss://</code> stay on the NNG side of the boundary on native builds: they are NNG transports (SP-over-WebSocket), not aliases for the HTTP carrier. The one exception is the browser (wasm) backend, which has no NNG socket at all: there <code>ws://</code>/<code>wss://</code> route through an async <em>ducknng-frame-over-WebSocket</em> carrier (issue #11) that talks to the server’s raw-WebSocket frame endpoint beside the HTTP mount, and the synchronous helpers reject them (no synchronous WebSocket receive) in favor of the AIO helpers. This routing is data-driven via <code>ducknng_net_backend_carrier_scheme()</code>, which reports <code>ws</code>/<code>wss</code> as carrier schemes only on a backend with no NNG transport, so the native SP behavior is unchanged.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>

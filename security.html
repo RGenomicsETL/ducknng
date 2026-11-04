@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-<meta name="generator" content="litedown 0.11">
+<meta name="generator" content="litedown 1.0">
 <title>Security model · ducknng</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/default.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/css/article.min.css">
@@ -686,10 +686,15 @@ tbody td:first-child code {
     <a href="https://github.com/RGenomicsETL/ducknng">GitHub <span aria-hidden="true">↗</span></a>
   </p>
 </nav>
-<div class="frontmatter">
-</div>
-<div class="body">
-<div id="TOC">
+<header class="frontmatter">
+
+
+
+
+</header>
+<main>
+<article class="">
+<nav id="TOC">
 <ul>
 <li><a href="#chp:ducknng-security-model-and-threat-surface">ducknng security model and threat surface</a>
 <ul>
@@ -707,7 +712,7 @@ tbody td:first-child code {
 </ul>
 </li>
 </ul>
-</div>
+</nav>
 <h1 id="chp:ducknng-security-model-and-threat-surface">ducknng security model and threat surface</h1>
 <p>This document is binding for security-relevant decisions in <code>ducknng</code>. It describes the trust model the framework assumes, the threats that follow from framing <code>ducknng</code> as an RPC server rather than a single-client helper, and the invariants the transport, envelope, registry, manifest, and session layers must uphold. Security is treated here the same way protocol, manifest, and type policy are treated elsewhere in <code>docs/</code>: as part of the public contract that implementation must conform to.</p>
 <h2 id="sec:trust-model">Trust model</h2>
@@ -769,7 +774,9 @@ tbody td:first-child code {
 <p>Idle cleanup is a resource bound. The idle timeout belongs to the session, counts only owner activity, and fires without requiring the owner to initiate it. Session close on idle timeout is indistinguishable from explicit close from the client’s perspective, so that an owner cannot use idle-close as a signal channel and a non-owner cannot use idle-close against someone else’s session.</p>
 <h2 id="sec:implementation-checklist">Implementation checklist</h2>
 <p>A change to <code>ducknng</code> is considered security-reviewed only when the conditions relevant to that change hold. Already-enforced baseline checks include envelope version validation, bounded wire lengths, descriptor-based request flag validation, method lookup through the registry, per-method request/reply size validation, TLS configuration rejection on incompatible URL schemes, descriptor-level method auth including optional manifest protection, session-aware unregistration refusal while sessions are open, session owner-token checks, optional mTLS owner-identity checks, idle session pruning, and safe internal SQL construction for extension-generated queries. Remaining hardening work includes explicit owner/pipe-level resource quotas, optional convenience helpers for documented deployment profiles, and any future richer pre-authentication discovery policy. PUB/SUB, when introduced, must carry only fanout-safe payloads. This document is updated when any of the above changes, because the checklist is the contract.</p>
-</div>
+
+</article>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.69/js/toc-highlight.min.js" defer></script>
 </body>
 </html>
