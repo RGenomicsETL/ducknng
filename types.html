@@ -698,6 +698,7 @@ tbody td:first-child code {
 <ul>
 <li><a href="#chp:ducknng-type-contract">ducknng type contract</a>
 <ul>
+<li><a href="#sec:declared-output-schemas">Declared output schemas</a></li>
 <li><a href="#sec:arrow-ipc">Arrow IPC</a></li>
 <li><a href="#sec:quack-derived-batches">Quack-derived batches</a></li>
 <li><a href="#sec:sql-parameter-tuples">SQL parameter tuples</a></li>
@@ -714,6 +715,19 @@ peers. The codec is independent of the NNG, HTTP, or WebSocket carrier.</p>
 <code>test/sql/ducknng_type_roundtrip.test</code>. It sends values through a running server
 and compares the decoded values on the client over both codecs. Parameter
 binding is covered separately by <code>test/sql/ducknng_parameter_binding.test</code>.</p>
+<h2 id="sec:declared-output-schemas">Declared output schemas</h2>
+<p>Remote query and fetch tables require a named <code>schema</code>. Supply a nonempty typed
+STRUCT, such as <code>NULL::STRUCT(id BIGINT, label VARCHAR)</code>, or a schema-only Arrow
+IPC BLOB. Obtain discovery descriptors in a separate executed statement with
+<code>ducknng_prepare_query</code> or its parameterized variant.</p>
+<p>The declaration must match received column names, order, counts, and complete
+logical types. Nested names, array sizes, decimal precision and scale, and enum
+labels participate in comparison. The declaration does not request casts.
+Validation occurs before output vector writes, including for empty results.</p>
+<p>Declare the codec’s received types, not necessarily the source DuckDB types.
+For example, Arrow output from a UUID column requires VARCHAR. A schema-only
+Arrow descriptor represents Arrow’s portable projections; use a typed STRUCT
+for Quack-specific types that Arrow cannot describe faithfully.</p>
 <h2 id="sec:arrow-ipc">Arrow IPC</h2>
 <p>The receive path accepts these Arrow storage types and constructs the listed
 DuckDB logical types:</p>

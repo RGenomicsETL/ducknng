@@ -749,14 +749,14 @@ tbody td:first-child code {
 <h3 id="sec:framed-rpc">Framed RPC</h3>
 <h4 id="sec:ducknng-get-rpc-manifest-url-tls-config-id"><code>ducknng_get_rpc_manifest(url, tls_config_id)</code></h4>
 <p>Request the RPC method manifest from a remote server.</p>
-<h4 id="sec:ducknng-query-rpc-url-sql-tls-config-id"><code>ducknng_query_rpc(url, sql, tls_config_id)</code></h4>
-<p>Run read-only or idempotent remote SQL through a query session and return its rows.</p>
-<h4 id="sec:ducknng-query-rpc-params-url-sql-params-tls-config-id"><code>ducknng_query_rpc_params(url, sql, params, tls_config_id)</code></h4>
-<p>Run one parameterized read-only or idempotent remote statement and return its rows.</p>
+<h4 id="sec:ducknng-query-rpc-url-sql-tls-config-id-schema-declared-schema"><code>ducknng_query_rpc(url, sql, tls_config_id, schema := declared_schema)</code></h4>
+<p>Execute a remote query with a declared output schema. Bind sends no request; each execution owns a fresh session.</p>
+<h4 id="sec:ducknng-query-rpc-params-url-sql-params-tls-config-id-schema-declared-schema"><code>ducknng_query_rpc_params(url, sql, params, tls_config_id, schema := declared_schema)</code></h4>
+<p>Execute one parameterized remote statement with a declared output schema and execution-owned session.</p>
 <h4 id="sec:ducknng-prepare-query-url-sql-tls-config-id"><code>ducknng_prepare_query(url, sql, tls_config_id)</code></h4>
-<p>Prepare one remote statement without executing it and expose its result schema.</p>
+<p>Return one schema_ipc BLOB during execution. Remote SQL binding can invoke functions with side effects.</p>
 <h4 id="sec:ducknng-prepare-query-params-url-sql-params-tls-config-id"><code>ducknng_prepare_query_params(url, sql, params, tls_config_id)</code></h4>
-<p>Bind a typed parameter tuple and expose the prepared remote result schema without execution.</p>
+<p>Discover a parameterized remote result schema during execution and return one schema_ipc BLOB. Remote SQL binding can have side effects.</p>
 <h4 id="sec:ducknng-upload-table-url-source-query-target-table-tls-config-id"><code>ducknng_upload_table(url, source_query, target_table[, tls_config_id])</code></h4>
 <p>Run source_query locally and stream its rows into a remote table over the quack upload lane (upload_open/append/commit, abort on error). Returns rows_uploaded and bytes_uploaded.</p>
 <h4 id="sec:ducknng-run-rpc-url-sql-tls-config-id"><code>ducknng_run_rpc(url, sql, tls_config_id)</code></h4>
@@ -765,8 +765,8 @@ tbody td:first-child code {
 <p>Execute one parameterized statement through exec and return rows_changed plus metadata.</p>
 <h4 id="sec:ducknng-open-query-url-sql-batch-rows-batch-bytes-tls-config-id"><code>ducknng_open_query(url, sql, batch_rows, batch_bytes, tls_config_id)</code></h4>
 <p>Open a remote query session. Returns session_id + session_token needed for fetch/close/cancel.</p>
-<h4 id="sec:ducknng-fetch-query-table-url-session-id-session-token-batch-rows-batch-bytes-tls-config-id"><code>ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)</code></h4>
-<p>Fetch the next batch of rows from an open query session. Returns decoded Arrow IPC rows.</p>
+<h4 id="sec:ducknng-fetch-query-table-url-session-id-session-token-batch-rows-batch-bytes-tls-config-id-schema-declared-schema"><code>ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id, schema := declared_schema)</code></h4>
+<p>Fetch one Arrow batch per execution with a declared output schema. The caller retains ownership of the session.</p>
 <h4 id="sec:ducknng-close-query-url-session-id-session-token-tls-config-id"><code>ducknng_close_query(url, session_id, session_token, tls_config_id)</code></h4>
 <p>Close a remote query session and release server-side resources.</p>
 <h4 id="sec:ducknng-cancel-query-url-session-id-session-token-tls-config-id"><code>ducknng_cancel_query(url, session_id, session_token, tls_config_id)</code></h4>
@@ -788,8 +788,8 @@ tbody td:first-child code {
 <h3 id="sec:http-client">HTTP Client</h3>
 <h4 id="sec:ducknng-ncurl-url-method-headers-json-body-timeout-ms-tls-config-id"><code>ducknng_ncurl(url, method, headers_json, body, timeout_ms, tls_config_id)</code></h4>
 <p>Perform an HTTP request. Returns status, headers_json, body BLOB, body_text VARCHAR.</p>
-<h4 id="sec:ducknng-ncurl-table-url-method-headers-json-body-timeout-ms-tls-config-id"><code>ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)</code></h4>
-<p>HTTP request with auto-parsed response body via Content-Type codec dispatch. Requires 2xx status.</p>
+<h4 id="sec:ducknng-ncurl-table-url-method-headers-json-body-timeout-ms-tls-config-id-schema-declared-schema-profile-id-profile"><code>ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, schema := declared_schema[, profile_id := profile])</code></h4>
+<p>Request and decode one HTTP response during execution. Requires 2xx status and an exact declared output schema.</p>
 <h3 id="sec:http-routes">HTTP Routes</h3>
 <h4 id="sec:ducknng-register-http-route-service-name-method-path-handler-sql"><code>ducknng_register_http_route(service_name, method, path, handler_sql)</code></h4>
 <p>Register an exact-match HTTP route. Handler SQL must return status, content_type, body or body_text columns.</p>
@@ -850,14 +850,14 @@ tbody td:first-child code {
 <h4 id="sec:ducknng-ncurl-aio-collect-aio-ids-wait-ms"><code>ducknng_ncurl_aio_collect(aio_ids, wait_ms)</code></h4>
 <p>Collect async HTTP results into ncurl-style table.</p>
 <h3 id="sec:body-codecs">Body Codecs</h3>
-<h4 id="sec:ducknng-parse-body-body-content-type"><code>ducknng_parse_body(body, content_type)</code></h4>
-<p>Parse a BLOB using the supplied content type. Supports JSON, NDJSON, CSV, TSV, Parquet, Arrow IPC, form-urlencoded, ducknng frames.</p>
-<h4 id="sec:ducknng-parse-csv-body"><code>ducknng_parse_csv(body)</code></h4>
-<p>Parse a CSV BLOB via DuckDB read_csv_auto through a tempfile round-trip.</p>
-<h4 id="sec:ducknng-parse-tsv-body"><code>ducknng_parse_tsv(body)</code></h4>
-<p>Parse a TSV BLOB via DuckDB read_csv_auto(delim=’	’) through a tempfile round-trip.</p>
-<h4 id="sec:ducknng-parse-parquet-body"><code>ducknng_parse_parquet(body)</code></h4>
-<p>Parse a Parquet BLOB via DuckDB read_parquet through a tempfile round-trip.</p>
+<h4 id="sec:ducknng-parse-body-body-content-type-schema-declared-schema"><code>ducknng_parse_body(body, content_type[, schema := declared_schema])</code></h4>
+<p>Decode supplied bytes by content type. JSON, NDJSON, and Parquet require a schema and execute their SQL readers during execution.</p>
+<h4 id="sec:ducknng-parse-csv-body-schema-declared-schema"><code>ducknng_parse_csv(body, schema := declared_schema)</code></h4>
+<p>Read a CSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.</p>
+<h4 id="sec:ducknng-parse-tsv-body-schema-declared-schema"><code>ducknng_parse_tsv(body, schema := declared_schema)</code></h4>
+<p>Read a TSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.</p>
+<h4 id="sec:ducknng-parse-parquet-body-schema-declared-schema"><code>ducknng_parse_parquet(body, schema := declared_schema)</code></h4>
+<p>Read a Parquet BLOB during execution through an exclusive temporary file. Output must match the declared schema.</p>
 <h4 id="sec:ducknng-list-codecs"><code>ducknng_list_codecs()</code></h4>
 <p>List all built-in and user-registered body codec providers.</p>
 <h4 id="sec:ducknng-register-codec-content-type-function-name"><code>ducknng_register_codec(content_type, function_name)</code></h4>

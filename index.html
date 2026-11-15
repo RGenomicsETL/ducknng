@@ -669,7 +669,7 @@ tbody td:first-child code {
   }
 }
 </style>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.146/css/prism-xcode.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.16.5/css/prism-xcode.min.css">
 </head>
 <body>
 <nav class="site-nav" aria-label="Project">
@@ -803,8 +803,9 @@ SELECT name, listen FROM ducknng_list_servers();
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng.ipc',
   'SELECT i, i &gt; 10 AS gt_10
-     FROM rpc_demo_t ORDER BY i',
-  0::UBIGINT
+     FROM (VALUES (7), (11), (42)) t(i) ORDER BY i',
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER, gt_10 BOOLEAN)
 );
 </code></pre>
 <table class="res">
