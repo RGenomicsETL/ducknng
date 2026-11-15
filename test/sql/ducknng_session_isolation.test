@@ -30,7 +30,8 @@ query I
 SELECT c FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
   'CREATE TEMP TABLE IF NOT EXISTS iso_t AS SELECT * FROM (VALUES (1),(2),(3)) s(x);
    SELECT count(*)::INTEGER AS c FROM iso_t',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(c INTEGER))
 ----
 3
 
@@ -41,21 +42,24 @@ SELECT c FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
 query I
 SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
   'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(n INTEGER))
 ----
 0
 
 query I
 SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
   'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(n INTEGER))
 ----
 0
 
 query I
 SELECT n FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_session_isolation.ipc',
   'SELECT count(*)::INTEGER AS n FROM duckdb_tables() WHERE table_name = ''iso_t''',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(n INTEGER))
 ----
 0
 

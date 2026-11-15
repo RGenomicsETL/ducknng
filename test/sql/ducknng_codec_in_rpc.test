@@ -19,21 +19,25 @@ SELECT ducknng_register_exec_method();
 # JSON codec inside RPC.
 query I
 SELECT a FROM ducknng_query_rpc('ipc:///tmp/ducknng_codec_in_rpc.ipc',
-  'SELECT a FROM ducknng_parse_body(''[{"a":7}]''::BLOB, ''application/json'')', 0::UBIGINT)
+  'SELECT a FROM ducknng_parse_body(''[{"a":7}]''::BLOB, ''application/json'', schema := NULL::STRUCT(a UBIGINT))', 0::UBIGINT,
+  schema := NULL::STRUCT(a UBIGINT))
 ----
 7
 
 # CSV via content-type dispatch (direct C parser) inside RPC.
 query I
 SELECT b FROM ducknng_query_rpc('ipc:///tmp/ducknng_codec_in_rpc.ipc',
-  'SELECT b FROM ducknng_parse_body((concat(''a,b'', chr(10), ''1,x'', chr(10)))::BLOB, ''text/csv'')', 0::UBIGINT)
+  'SELECT b FROM ducknng_parse_body((concat(''a,b'', chr(10), ''1,x'', chr(10)))::BLOB, ''text/csv'')', 0::UBIGINT,
+  schema := NULL::STRUCT(b VARCHAR))
 ----
 x
 
 # Standalone parse_csv (tempfile + DuckDB read_csv_auto) inside RPC.
 query I
 SELECT b FROM ducknng_query_rpc('ipc:///tmp/ducknng_codec_in_rpc.ipc',
-  'SELECT b FROM ducknng_parse_csv((concat(''a,b'', chr(10), ''1,x'', chr(10)))::BLOB)', 0::UBIGINT)
+  'SELECT b FROM ducknng_parse_csv((concat(''a,b'', chr(10), ''1,x'', chr(10)))::BLOB,
+     schema := NULL::STRUCT(a BIGINT, b VARCHAR))', 0::UBIGINT,
+  schema := NULL::STRUCT(b VARCHAR))
 ----
 x
 
@@ -46,7 +50,8 @@ SELECT ducknng_register_codec('application/x-rpc-up', 'rpc_codec_upper');
 
 query I
 SELECT value FROM ducknng_query_rpc('ipc:///tmp/ducknng_codec_in_rpc.ipc',
-  'SELECT value FROM ducknng_parse_body(''hello''::BLOB, ''application/x-rpc-up'')', 0::UBIGINT)
+  'SELECT value FROM ducknng_parse_body(''hello''::BLOB, ''application/x-rpc-up'')', 0::UBIGINT,
+  schema := NULL::STRUCT(value VARCHAR))
 ----
 HELLO
 

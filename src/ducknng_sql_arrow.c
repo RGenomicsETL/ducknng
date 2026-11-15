@@ -1,6 +1,8 @@
 #include "ducknng_sql_arrow.h"
+#include "ducknng_quack.h"
 #include "ducknng_util.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
@@ -731,6 +733,48 @@ int ducknng_sql_arrow_bind_result_columns(duckdb_bind_info info,
         }
         duckdb_bind_add_result_column(info, name, type);
         duckdb_destroy_logical_type(&type);
+    }
+    return 0;
+}
+
+int ducknng_sql_arrow_schema_validate_declared(const struct ArrowSchema *schema,
+    idx_t ncols, const char *const *names, const duckdb_logical_type *types,
+    char **errmsg) {
+    char buf[256];
+    idx_t col;
+    if (!schema || schema->n_children < 0 || (ncols > 0 && (!names || !types))) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: missing Arrow schema for validation");
+        return -1;
+    }
+    if ((idx_t)schema->n_children != ncols) {
+        snprintf(buf, sizeof(buf), "ducknng: Arrow payload has %llu columns but schema declares %llu",
+            (unsigned long long)schema->n_children, (unsigned long long)ncols);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(buf);
+        return -1;
+    }
+    for (col = 0; col < ncols; col++) {
+        const struct ArrowSchema *child = schema->children[col];
+        const char *got = child && child->name ? child->name : "";
+        duckdb_logical_type t = NULL;
+        int eq;
+        if (!names[col] || strcmp(got, names[col]) != 0) {
+            snprintf(buf, sizeof(buf), "ducknng: Arrow column %llu is named '%.80s' but schema declares '%.80s'",
+                (unsigned long long)col + 1, got, names[col] ? names[col] : "");
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(buf);
+            return -1;
+        }
+        if (ducknng_sql_arrow_schema_to_logical_type(child, &t, errmsg) != 0) {
+            if (t) duckdb_destroy_logical_type(&t);
+            return -1;
+        }
+        eq = ducknng_quack_logical_type_equal(t, types[col]);
+        duckdb_destroy_logical_type(&t);
+        if (!eq) {
+            snprintf(buf, sizeof(buf), "ducknng: Arrow column %llu ('%.80s') type does not match the declared schema",
+                (unsigned long long)col + 1, got);
+            if (errmsg && !*errmsg) *errmsg = ducknng_strdup(buf);
+            return -1;
+        }
     }
     return 0;
 }

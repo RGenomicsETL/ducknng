@@ -370,7 +370,10 @@ ducknng_bench_upload_worker <- function(writer_mode, worker_id, url, rows, repet
         remote_target
       } else {
         sprintf(
-          "ducknng_query_rpc(%s, %s, 0::UBIGINT)",
+          paste(
+            "ducknng_query_rpc(%s, %s, 0::UBIGINT,",
+            "schema := NULL::STRUCT(id INTEGER, seq BIGINT, value DOUBLE, label VARCHAR))"
+          ),
           ducknng_bench_sql_quote(url),
           ducknng_bench_sql_quote(sprintf("SELECT * FROM %s", target_table))
         )

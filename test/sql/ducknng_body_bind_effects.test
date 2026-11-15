@@ -1,0 +1,272 @@
+# name: test/sql/ducknng_body_bind_effects.test
+# group: [ducknng]
+#
+# Body parsing that runs DuckDB SQL or a DuckDB file reader happens during
+# execution, never at bind. The registered SQL codec advances codec_hits each
+# time it runs, so last_value counts codec invocations.
+
+require ducknng
+
+statement ok
+CREATE SEQUENCE codec_hits START 1
+
+statement ok
+CREATE OR REPLACE FUNCTION test_counting_codec(b BLOB) AS
+  decode(b) || ':' || nextval('codec_hits')::VARCHAR
+
+query I
+SELECT CASE WHEN ducknng_register_codec('application/x-counting', 'test_counting_codec')
+  THEN 1 ELSE 0 END
+----
+1
+
+# Planning, description, and preparation do not call the codec.
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_parse_body('a'::BLOB, 'application/x-counting')
+
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_parse_body('a'::BLOB, 'application/x-counting'))
+----
+value	VARCHAR
+
+statement ok
+PREPARE counted AS SELECT value FROM ducknng_parse_body('a'::BLOB, 'application/x-counting')
+
+query I
+SELECT last_value IS NULL FROM duckdb_sequences() WHERE sequence_name = 'codec_hits'
+----
+true
+
+# Each execution calls the codec afresh.
+
+query T
+EXECUTE counted
+----
+a:1
+
+query T
+EXECUTE counted
+----
+a:2
+
+query I
+SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'codec_hits'
+----
+2
+
+statement ok
+DEALLOCATE counted
+
+query I
+SELECT CASE WHEN ducknng_unregister_codec('application/x-counting') THEN 1 ELSE 0 END
+----
+1
+
+# A user codec overrides a built-in content type, including CSV.
+
+query I
+SELECT CASE WHEN ducknng_register_codec('text/csv', 'test_counting_codec') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+PREPARE counted_csv AS SELECT value FROM ducknng_parse_body('x,y'::BLOB, 'text/csv')
+
+query I
+SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'codec_hits'
+----
+2
+
+query T
+EXECUTE counted_csv
+----
+x,y:3
+
+statement ok
+DEALLOCATE counted_csv
+
+query I
+SELECT CASE WHEN ducknng_unregister_codec('text/csv') THEN 1 ELSE 0 END
+----
+1
+
+# Native CSV/TSV parse the supplied bytes in C and infer columns without a schema.
+
+query IT
+SELECT * FROM ducknng_parse_body((concat('a,b', chr(10), '1,x', chr(10)))::BLOB, 'text/csv')
+----
+1	x
+
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_parse_body((concat('a', chr(9), 'b', chr(10), '1', chr(9), 'x'))::BLOB,
+  'text/tab-separated-values'))
+----
+a	BIGINT
+b	VARCHAR
+
+# An optional schema on a pure codec must match the parsed columns.
+
+statement error
+SELECT * FROM ducknng_parse_body((concat('a,b', chr(10), '1,x', chr(10)))::BLOB, 'text/csv',
+  schema := NULL::STRUCT(a VARCHAR, b VARCHAR))
+----
+ducknng:
+
+# JSON and NDJSON require a schema and decode during execution.
+
+statement error
+SELECT * FROM ducknng_parse_body('[{"a":1}]'::BLOB, 'application/json')
+----
+schema must be a nonempty STRUCT
+
+statement ok
+PREPARE json_rows AS SELECT a, b FROM ducknng_parse_body('[{"a":1,"b":"x"},{"a":2,"b":"y"}]'::BLOB,
+  'application/json', schema := NULL::STRUCT(a UBIGINT, b VARCHAR)) ORDER BY a
+
+query IT
+EXECUTE json_rows
+----
+1	x
+2	y
+
+query IT
+EXECUTE json_rows
+----
+1	x
+2	y
+
+statement ok
+DEALLOCATE json_rows
+
+query IT
+SELECT a, b FROM ducknng_parse_body((concat('{"a":1,"b":"x"}', chr(10), '{"a":2,"b":"y"}'))::BLOB,
+  'application/x-ndjson', schema := NULL::STRUCT(a UBIGINT, b VARCHAR)) ORDER BY a
+----
+1	x
+2	y
+
+statement error
+SELECT * FROM ducknng_parse_body('[{"a":1}]'::BLOB, 'application/json',
+  schema := NULL::STRUCT(a BIGINT))
+----
+ducknng:
+
+statement error
+SELECT * FROM ducknng_parse_body('[{"a":1}]'::BLOB, 'application/json',
+  schema := NULL::STRUCT(z UBIGINT))
+----
+ducknng:
+
+statement error
+SELECT * FROM ducknng_parse_body('[{"a":1}]'::BLOB, 'application/json',
+  schema := NULL::STRUCT(a UBIGINT, b VARCHAR))
+----
+ducknng:
+
+# The reader aliases require a schema and run DuckDB's readers during execution.
+
+statement error
+SELECT * FROM ducknng_parse_csv((concat('a,b', chr(10), '1,x'))::BLOB)
+----
+schema must be a nonempty STRUCT
+
+statement ok
+PREPARE csv_reader AS SELECT a, b FROM ducknng_parse_csv((concat('a,b', chr(10), '1,x', chr(10)))::BLOB,
+  schema := NULL::STRUCT(a BIGINT, b VARCHAR))
+
+query IT
+EXECUTE csv_reader
+----
+1	x
+
+query IT
+EXECUTE csv_reader
+----
+1	x
+
+query IT
+SELECT a, b FROM ducknng_parse_tsv((concat('a', chr(9), 'b', chr(10), '2', chr(9), 'y', chr(10)))::BLOB,
+  schema := NULL::STRUCT(a BIGINT, b VARCHAR))
+----
+2	y
+
+statement error
+SELECT * FROM ducknng_parse_tsv((concat('a', chr(9), 'b', chr(10), '2', chr(9), 'y', chr(10)))::BLOB,
+  schema := NULL::STRUCT(a VARCHAR, b VARCHAR))
+----
+ducknng:
+
+statement ok
+COPY (SELECT 7::INTEGER AS p, 'pq' AS q) TO '__TEST_DIR__/../../build/ducknng_body_bind_effects.parquet' (FORMAT parquet)
+
+statement ok
+SET VARIABLE parquet_body = (SELECT content FROM read_blob('__TEST_DIR__/../../build/ducknng_body_bind_effects.parquet'))
+
+query IT
+SELECT p, q FROM ducknng_parse_parquet(getvariable('parquet_body'),
+  schema := NULL::STRUCT(p INTEGER, q VARCHAR))
+----
+7	pq
+
+query IT
+SELECT p, q FROM ducknng_parse_body(getvariable('parquet_body'), 'application/vnd.apache.parquet',
+  schema := NULL::STRUCT(p INTEGER, q VARCHAR))
+----
+7	pq
+
+statement error
+SELECT * FROM ducknng_parse_body(getvariable('parquet_body'), 'application/vnd.apache.parquet')
+----
+schema must be a nonempty STRUCT
+
+# With external access disabled, temp-file readers still bind but fail to execute.
+
+statement ok
+SET enable_external_access = false
+
+statement ok
+PREPARE csv_denied AS SELECT * FROM ducknng_parse_csv((concat('a,b', chr(10), '1,x'))::BLOB,
+  schema := NULL::STRUCT(a BIGINT, b VARCHAR))
+
+statement ok
+PREPARE parquet_denied AS SELECT * FROM ducknng_parse_parquet(getvariable('parquet_body'),
+  schema := NULL::STRUCT(p INTEGER, q VARCHAR))
+
+statement error
+EXECUTE parquet_denied
+----
+file system operations are disabled by configuration
+
+statement ok
+DEALLOCATE parquet_denied
+
+statement error
+EXECUTE csv_denied
+----
+file system operations are disabled by configuration
+
+statement error
+SELECT * FROM ducknng_parse_parquet(getvariable('parquet_body'),
+  schema := NULL::STRUCT(p INTEGER, q VARCHAR))
+----
+file system operations are disabled by configuration
+
+# Pure codecs need no file system. The runner cannot fetch query results with
+# external access disabled, so these run as statements.
+
+statement ok
+SELECT body_text FROM ducknng_parse_body('still parsed'::BLOB, 'text/plain')
+
+statement error
+EXECUTE csv_reader
+----
+file system operations are disabled by configuration
+
+statement ok
+DEALLOCATE csv_reader
+
+statement ok
+DEALLOCATE csv_denied

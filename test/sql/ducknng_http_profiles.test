@@ -119,7 +119,8 @@ query II
 SELECT CASE WHEN authorized THEN 1 ELSE 0 END, n::INTEGER
 FROM ducknng_ncurl_table(
   getvariable('http_profile_base')::VARCHAR || '/auth/data.json',
-  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-main'
+  'GET', NULL, NULL, 2000, 0::UBIGINT, profile_id := 'profile-main',
+  schema := NULL::STRUCT(authorized BOOLEAN, n UBIGINT)
 )
 ----
 1	42
@@ -208,7 +209,8 @@ SELECT * FROM ducknng_ncurl_table(
   NULL,
   2000,
   0::UBIGINT,
-  'profile-main'
+  profile_id := 'profile-main',
+  schema := NULL::STRUCT(authorized BOOLEAN, n UBIGINT)
 )
 ----
 collides
@@ -378,7 +380,8 @@ FROM ducknng_ncurl(
 statement error
 SELECT * FROM ducknng_ncurl_table(
   getvariable('http_profile_base')::VARCHAR || '/auth/data.json',
-  'GET', NULL, NULL, 2000, 0::UBIGINT, 'profile-alice'
+  'GET', NULL, NULL, 2000, 0::UBIGINT, profile_id := 'profile-alice',
+  schema := NULL::STRUCT(authorized BOOLEAN, n UBIGINT)
 )
 ----
 admission rejected
@@ -546,7 +549,8 @@ FROM ducknng_query_rpc('ipc:///tmp/ducknng_http_profile_sess.ipc',
   'SELECT CASE WHEN ok THEN 1 ELSE 0 END AS ok_flag, CASE WHEN body_text = ''authorized'' THEN 1 ELSE 0 END AS authorized_flag FROM ducknng_ncurl(''' ||
     getvariable('http_profile_base')::VARCHAR ||
     '/auth/check'', ''GET'', NULL, NULL, 2000, 0::UBIGINT, ''profile-alice'')',
-  0::UBIGINT)
+  0::UBIGINT,
+  schema := NULL::STRUCT(ok_flag INTEGER, authorized_flag INTEGER))
 ----
 1	1
 
@@ -566,7 +570,8 @@ FROM ducknng_query_rpc('ipc:///tmp/ducknng_http_profile_sess.ipc',
   'SELECT CASE WHEN ok THEN 1 ELSE 0 END AS ok_flag, CASE WHEN position(''admission rejected'' IN error) > 0 THEN 1 ELSE 0 END AS rejected_flag FROM ducknng_ncurl(''' ||
     getvariable('http_profile_base')::VARCHAR ||
     '/auth/check'', ''GET'', NULL, NULL, 2000, 0::UBIGINT, ''profile-alice'')',
-  0::UBIGINT)
+  0::UBIGINT,
+  schema := NULL::STRUCT(ok_flag INTEGER, rejected_flag INTEGER))
 ----
 0	1
 
@@ -596,7 +601,8 @@ FROM ducknng_query_rpc('ipc:///tmp/ducknng_http_profile_sess.ipc',
   'SELECT CASE WHEN ok THEN 1 ELSE 0 END AS ok_flag, CASE WHEN body_text = ''authorized'' THEN 1 ELSE 0 END AS authorized_flag FROM ducknng_ncurl(''' ||
     getvariable('http_profile_base')::VARCHAR ||
     '/auth/check'', ''GET'', NULL, NULL, 2000, 0::UBIGINT, ''profile-alice'')',
-  0::UBIGINT)
+  0::UBIGINT,
+  schema := NULL::STRUCT(ok_flag INTEGER, authorized_flag INTEGER))
 ----
 1	1
 

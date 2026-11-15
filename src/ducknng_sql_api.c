@@ -2,6 +2,8 @@
 #include "ducknng_runtime.h"
 #include "ducknng_session.h"
 #include "ducknng_sql_shared.h"
+#include "ducknng_ipc_in.h"
+#include "ducknng_sql_arrow.h"
 #include "ducknng_util.h"
 #include <stdio.h>
 #include <string.h>
@@ -160,7 +162,9 @@ static int ducknng_sql_register_scalar_logical_types_ex(duckdb_connection con, c
     for (i = 0; i < nparams; i++) duckdb_scalar_function_add_parameter(f, param_types[i]);
     duckdb_scalar_function_set_return_type(f, return_type);
     duckdb_scalar_function_set_function(f, fn);
-    if (bind_fn) duckdb_scalar_function_set_bind(f, bind_fn);
+    /* Every scalar captures its binding connection id unless it supplies its
+     * own bind; authorizer guards and profile admission read it at run time. */
+    duckdb_scalar_function_set_bind(f, bind_fn ? bind_fn : ducknng_sql_connection_bind_cb);
     duckdb_scalar_function_set_special_handling(f);
     if (is_volatile) duckdb_scalar_function_set_volatile(f);
     if (!ducknng_set_scalar_sql_context(f, ctx)) {
@@ -299,9 +303,146 @@ int ducknng_sql_register_volatile_scalar_with_bind(duckdb_connection con, const 
     return ok;
 }
 
-int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,
-    idx_t nparams, duckdb_type *param_types, duckdb_table_function_bind_t bind_fn,
-    duckdb_table_function_init_t init_fn, duckdb_table_function_t scan_fn) {
+void ducknng_sql_declared_schema_reset(ducknng_sql_declared_schema *schema) {
+    idx_t i;
+    if (!schema) return;
+    for (i = 0; i < schema->ncols; i++) {
+        if (schema->names && schema->names[i]) duckdb_free(schema->names[i]);
+        if (schema->types && schema->types[i]) duckdb_destroy_logical_type(&schema->types[i]);
+    }
+    if (schema->names) duckdb_free(schema->names);
+    if (schema->types) duckdb_free(schema->types);
+    schema->ncols = 0;
+    schema->names = NULL;
+    schema->types = NULL;
+}
+
+static int ducknng_sql_declared_schema_alloc(ducknng_sql_declared_schema *out, idx_t n) {
+    if (n > SIZE_MAX / sizeof(*out->names) || n > SIZE_MAX / sizeof(*out->types)) return -1;
+    out->names = (char **)duckdb_malloc(sizeof(*out->names) * (size_t)n);
+    out->types = (duckdb_logical_type *)duckdb_malloc(sizeof(*out->types) * (size_t)n);
+    if (!out->names || !out->types) {
+        if (out->names) duckdb_free(out->names);
+        if (out->types) duckdb_free(out->types);
+        out->names = NULL;
+        out->types = NULL;
+        return -1;
+    }
+    memset(out->names, 0, sizeof(*out->names) * (size_t)n);
+    memset(out->types, 0, sizeof(*out->types) * (size_t)n);
+    out->ncols = n;
+    return 0;
+}
+
+/* Decode an Arrow IPC stream that carries a schema and no record batches into
+ * owned column names and DuckDB types. On failure *errmsg is set and the
+ * caller resets *out. */
+static int ducknng_sql_declared_schema_from_ipc(const uint8_t *buf, size_t len,
+    ducknng_sql_declared_schema *out, char **errmsg) {
+    ducknng_arrow_batches batches;
+    idx_t i, n;
+    int rc = -1;
+    memset(&batches, 0, sizeof(batches));
+    if (ducknng_decode_ipc_batches_payload(buf, len, &batches, errmsg) != 0) goto done;
+    if (batches.array_count != 0) {
+        *errmsg = ducknng_strdup("ducknng: schema descriptor must be a schema-only Arrow IPC stream with no record batches");
+        goto done;
+    }
+    if (batches.schema.n_children <= 0 || !batches.schema.children) {
+        *errmsg = ducknng_strdup("ducknng: schema descriptor declares no columns");
+        goto done;
+    }
+    n = (idx_t)batches.schema.n_children;
+    if (ducknng_sql_declared_schema_alloc(out, n) != 0) {
+        *errmsg = ducknng_strdup("ducknng: out of memory reading schema");
+        goto done;
+    }
+    for (i = 0; i < n; i++) {
+        const struct ArrowSchema *child = batches.schema.children[i];
+        if (!child) {
+            *errmsg = ducknng_strdup("ducknng: schema descriptor has a missing column");
+            goto done;
+        }
+        if (ducknng_sql_arrow_schema_to_logical_type(child, &out->types[i], errmsg) != 0)
+            goto done;
+        out->names[i] = ducknng_strdup(child->name ? child->name : "");
+        if (!out->names[i]) {
+            *errmsg = ducknng_strdup("ducknng: out of memory reading schema");
+            goto done;
+        }
+    }
+    rc = 0;
+done:
+    ducknng_arrow_batches_reset(&batches);
+    return rc;
+}
+
+int ducknng_sql_bind_declared_schema(duckdb_bind_info info, ducknng_sql_declared_schema *out) {
+    duckdb_value value;
+    duckdb_logical_type type;
+    duckdb_type type_id;
+    char *errmsg = NULL;
+    idx_t n, i;
+    if (!info || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    value = duckdb_bind_get_named_parameter(info, "schema");
+    /* Borrowed from value; valid until value is destroyed. */
+    type = value ? duckdb_get_value_type(value) : NULL;
+    type_id = type ? duckdb_get_type_id(type) : DUCKDB_TYPE_INVALID;
+    if (type_id == DUCKDB_TYPE_BLOB && !duckdb_is_null_value(value)) {
+        duckdb_blob blob = duckdb_get_blob(value);
+        int rc;
+        if (!blob.data || blob.size == 0) {
+            if (blob.data) duckdb_free(blob.data);
+            duckdb_bind_set_error(info, "ducknng: schema descriptor BLOB is empty");
+            goto fail;
+        }
+        rc = ducknng_sql_declared_schema_from_ipc((const uint8_t *)blob.data,
+            (size_t)blob.size, out, &errmsg);
+        duckdb_free(blob.data);
+        if (rc != 0) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "ducknng: invalid Arrow IPC schema descriptor: %s",
+                errmsg && errmsg[0] ? errmsg : "decode failed");
+            if (errmsg) duckdb_free(errmsg);
+            duckdb_bind_set_error(info, buf);
+            goto fail;
+        }
+        goto declare;
+    }
+    if (type_id != DUCKDB_TYPE_STRUCT || (n = duckdb_struct_type_child_count(type)) == 0) {
+        duckdb_bind_set_error(info, "ducknng: schema must be a nonempty STRUCT declaring the result columns, "
+            "e.g. schema := NULL::STRUCT(id BIGINT, label VARCHAR), "
+            "or a non-NULL Arrow IPC schema BLOB. "
+            "Obtain the BLOB with ducknng_prepare_query in a separate executed statement.");
+        goto fail;
+    }
+    if (ducknng_sql_declared_schema_alloc(out, n) != 0) {
+        duckdb_bind_set_error(info, "ducknng: out of memory reading schema");
+        goto fail;
+    }
+    for (i = 0; i < n; i++) {
+        out->names[i] = duckdb_struct_type_child_name(type, i);
+        out->types[i] = duckdb_struct_type_child_type(type, i);
+        if (!out->names[i] || !out->types[i]) {
+            duckdb_bind_set_error(info, "ducknng: failed to read schema STRUCT member");
+            goto fail;
+        }
+    }
+declare:
+    duckdb_destroy_value(&value);
+    for (i = 0; i < out->ncols; i++) duckdb_bind_add_result_column(info, out->names[i], out->types[i]);
+    return 0;
+fail:
+    ducknng_sql_declared_schema_reset(out);
+    if (value) duckdb_destroy_value(&value);
+    return -1;
+}
+
+static int ducknng_sql_register_table_impl(duckdb_connection con, const char *name,
+    ducknng_sql_context *ctx, idx_t nparams, duckdb_type *param_types,
+    duckdb_table_function_bind_t bind_fn, duckdb_table_function_init_t init_fn,
+    duckdb_table_function_t scan_fn, int with_schema) {
     duckdb_table_function tf;
     idx_t i;
     if (!con || !name || !bind_fn || !scan_fn) return 0;
@@ -312,6 +453,11 @@ int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_
         duckdb_logical_type t = duckdb_create_logical_type(param_types[i]);
         duckdb_table_function_add_parameter(tf, t);
         duckdb_destroy_logical_type(&t);
+    }
+    if (with_schema) {
+        duckdb_logical_type any = duckdb_create_logical_type(DUCKDB_TYPE_ANY);
+        duckdb_table_function_add_named_parameter(tf, "schema", any);
+        duckdb_destroy_logical_type(&any);
     }
     if (ctx && !ducknng_set_table_sql_context(tf, ctx)) {
         duckdb_destroy_table_function(&tf);
@@ -328,6 +474,21 @@ int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_
     return 1;
 }
 
+int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,
+    idx_t nparams, duckdb_type *param_types, duckdb_table_function_bind_t bind_fn,
+    duckdb_table_function_init_t init_fn, duckdb_table_function_t scan_fn) {
+    return ducknng_sql_register_table_impl(con, name, ctx, nparams, param_types,
+        bind_fn, init_fn, scan_fn, 0);
+}
+
+int ducknng_sql_register_table_with_schema(duckdb_connection con, const char *name,
+    ducknng_sql_context *ctx, idx_t nparams, duckdb_type *param_types,
+    duckdb_table_function_bind_t bind_fn, duckdb_table_function_init_t init_fn,
+    duckdb_table_function_t scan_fn) {
+    return ducknng_sql_register_table_impl(con, name, ctx, nparams, param_types,
+        bind_fn, init_fn, scan_fn, 1);
+}
+
 int ducknng_set_table_sql_context(duckdb_table_function tf, const ducknng_sql_context *ctx) {
     ducknng_sql_context *copy = ducknng_dup_sql_context(ctx);
     if (!copy) return 0;
@@ -342,19 +503,62 @@ int ducknng_set_scalar_sql_context(duckdb_scalar_function fn, const ducknng_sql_
     return 1;
 }
 
-int ducknng_sql_inside_authorizer(ducknng_sql_context *ctx) {
-    return ctx && ctx->rt && ducknng_runtime_current_thread_authorizer_context_get(ctx->rt) != NULL;
+#define DUCKNNG_AUTHORIZER_REJECT_MSG \
+    "ducknng: ducknng client and lifecycle functions cannot run inside a SQL authorizer callback"
+#define DUCKNNG_MISSING_CONNECTION_MSG \
+    "ducknng: missing DuckDB connection id for an authorizer-guarded function"
+
+int ducknng_sql_table_bind_connection_id(duckdb_bind_info info, uint64_t *out_connection_id) {
+    duckdb_client_context client_ctx = NULL;
+    if (!info || !out_connection_id) return -1;
+    duckdb_table_function_get_client_context(info, &client_ctx);
+    if (!client_ctx) return -1;
+    *out_connection_id = (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+    duckdb_destroy_client_context(&client_ctx);
+    return 0;
 }
 
-int ducknng_reject_table_inside_authorizer(duckdb_bind_info info, ducknng_sql_context *ctx) {
-    if (!ducknng_sql_inside_authorizer(ctx)) return 0;
-    duckdb_bind_set_error(info, "ducknng: ducknng client and lifecycle functions cannot run inside a SQL authorizer callback");
+/* The authority is the runtime's connection record, never thread-local state:
+ * DuckDB runs init and scan on worker threads that carry no ducknng TLS. */
+static int ducknng_sql_connection_in_authorizer(ducknng_sql_context *ctx, uint64_t connection_id) {
+    return ducknng_runtime_connection_scope_get(ctx->rt, connection_id) ==
+        DUCKNNG_CONNECTION_SCOPE_AUTHORIZER;
+}
+
+int ducknng_reject_table_inside_authorizer(duckdb_bind_info info, ducknng_sql_context *ctx,
+    uint64_t *out_connection_id) {
+    uint64_t connection_id = 0;
+    if (out_connection_id) *out_connection_id = 0;
+    if (!ctx || !ctx->rt) return 0;
+    if (ducknng_sql_table_bind_connection_id(info, &connection_id) != 0) {
+        duckdb_bind_set_error(info, DUCKNNG_MISSING_CONNECTION_MSG);
+        return 1;
+    }
+    if (ducknng_sql_connection_in_authorizer(ctx, connection_id)) {
+        duckdb_bind_set_error(info, DUCKNNG_AUTHORIZER_REJECT_MSG);
+        return 1;
+    }
+    if (out_connection_id) *out_connection_id = connection_id;
+    return 0;
+}
+
+int ducknng_reject_init_inside_authorizer(duckdb_init_info info, ducknng_sql_context *ctx,
+    uint64_t connection_id) {
+    if (!ctx || !ctx->rt) return 0;
+    if (!ducknng_sql_connection_in_authorizer(ctx, connection_id)) return 0;
+    duckdb_init_set_error(info, DUCKNNG_AUTHORIZER_REJECT_MSG);
     return 1;
 }
 
 int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_sql_context *ctx) {
-    if (!ducknng_sql_inside_authorizer(ctx)) return 0;
-    duckdb_scalar_function_set_error(info, "ducknng: ducknng client and lifecycle functions cannot run inside a SQL authorizer callback");
+    uint64_t connection_id = 0;
+    if (!ctx || !ctx->rt) return 0;
+    if (!ducknng_sql_scalar_connection_id(info, &connection_id)) {
+        duckdb_scalar_function_set_error(info, DUCKNNG_MISSING_CONNECTION_MSG);
+        return 1;
+    }
+    if (!ducknng_sql_connection_in_authorizer(ctx, connection_id)) return 0;
+    duckdb_scalar_function_set_error(info, DUCKNNG_AUTHORIZER_REJECT_MSG);
     return 1;
 }
 

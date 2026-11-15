@@ -36,18 +36,22 @@ typedef struct {
 } ducknng_server_row;
 
 typedef struct {
-    ducknng_server_row *rows;
-    idx_t row_count;
     ducknng_runtime *rt;
 } ducknng_servers_bind_data;
 
 typedef struct {
-    ducknng_servers_bind_data *bind;
+    ducknng_runtime *rt;
+    ducknng_server_row *rows;
+    idx_t row_count;
     idx_t offset;
 } ducknng_servers_init_data;
 
 static void destroy_servers_bind_data(void *ptr) {
-    ducknng_servers_bind_data *data = (ducknng_servers_bind_data *)ptr;
+    if (ptr) duckdb_free(ptr);
+}
+
+static void destroy_servers_init_data(void *ptr) {
+    ducknng_servers_init_data *data = (ducknng_servers_init_data *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -57,11 +61,6 @@ static void destroy_servers_bind_data(void *ptr) {
     }
     if (data->rows) duckdb_free(data->rows);
     duckdb_free(data);
-}
-
-static void destroy_servers_init_data(void *ptr) {
-    ducknng_servers_init_data *data = (ducknng_servers_init_data *)ptr;
-    if (data) duckdb_free(data);
 }
 
 static ducknng_service *ducknng_sql_find_service_by_name(ducknng_runtime *rt, const char *name) {
@@ -168,7 +167,6 @@ static void ducknng_servers_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     ducknng_servers_bind_data *bind;
     duckdb_logical_type type;
-    size_t i;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
         return;
@@ -180,47 +178,6 @@ static void ducknng_servers_bind(duckdb_bind_info info) {
     }
     memset(bind, 0, sizeof(*bind));
     bind->rt = ctx->rt;
-
-    ducknng_mutex_lock(&ctx->rt->mu);
-    bind->row_count = (idx_t)ctx->rt->service_count;
-    if (bind->row_count > 0) {
-        bind->rows = (ducknng_server_row *)duckdb_malloc(sizeof(*bind->rows) * (size_t)bind->row_count);
-        if (!bind->rows) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            duckdb_free(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory");
-            return;
-        }
-        memset(bind->rows, 0, sizeof(*bind->rows) * (size_t)bind->row_count);
-        for (i = 0; i < (size_t)bind->row_count; i++) {
-            ducknng_service *svc = ctx->rt->services[i];
-            bind->rows[i].service_id = svc ? svc->service_id : 0;
-            bind->rows[i].name = svc && svc->name ? ducknng_strdup(svc->name) : NULL;
-            bind->rows[i].listen = svc && ducknng_service_resolved_listen(svc) ? ducknng_strdup(ducknng_service_resolved_listen(svc)) : NULL;
-            bind->rows[i].contexts = svc ? svc->ncontexts : 0;
-            bind->rows[i].running = svc ? (bool)svc->running : false;
-            bind->rows[i].execution_model = svc ? ducknng_strdup(ducknng_service_execution_model(svc)) : NULL;
-            bind->rows[i].sessions = svc ? (uint64_t)atomic_load_explicit(&svc->session_count_visible, memory_order_acquire) : 0;
-            bind->rows[i].active_pipes = svc ? (uint64_t)ducknng_service_active_pipe_count(svc) : 0;
-            bind->rows[i].max_open_sessions = svc ? ducknng_service_max_open_sessions(svc) : 0;
-            bind->rows[i].max_active_pipes = svc ? ducknng_service_max_active_pipes(svc) : 0;
-            bind->rows[i].inflight_requests = svc ? (uint64_t)ducknng_service_inflight_request_count(svc) : 0;
-            bind->rows[i].max_inflight_requests = svc ? ducknng_service_max_inflight_requests(svc) : 0;
-            bind->rows[i].max_sessions_per_peer_identity = svc ? ducknng_service_max_sessions_per_peer_identity(svc) : 0;
-            bind->rows[i].max_inflight_per_peer_identity = svc ? ducknng_service_max_inflight_per_peer_identity(svc) : 0;
-            bind->rows[i].max_reply_bytes_per_peer_identity = svc ? ducknng_service_max_reply_bytes_per_peer_identity(svc) : 0;
-            bind->rows[i].max_session_open_rate_per_peer_identity = svc ? ducknng_service_max_session_open_rate_per_peer_identity(svc) : 0;
-            bind->rows[i].tls_enabled = svc ? (bool)svc->tls_enabled : false;
-            bind->rows[i].tls_auth_mode = svc ? svc->tls_opts.auth_mode : 0;
-            bind->rows[i].peer_identity_required = svc ? (bool)ducknng_service_requires_peer_identity(svc) : false;
-            bind->rows[i].peer_allowlist_active = svc ? (bool)ducknng_service_peer_allowlist_active(svc) : false;
-            bind->rows[i].peer_allowlist_count = svc ? (uint64_t)ducknng_service_peer_allowlist_count(svc) : 0;
-            bind->rows[i].ip_allowlist_active = svc ? (bool)ducknng_service_ip_allowlist_active(svc) : false;
-            bind->rows[i].ip_allowlist_count = svc ? (uint64_t)ducknng_service_ip_allowlist_count(svc) : 0;
-            bind->rows[i].sql_authorizer_active = svc ? (bool)ducknng_service_authorizer_active(svc) : false;
-        }
-    }
-    ducknng_mutex_unlock(&ctx->rt->mu);
 
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "service_id", type);
@@ -268,25 +225,81 @@ static void ducknng_servers_bind(duckdb_bind_info info) {
     duckdb_destroy_logical_type(&type);
 
     duckdb_bind_set_bind_data(info, bind, destroy_servers_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
 }
 
 static void ducknng_servers_init(duckdb_init_info info) {
     ducknng_servers_bind_data *bind = (ducknng_servers_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_servers_init_data *init = (ducknng_servers_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_servers_init_data *init;
+    ducknng_runtime *rt;
+    size_t i;
+    if (!bind || !bind->rt) {
+        duckdb_init_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    rt = bind->rt;
+    init = (ducknng_servers_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+    init->rt = rt;
+
+    ducknng_mutex_lock(&rt->mu);
+    if (rt->service_count > 0) {
+        init->rows = (ducknng_server_row *)duckdb_malloc(sizeof(*init->rows) * rt->service_count);
+        if (!init->rows) {
+            ducknng_mutex_unlock(&rt->mu);
+            duckdb_free(init);
+            duckdb_init_set_error(info, "ducknng: out of memory");
+            return;
+        }
+        memset(init->rows, 0, sizeof(*init->rows) * rt->service_count);
+        init->row_count = (idx_t)rt->service_count;
+        for (i = 0; i < rt->service_count; i++) {
+            ducknng_service *svc = rt->services[i];
+            ducknng_server_row *row = &init->rows[i];
+            row->service_id = svc ? svc->service_id : 0;
+            row->name = svc && svc->name ? ducknng_strdup(svc->name) : NULL;
+            row->listen = svc && ducknng_service_resolved_listen(svc) ? ducknng_strdup(ducknng_service_resolved_listen(svc)) : NULL;
+            row->contexts = svc ? svc->ncontexts : 0;
+            row->running = svc ? (bool)svc->running : false;
+            row->execution_model = svc ? ducknng_strdup(ducknng_service_execution_model(svc)) : NULL;
+            row->sessions = svc ? (uint64_t)atomic_load_explicit(&svc->session_count_visible, memory_order_acquire) : 0;
+            row->active_pipes = svc ? (uint64_t)ducknng_service_active_pipe_count(svc) : 0;
+            row->max_open_sessions = svc ? ducknng_service_max_open_sessions(svc) : 0;
+            row->max_active_pipes = svc ? ducknng_service_max_active_pipes(svc) : 0;
+            row->inflight_requests = svc ? (uint64_t)ducknng_service_inflight_request_count(svc) : 0;
+            row->max_inflight_requests = svc ? ducknng_service_max_inflight_requests(svc) : 0;
+            row->max_sessions_per_peer_identity = svc ? ducknng_service_max_sessions_per_peer_identity(svc) : 0;
+            row->max_inflight_per_peer_identity = svc ? ducknng_service_max_inflight_per_peer_identity(svc) : 0;
+            row->max_reply_bytes_per_peer_identity = svc ? ducknng_service_max_reply_bytes_per_peer_identity(svc) : 0;
+            row->max_session_open_rate_per_peer_identity = svc ? ducknng_service_max_session_open_rate_per_peer_identity(svc) : 0;
+            row->tls_enabled = svc ? (bool)svc->tls_enabled : false;
+            row->tls_auth_mode = svc ? svc->tls_opts.auth_mode : 0;
+            row->peer_identity_required = svc ? (bool)ducknng_service_requires_peer_identity(svc) : false;
+            row->peer_allowlist_active = svc ? (bool)ducknng_service_peer_allowlist_active(svc) : false;
+            row->peer_allowlist_count = svc ? (uint64_t)ducknng_service_peer_allowlist_count(svc) : 0;
+            row->ip_allowlist_active = svc ? (bool)ducknng_service_ip_allowlist_active(svc) : false;
+            row->ip_allowlist_count = svc ? (uint64_t)ducknng_service_ip_allowlist_count(svc) : 0;
+            row->sql_authorizer_active = svc ? (bool)ducknng_service_authorizer_active(svc) : false;
+            if ((svc && svc->name && !row->name) ||
+                (svc && ducknng_service_resolved_listen(svc) && !row->listen) ||
+                (svc && !row->execution_model)) {
+                ducknng_mutex_unlock(&rt->mu);
+                destroy_servers_init_data(init);
+                duckdb_init_set_error(info, "ducknng: out of memory");
+                return;
+            }
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_servers_init_data);
 }
 
 static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_servers_init_data *init = (ducknng_servers_init_data *)duckdb_function_get_init_data(info);
-    ducknng_servers_bind_data *bind;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
@@ -335,12 +348,11 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
     bool *sql_authorizer_active;
     uint64_t *peer_allowlist_count;
     uint64_t *ip_allowlist_count;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!init || init->offset >= init->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = init->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
 
     vec_service_id = duckdb_data_chunk_get_vector(output, 0);
@@ -391,18 +403,18 @@ static void ducknng_servers_scan(duckdb_function_info info, duckdb_data_chunk ou
     ip_allowlist_count = (uint64_t *)duckdb_vector_get_data(vec_ip_allowlist_count);
 
     for (i = 0; i < chunk_size; i++) {
-        ducknng_server_row *row = &bind->rows[init->offset + i];
+        ducknng_server_row *row = &init->rows[init->offset + i];
         uint64_t live_inflight = row->inflight_requests;
-        if (bind->rt && row->service_id > 0) {
+        if (init->rt && row->service_id > 0) {
             size_t si;
-            ducknng_mutex_lock(&bind->rt->mu);
-            for (si = 0; si < bind->rt->service_count; si++) {
-                if (bind->rt->services[si] && bind->rt->services[si]->service_id == row->service_id) {
-                    live_inflight = (uint64_t)ducknng_service_inflight_request_count(bind->rt->services[si]);
+            ducknng_mutex_lock(&init->rt->mu);
+            for (si = 0; si < init->rt->service_count; si++) {
+                if (init->rt->services[si] && init->rt->services[si]->service_id == row->service_id) {
+                    live_inflight = (uint64_t)ducknng_service_inflight_request_count(init->rt->services[si]);
                     break;
                 }
             }
-            ducknng_mutex_unlock(&bind->rt->mu);
+            ducknng_mutex_unlock(&init->rt->mu);
         }
         service_ids[i] = row->service_id;
         contexts[i] = row->contexts;

@@ -179,8 +179,8 @@ typedef struct ducknng_service_sql_scope {
     int locked_runtime;
     int locked_service;
     size_t pool_index;
-    int subject_bound;
-    uint64_t subject_connection_id;
+    int context_installed;          /* this scope owns the connection record */
+    uint64_t context_connection_id;
 } ducknng_service_sql_scope;
 
 struct ducknng_rep_ctx {

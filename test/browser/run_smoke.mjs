@@ -818,7 +818,8 @@ async function runHttpAioProbe(page, base) {
 async function runHttpTableProbe(page, base) {
   const jsonSql =
     `SELECT sum(a) AS sum_a, string_agg(b, ',' ORDER BY b) AS bs ` +
-    `FROM ducknng_ncurl_table('${base}/probe/json', 'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+    `FROM ducknng_ncurl_table('${base}/probe/json', 'GET', NULL, NULL, 5000, 0::UBIGINT, ` +
+    `schema := NULL::STRUCT(a UBIGINT, b VARCHAR))`;
   const json = await runShell(page, jsonSql);
   if (/error/i.test(json.meta) || !/3/.test(json.table) || !/x,y/.test(json.table)) {
     fail(`http-table JSON proof failed: ${json.table}`);
@@ -826,7 +827,7 @@ async function runHttpTableProbe(page, base) {
 
   const textSql =
     `SELECT body_text FROM ducknng_ncurl_table('${base}/probe/text', ` +
-    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+    `'GET', NULL, NULL, 5000, 0::UBIGINT, schema := NULL::STRUCT(body_text VARCHAR))`;
   const text = await runShell(page, textSql);
   if (/error/i.test(text.meta) || !/ducknng text table ok/.test(text.table)) {
     fail(`http-table text proof failed: ${text.table}`);
@@ -834,7 +835,8 @@ async function runHttpTableProbe(page, base) {
 
   const csvSql =
     `SELECT sum(a) AS sum_a, string_agg(b, ',' ORDER BY b) AS bs ` +
-    `FROM ducknng_ncurl_table('${base}/probe/csv', 'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+    `FROM ducknng_ncurl_table('${base}/probe/csv', 'GET', NULL, NULL, 5000, 0::UBIGINT, ` +
+    `schema := NULL::STRUCT(a BIGINT, b VARCHAR))`;
   const csv = await runShell(page, csvSql);
   if (/error/i.test(csv.meta) || !/3/.test(csv.table) || !/x,y/.test(csv.table)) {
     fail(`http-table CSV proof failed: ${csv.table}`);
@@ -868,7 +870,7 @@ async function runHttpsCorsProbe(page, httpsBase) {
 
   const httpsSql =
     `SELECT sum(a) AS sum_a FROM ducknng_ncurl_table('${httpsBase}/probe/https-json', ` +
-    `'GET', NULL, NULL, 5000, 0::UBIGINT)`;
+    `'GET', NULL, NULL, 5000, 0::UBIGINT, schema := NULL::STRUCT(a UBIGINT))`;
   const https = await runShell(page, httpsSql);
   if (/error/i.test(https.meta) || !/42/.test(https.table)) {
     fail(`https-cors table proof failed: ${https.table}`);

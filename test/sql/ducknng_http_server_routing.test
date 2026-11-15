@@ -234,15 +234,17 @@ DROP TABLE http_rpc_aio_collect
 statement ok
 DROP TABLE http_rpc_aio_launch
 
+# The execution-time snapshot includes only this query's own session.
 query I
 SELECT *
 FROM ducknng_query_rpc(
   'http://127.0.0.1:45458/_ducknng',
   'SELECT sessions FROM ducknng_list_servers() WHERE name = ''http_rpc''',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(sessions UBIGINT)
 )
 ----
-0
+1
 
 query I
 SELECT ok
@@ -281,7 +283,9 @@ FROM ducknng_run_rpc('http://127.0.0.1:45458/_ducknng', 'INSERT INTO http_remote
 
 query II
 SELECT DISTINCT *
-FROM ducknng_query_rpc('http://127.0.0.1:45458/_ducknng', 'SELECT i, i > 3 AS gt_3 FROM http_remote_t ORDER BY i', 0::UBIGINT)
+FROM ducknng_query_rpc('http://127.0.0.1:45458/_ducknng',
+  'SELECT i, i > 3 AS gt_3 FROM http_remote_t ORDER BY i', 0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER, gt_3 BOOLEAN))
 ORDER BY i
 ----
 3	false

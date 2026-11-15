@@ -1,6 +1,6 @@
 # Lifetime and manual resource management
 
-`ducknng` is a low-level DuckDB binding to NNG plus an Arrow IPC-based RPC framework. That means lifetime rules matter, both inside the extension and at the SQL surface.
+`ducknng` serves DuckDB SQL and manifest-declared RPC methods over byte transports. Arrow IPC carries portable table payloads. Lifetime rules apply inside the extension and to SQL-visible resource handles.
 
 This document separates the two.
 
@@ -25,6 +25,37 @@ That is enough for extension-internal lifetime management of:
 - statement-local execution state
 
 `ducknng` already uses those callback hooks for internal cleanup.
+
+### Bind and execution ownership
+
+DuckDB runs a table function's bind callback for `EXPLAIN`, `DESCRIBE`, `PREPARE`, and every plan it builds, sometimes more than once per statement; it runs init and scan only when the plan executes. `ducknng` therefore splits table-function state in two. Bind data is immutable for the life of the plan: it holds copied arguments, the registered function context, and the declared column list. A bind callback validates arguments and declares the schema from local inert information: constant arguments, an explicit declared schema, registry state, or caller-supplied bytes it can decode without running SQL. It never sends a request, executes supplied SQL, advances or fetches a session, consumes or waits on an aio, creates a temporary file, or creates any other external resource.
+
+Init data belongs to one execution. Init or scan performs the request, opens the remote cursor, runs the DuckDB reader, or takes the runtime snapshot. The init-data destructor releases owned replies, results, and cursors. Temporary readers remove their files when the synchronous read finishes. Immutable decoded results from supplied bytes can remain bind-owned. Each `EXECUTE` of a prepared statement gets fresh init data, so repeated executions repeat the effect once each, and a failed execution cannot leave state for the next one. `EXPLAIN ANALYZE` executes the plan and therefore performs the effects.
+
+The guarantee covers callbacks owned by `ducknng`. DuckDB may evaluate caller-supplied argument expressions, such as `nextval(...)` inside an argument, before calling the bind callback; that evaluation belongs to DuckDB, not to the extension.
+
+Table functions whose shape depends on remote or reader output take an explicit `schema` named parameter. It is either a typed NULL STRUCT such as `schema := NULL::STRUCT(id BIGINT, name VARCHAR)`, whose child names and DuckDB logical types are the declared columns, or an Arrow IPC schema descriptor BLOB, which bind decodes locally with nanoarrow and maps through the same Arrow-to-DuckDB type mapping used for received payloads. A descriptor must be a well-formed Arrow IPC stream with a nonempty schema and no record batches; anything else is a bind error. At execution the received Arrow schema must match the declaration in column count, names, and types; a mismatch is an execution error rather than a silent cast. An Arrow descriptor expresses portable Arrow types only, so DuckDB-specific identity that Arrow cannot carry, such as Quack enum or union types, needs a typed STRUCT declaration.
+
+Schema discovery is a separate executed statement. `ducknng_prepare_query(...)` and `ducknng_prepare_query_params(...)` have a fixed one-row result `schema_ipc BLOB`; bind only copies arguments, and each execution sends one `query_prepare` and returns its zero-row Arrow schema stream. A failed `query_prepare` is an execution error. The typical workflow stores the descriptor and passes it to the executor:
+
+```sql
+SET VARIABLE s = (SELECT schema_ipc FROM ducknng_prepare_query(url, sql, 0::UBIGINT));
+SELECT * FROM ducknng_query_rpc(url, sql, 0::UBIGINT, schema := getvariable('s'));
+```
+
+`query_prepare` does not execute the prepared plan, but the remote DuckDB binds the SQL and may evaluate functions while doing so, so discovery is not a purity or security oracle for arbitrary SQL.
+
+`ducknng_query_rpc(...)` owns the whole remote session it opens and closes it on completion, early termination, and failure. `ducknng_fetch_query_table(...)` instead reads from a caller-owned session: bind copies the URL, session id, token, batch limits, TLS id, and declaration without contacting the server, and each execution sends exactly one `fetch` and scans that batch. Repeated executions advance the cursor one batch each. A local failure after a successful fetch, such as a schema mismatch, cannot rewind the cursor, so that batch is consumed. The function never closes the session; the caller closes or cancels it explicitly.
+
+The SQL regressions under `test/sql/` cover inert planning, schema validation,
+prepared reuse, and fresh runtime snapshots. The native integration regression
+`python test/authorizer_prepared_guard.py build/release/ducknng.duckdb_extension`
+checks prepared policy execution, worker-thread context, and SQL-codec admission
+against an external HTTP counter. Run it with each supported native DuckDB
+runtime; it prints the SQL runtime version and native module path.
+`test/body_tempfile_ownership.py` accepts the same extension argument. Its POSIX
+fixture verifies exclusive creation, preservation of a pre-existing file,
+owned-file cleanup, and denial when external access is disabled.
 
 ## 2. What DuckDB does not give us at the SQL-handle level
 
@@ -136,6 +167,8 @@ Sessionful query methods and `request_connection` execution scopes use a runtime
 - `ducknng_execution_pool_max()` returns the current ceiling.
 
 Raising the ceiling lets more concurrent query sessions or nested `query_rpc` table functions hold connections at once. Lowering it caps future growth without dropping connections already in use. A released pooled connection is reset before reuse by dropping connection-local temporary tables and views. This prevents the common temp-object leakage between sessions while keeping the connection handle stable; temp macros and session settings are not reset by this cleanup pass.
+
+Each pooled connection carries at most one runtime-owned execution-context record while it is in use. Request, authorizer, and HTTP route scopes install the record after acquiring the connection and remove it before releasing the connection; session connections install it when the session acquires the connection and remove it when the session releases the connection. The record owns copies of the identity strings. Authorizer and HTTP route records borrow the callback context, which is valid because those scopes run one synchronous `duckdb_query()` and leave only after the result is materialized. Records still present at runtime teardown are freed with the runtime. The runtime's codec connection carries a record only while a body decode runs on it: the decoder takes the codec mutex, copies the record of the connection that requested the decode (if any), runs its prepare, execute, and materialization, then removes the record before releasing the mutex. The copied auth and HTTP pointers stay valid because the requesting connection is blocked in its own synchronous query for that whole window. The codec mutex is not recursive, so codec SQL that itself decodes a SQL-backed body fails with an error instead of waiting on the mutex it holds.
 
 ## 4. What runtime teardown still does for you
 

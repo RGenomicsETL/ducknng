@@ -1,0 +1,239 @@
+# name: test/sql/ducknng_query_bind_schema.test
+# group: [ducknng]
+#
+# ducknng_query_rpc, ducknng_query_rpc_mode and ducknng_query_rpc_params
+# declare their result columns from a required `schema := NULL::STRUCT(...)`.
+# Bind sends nothing: EXPLAIN, DESCRIBE and PREPARE never reach the server.
+# Each execution opens a fresh remote session; every reply schema must match
+# the declaration exactly, and a mismatch closes the remote session.
+# The remote SQL advances a local sequence, so currval counts executions.
+
+require ducknng
+
+statement ok
+CREATE SEQUENCE qbs START 1
+
+statement ok
+SELECT ducknng_start_server('qbs', 'inproc://ducknng-query-bind-schema',
+  1, 134217728, 300000, 0::UBIGINT)
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1 AS id', 0::UBIGINT)
+----
+schema must be a nonempty STRUCT
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1 AS id', 0::UBIGINT, schema := 42)
+----
+schema must be a nonempty STRUCT
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT nextval(''qbs'') AS n', 0::UBIGINT, schema := NULL::STRUCT(n BIGINT))
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT nextval(''qbs'') AS n, ''x'' AS label', 0::UBIGINT,
+  schema := NULL::STRUCT(n BIGINT, label VARCHAR)))
+----
+n	BIGINT
+label	VARCHAR
+
+statement ok
+PREPARE qbs_next AS
+SELECT n FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT nextval(''qbs'') AS n', 0::UBIGINT, schema := NULL::STRUCT(n BIGINT))
+
+statement ok
+PREPARE qbs_next_quack AS
+SELECT n FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT nextval(''qbs'') AS n', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(n BIGINT))
+
+# Nothing above reached the server: the sequence was never advanced.
+statement error
+SELECT currval('qbs')
+----
+currval
+
+query I
+EXECUTE qbs_next
+----
+1
+
+query I
+EXECUTE qbs_next
+----
+2
+
+query I
+EXECUTE qbs_next_quack
+----
+3
+
+query I
+EXECUTE qbs_next_quack
+----
+4
+
+query I
+SELECT currval('qbs')
+----
+4
+
+# Nested and DECIMAL types round-trip under both payload modes.
+query ITIT
+SELECT id, label, (nested).a, CAST(amount AS VARCHAR)
+FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 7::BIGINT AS id, ''seven'' AS label,
+          {''a'': 3}::STRUCT(a INTEGER) AS nested,
+          12.5::DECIMAL(18,4) AS amount', 0::UBIGINT,
+  schema := NULL::STRUCT(id BIGINT, label VARCHAR, nested STRUCT(a INTEGER),
+    amount DECIMAL(18,4)))
+----
+7	seven	3	12.5000
+
+query ITIT
+SELECT id, label, (nested).a, CAST(amount AS VARCHAR)
+FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT 7::BIGINT AS id, ''seven'' AS label,
+          {''a'': 3}::STRUCT(a INTEGER) AS nested,
+          12.5::DECIMAL(18,4) AS amount', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(id BIGINT, label VARCHAR, nested STRUCT(a INTEGER),
+    amount DECIMAL(18,4)))
+----
+7	seven	3	12.5000
+
+# Empty results keep the declared columns.
+query I
+SELECT count(*) FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1::BIGINT AS id WHERE false', 0::UBIGINT, schema := NULL::STRUCT(id BIGINT))
+----
+0
+
+query I
+SELECT count(*) FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT 1::BIGINT AS id WHERE false', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(id BIGINT))
+----
+0
+
+# One chunk per fetch forces several fetch replies.
+statement ok
+SET "ducknng.fetch_batch_chunks" = 1
+
+query II
+SELECT count(*), sum(i) FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT i FROM range(10000) t(i)', 0::UBIGINT, schema := NULL::STRUCT(i BIGINT))
+----
+10000	49995000
+
+query II
+SELECT count(*), sum(i) FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT i FROM range(10000) t(i)', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(i BIGINT))
+----
+10000	49995000
+
+statement ok
+RESET "ducknng.fetch_batch_chunks"
+
+# Parameterized queries execute per execution with the declared schema.
+statement ok
+PREPARE qbs_params AS
+SELECT doubled, tag FROM ducknng_query_rpc_params('inproc://ducknng-query-bind-schema',
+  'SELECT nextval(''qbs'') * 0 + ?::BIGINT * 2 AS doubled, ?::VARCHAR AS tag',
+  struct_pack(p1 := 21::BIGINT, p2 := 'ok'), 0::UBIGINT,
+  schema := NULL::STRUCT(doubled BIGINT, tag VARCHAR))
+
+query I
+SELECT currval('qbs')
+----
+4
+
+query IT
+EXECUTE qbs_params
+----
+42	ok
+
+query IT
+EXECUTE qbs_params
+----
+42	ok
+
+query I
+SELECT currval('qbs')
+----
+6
+
+# Mismatches fail at execution and close the remote session.
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1::BIGINT AS id, 2::BIGINT AS extra', 0::UBIGINT,
+  schema := NULL::STRUCT(id BIGINT))
+----
+Arrow payload has 2 columns but schema declares 1
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1::BIGINT AS ident', 0::UBIGINT, schema := NULL::STRUCT(id BIGINT))
+----
+Arrow column 1 is named 'ident' but schema declares 'id'
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1::INTEGER AS id', 0::UBIGINT, schema := NULL::STRUCT(id BIGINT))
+----
+Arrow column 1 ('id') type does not match the declared schema
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT 1.5::DECIMAL(18,3) AS amount', 0::UBIGINT,
+  schema := NULL::STRUCT(amount DECIMAL(18,4)))
+----
+Arrow column 1 ('amount') type does not match the declared schema
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-query-bind-schema',
+  'SELECT {''a'': 1::BIGINT} AS nested', 0::UBIGINT,
+  schema := NULL::STRUCT(nested STRUCT(a INTEGER)))
+----
+Arrow column 1 ('nested') type does not match the declared schema
+
+statement error
+SELECT * FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT 1::BIGINT AS ident', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(id BIGINT))
+----
+quack column 1 is named 'ident' but schema declares 'id'
+
+statement error
+SELECT * FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT 1.5::DECIMAL(18,3) AS amount', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(amount DECIMAL(18,4)))
+----
+quack column 1 ('amount') type does not match the declared schema
+
+statement error
+SELECT * FROM ducknng_query_rpc_mode('inproc://ducknng-query-bind-schema',
+  'SELECT {''a'': 1::BIGINT} AS nested', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(nested STRUCT(a INTEGER)))
+----
+quack column 1 ('nested') type does not match the declared schema
+
+statement error
+SELECT * FROM ducknng_query_rpc_params('inproc://ducknng-query-bind-schema',
+  'SELECT ?::INTEGER AS v', struct_pack(p1 := 1), 0::UBIGINT,
+  schema := NULL::STRUCT(v BIGINT))
+----
+Arrow column 1 ('v') type does not match the declared schema
+
+query I
+SELECT sessions FROM ducknng_list_servers() WHERE name = 'qbs'
+----
+0
+
+statement ok
+SELECT ducknng_stop_server('qbs')

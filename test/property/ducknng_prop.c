@@ -1717,16 +1717,14 @@ TEST quack_rejects_huge_schema_column_count_fixture(void)
 {
     struct prop_quack_buf payload;
     ducknng_quack_schema schema;
-    struct _duckdb_bind_info bind_info;
     idx_t row_count = 0;
     char *errmsg = NULL;
     int rc;
 
     memset(&schema, 0, sizeof(schema));
-    memset(&bind_info, 0, sizeof(bind_info));
     ASSERT_EQ(0, prop_quack_payload_huge_schema_column_count(&payload));
-    rc = ducknng_quack_payload_bind_columns((duckdb_bind_info)&bind_info,
-        payload.data, payload.len, &schema, &row_count, &errmsg);
+    rc = ducknng_quack_payload_parse_table(payload.data, payload.len, &schema,
+        &row_count, &errmsg);
     ASSERT_NEQ(0, rc);
     ASSERT_EQ((idx_t)0, row_count);
     ASSERT_EQ((idx_t)0, schema.ncols);

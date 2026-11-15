@@ -8,7 +8,7 @@ WITH loaded AS (
   SELECT DISTINCT function_name AS name
   FROM duckdb_functions()
   WHERE function_name LIKE 'ducknng%'
-    AND function_name NOT LIKE 'ducknng__%'
+    AND NOT starts_with(function_name, 'ducknng__')
 ),
 catalog AS (
   SELECT (unnest(functions)).name AS name
@@ -19,6 +19,26 @@ FROM (
   SELECT name FROM loaded
   EXCEPT
   SELECT name FROM catalog
+)
+----
+0
+
+query I
+WITH loaded AS (
+  SELECT DISTINCT function_name AS name
+  FROM duckdb_functions()
+  WHERE starts_with(function_name, 'ducknng')
+    AND NOT starts_with(function_name, 'ducknng__')
+),
+catalog AS (
+  SELECT (unnest(functions)).name AS name
+  FROM read_json_auto('function_catalog/functions.yaml')
+)
+SELECT count(*)::INTEGER
+FROM (
+  SELECT name FROM catalog
+  EXCEPT
+  SELECT name FROM loaded
 )
 ----
 0

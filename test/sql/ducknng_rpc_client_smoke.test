@@ -102,7 +102,9 @@ FROM ducknng_decode_frame(ducknng_run_rpc_raw('ipc:///tmp/ducknng_rpc_client_smo
 1	result	exec
 
 query II
-SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT DISTINCT i, i > 7 AS gt_7 FROM remote_t WHERE i IN (7, 8) ORDER BY i', 0::UBIGINT)
+SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT DISTINCT i, i > 7 AS gt_7 FROM remote_t WHERE i IN (7, 8) ORDER BY i',
+  0::UBIGINT, schema := NULL::STRUCT(i INTEGER, gt_7 BOOLEAN))
 ----
 7	false
 8	true
@@ -127,7 +129,8 @@ SELECT count(*)::INTEGER, sum(i) IS NULL
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT i FROM remote_t WHERE 1 = 0',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER)
 )
 ----
 0	1
@@ -143,7 +146,8 @@ FROM ducknng_query_rpc(
           TIME ''03:04:05.123456'' AS t,
           TIMESTAMP ''2024-01-02 03:04:05.123456'' AS ts,
           123.45::DECIMAL(10,2) AS dec',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(d DATE, t TIME, ts TIMESTAMP, dec DECIMAL(10,2))
 )
 ----
 1	1	1	1
@@ -158,7 +162,9 @@ FROM ducknng_query_rpc(
   'SELECT ''2024-01-02 03:04:05''::TIMESTAMP_S AS ts_s,
           ''2024-01-02 03:04:05.123''::TIMESTAMP_MS AS ts_ms,
           ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS ts_ns',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(ts_s TIMESTAMP_S, ts_ms TIMESTAMP_MS,
+    ts_ns TIMESTAMP_NS)
 )
 ----
 TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP_NS	1	1	1
@@ -168,7 +174,8 @@ SELECT typeof(t_ns), t_ns = '03:04:05.123456789'::TIME_NS
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT ''03:04:05.123456789''::TIME_NS AS t_ns',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(t_ns TIME_NS)
 )
 ----
 TIME_NS	1
@@ -179,7 +186,8 @@ FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT [1, NULL, 3]::INTEGER[] AS xs,
           {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(xs INTEGER[], st STRUCT(a INTEGER, b VARCHAR))
 )
 ----
 1	1	1	1	1
@@ -191,7 +199,9 @@ FROM ducknng_query_rpc(
   'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
           [NULL::STRUCT(a INTEGER, b VARCHAR),
            {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, b VARCHAR),
+    xs STRUCT(a INTEGER, b VARCHAR)[])
 )
 ----
 1	1	1	1	1
@@ -206,7 +216,9 @@ FROM ducknng_query_rpc(
    SELECT 2 AS id, [3, 4]::INTEGER[] AS xs,
           {''a'': 20::INTEGER, ''b'': ''y''} AS st
    ORDER BY id',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(id INTEGER, xs INTEGER[],
+    st STRUCT(a INTEGER, b VARCHAR))
 )
 ----
 1	2	10
@@ -217,7 +229,8 @@ SELECT typeof(tsz), tsz = TIMESTAMPTZ '2024-01-02 03:04:05+00'
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SET TimeZone = ''UTC''; SELECT TIMESTAMPTZ ''2024-01-02 03:04:05+00'' AS tsz',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(tsz TIMESTAMPTZ)
 )
 ----
 TIMESTAMP WITH TIME ZONE	1
@@ -232,7 +245,8 @@ FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT (-170141183460469231731687303715884105728)::HUGEINT AS h,
           170141183460469231731687303715884105727::HUGEINT AS big_pos',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(h DECIMAL(38,0), big_pos DECIMAL(38,0))
 )
 ----
 DECIMAL(38,0)	1	1
@@ -244,7 +258,8 @@ SELECT typeof(u), u, u::UUID = '12345678-1234-5678-1234-567812345678'::UUID
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT ''12345678-1234-5678-1234-567812345678''::UUID AS u',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(u VARCHAR)
 )
 ----
 VARCHAR	12345678-1234-5678-1234-567812345678	1
@@ -257,7 +272,8 @@ FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'CREATE TYPE IF NOT EXISTS mood AS ENUM (''sad'', ''ok'', ''happy'');
    SELECT ''happy''::mood AS e',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(e VARCHAR)
 )
 ----
 VARCHAR	happy	1
@@ -272,7 +288,8 @@ SELECT typeof(m),
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT MAP {''a'': 1, ''b'': 2}::MAP(VARCHAR, INTEGER) AS m',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(m MAP(VARCHAR, INTEGER))
 )
 ----
 MAP(VARCHAR, INTEGER)	a	b	1	2
@@ -283,7 +300,8 @@ SELECT uv
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT union_value(num := 42::INTEGER) AS uv',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(uv UNION(num INTEGER))
 )
 ----
 42
@@ -294,7 +312,8 @@ SELECT iv
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_rpc_client_smoke.ipc',
   'SELECT INTERVAL 1 DAY AS iv',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(iv INTERVAL)
 )
 ----
 1 day
@@ -495,7 +514,8 @@ FROM ducknng_fetch_query_table(
   getvariable('rpc_table_session_token')::VARCHAR,
   0::UBIGINT,
   0::UBIGINT,
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER)
 )
 ----
 6	45
@@ -872,7 +892,9 @@ statement ok
 DROP TABLE rpc_aio_decode_launch
 
 query II
-SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc', 'SELECT DISTINCT i, i > 8 AS gt_8 FROM remote_t WHERE i IN (7, 8, 9) ORDER BY i', 0::UBIGINT)
+SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_rpc_client_smoke.ipc',
+  'SELECT DISTINCT i, i > 8 AS gt_8 FROM remote_t WHERE i IN (7, 8, 9) ORDER BY i',
+  0::UBIGINT, schema := NULL::STRUCT(i INTEGER, gt_8 BOOLEAN))
 ----
 7	false
 8	false

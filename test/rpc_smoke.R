@@ -226,7 +226,11 @@ invisible(DBI::dbExecute(client_con, sprintf("LOAD '%s'", ext_path)))
 quack_rows <- DBI::dbGetQuery(
   client_con,
   sprintf(
-    "SELECT * FROM ducknng_query_rpc_mode('%s', 'SELECT x, x > 1 AS gt_one FROM smoke_table ORDER BY x', 0::UBIGINT, 'ducknng_quack_batch')",
+    paste(
+      "SELECT * FROM ducknng_query_rpc_mode('%s',",
+      "'SELECT x, x > 1 AS gt_one FROM smoke_table ORDER BY x', 0::UBIGINT,",
+      "'ducknng_quack_batch', schema := NULL::STRUCT(x INTEGER, gt_one BOOLEAN))"
+    ),
     ipc_url
   )
 )
@@ -236,7 +240,12 @@ for (mode in c("arrow_ipc_stream", "ducknng_quack_batch")) {
   bulk <- DBI::dbGetQuery(
     client_con,
     sprintf(
-      "SELECT count(*)::INTEGER AS n, min(x)::INTEGER AS mn, max(x)::INTEGER AS mx FROM ducknng_query_rpc_mode('%s', 'SELECT i::INTEGER AS x FROM range(50000) AS t(i)', 0::UBIGINT, '%s')",
+      paste(
+        "SELECT count(*)::INTEGER AS n, min(x)::INTEGER AS mn, max(x)::INTEGER AS mx",
+        "FROM ducknng_query_rpc_mode('%s',",
+        "'SELECT i::INTEGER AS x FROM range(50000) AS t(i)', 0::UBIGINT, '%s',",
+        "schema := NULL::STRUCT(x INTEGER))"
+      ),
       ipc_url,
       mode
     )

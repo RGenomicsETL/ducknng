@@ -1958,30 +1958,23 @@ static int ducknng_method_upload_abort_handler(ducknng_service *svc,
 }
 
 const ducknng_method_descriptor ducknng_method_query_prepare = {
-    "query_prepare",
-    "query",
-    "Prepare a SQL statement and return the output schema without executing",
-    DUCKNNG_TRANSPORT_REQREP,
-    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
-    DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
-    DUCKNNG_RESPONSE_ROWS,
-    DUCKNNG_SESSION_STATELESS,
-    0,
-    DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM | DUCKNNG_RPC_FLAG_END_OF_STREAM,
-    16 * 1024 * 1024,
-    16 * 1024 * 1024,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    1,
-    "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"params\",\"type\":\"struct\",\"nullable\":true,\"semantics\":\"positional_sql_parameters\",\"max_children\":65535}]}",
-    "{\"mode\":\"schema_only\",\"note\":\"Arrow IPC stream with schema and 0 data batches\"}",
-    ducknng_method_query_prepare_handler
+    .name = "query_prepare",
+    .family = "query",
+    .summary = "Prepare one SQL statement and return its schema. SQL binding can have side effects.",
+    .transport_pattern = DUCKNNG_TRANSPORT_REQREP,
+    .request_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
+    .response_payload_format = DUCKNNG_PAYLOAD_ARROW_IPC_STREAM,
+    .response_mode = DUCKNNG_RESPONSE_ROWS,
+    .session_behavior = DUCKNNG_SESSION_STATELESS,
+    .emitted_reply_flags = DUCKNNG_RPC_FLAG_RESULT_ROWS | DUCKNNG_RPC_FLAG_PAYLOAD_ARROW_STREAM |
+                           DUCKNNG_RPC_FLAG_END_OF_STREAM,
+    .max_request_bytes = 16 * 1024 * 1024,
+    .max_reply_bytes = 16 * 1024 * 1024,
+    .mutates_state = 1,
+    .version_introduced = 1,
+    .request_schema_json = "{\"fields\":[{\"name\":\"sql\",\"type\":\"utf8\",\"nullable\":false},{\"name\":\"batch_rows\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"batch_bytes\",\"type\":\"uint64\",\"nullable\":true},{\"name\":\"correlation_id\",\"type\":\"string\",\"nullable\":true},{\"name\":\"serialization_mode\",\"type\":\"string\",\"nullable\":true},{\"name\":\"params\",\"type\":\"struct\",\"nullable\":true,\"semantics\":\"positional_sql_parameters\",\"max_children\":65535}]}",
+    .response_schema_json = "{\"mode\":\"schema_only\",\"note\":\"Arrow IPC stream with schema and 0 data batches\"}",
+    .handler = ducknng_method_query_prepare_handler
 };
 
 const ducknng_method_descriptor ducknng_method_upload_open = {

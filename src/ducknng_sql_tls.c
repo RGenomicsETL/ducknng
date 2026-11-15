@@ -1,6 +1,7 @@
 #include "ducknng_sql_shared.h"
 #include "ducknng_runtime.h"
 #include "ducknng_util.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,10 +27,6 @@ typedef struct {
 typedef struct {
     ducknng_tls_config_row *rows;
     idx_t row_count;
-} ducknng_tls_configs_bind_data;
-
-typedef struct {
-    ducknng_tls_configs_bind_data *bind;
     idx_t offset;
 } ducknng_tls_configs_init_data;
 
@@ -134,8 +131,8 @@ static int ducknng_generate_self_signed_material(const char *cn, int32_t valid_d
     return 0;
 }
 
-static void destroy_tls_configs_bind_data(void *ptr) {
-    ducknng_tls_configs_bind_data *data = (ducknng_tls_configs_bind_data *)ptr;
+static void destroy_tls_configs_init_data(void *ptr) {
+    ducknng_tls_configs_init_data *data = (ducknng_tls_configs_init_data *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -144,11 +141,6 @@ static void destroy_tls_configs_bind_data(void *ptr) {
     }
     if (data->rows) duckdb_free(data->rows);
     duckdb_free(data);
-}
-
-static void destroy_tls_configs_init_data(void *ptr) {
-    ducknng_tls_configs_init_data *data = (ducknng_tls_configs_init_data *)ptr;
-    if (data) duckdb_free(data);
 }
 
 static void ducknng_tls_config_from_files_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
@@ -370,48 +362,11 @@ static void ducknng_set_tls_peer_allowlist_scalar(duckdb_function_info info, duc
 
 static void ducknng_tls_configs_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    ducknng_tls_configs_bind_data *bind;
     duckdb_logical_type type;
-    size_t i;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
         return;
     }
-    bind = (ducknng_tls_configs_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    ducknng_mutex_lock(&ctx->rt->mu);
-    bind->row_count = (idx_t)ctx->rt->tls_config_count;
-    if (bind->row_count > 0) {
-        bind->rows = (ducknng_tls_config_row *)duckdb_malloc(sizeof(*bind->rows) * (size_t)bind->row_count);
-        if (!bind->rows) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            duckdb_free(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory");
-            return;
-        }
-        memset(bind->rows, 0, sizeof(*bind->rows) * (size_t)bind->row_count);
-        for (i = 0; i < (size_t)bind->row_count; i++) {
-            ducknng_tls_config *cfg = ctx->rt->tls_configs[i];
-            bind->rows[i].tls_config_id = cfg ? cfg->tls_config_id : 0;
-            bind->rows[i].source = cfg && cfg->source ? ducknng_strdup(cfg->source) : NULL;
-            bind->rows[i].enabled = cfg ? (bool)cfg->opts.enabled : false;
-            bind->rows[i].has_cert_key_file = cfg && cfg->opts.cert_key_file && cfg->opts.cert_key_file[0];
-            bind->rows[i].has_ca_file = cfg && cfg->opts.ca_file && cfg->opts.ca_file[0];
-            bind->rows[i].has_cert_pem = cfg && cfg->opts.cert_pem && cfg->opts.cert_pem[0];
-            bind->rows[i].has_key_pem = cfg && cfg->opts.key_pem && cfg->opts.key_pem[0];
-            bind->rows[i].has_ca_pem = cfg && cfg->opts.ca_pem && cfg->opts.ca_pem[0];
-            bind->rows[i].has_password = cfg && cfg->opts.password && cfg->opts.password[0];
-            bind->rows[i].auth_mode = cfg ? cfg->opts.auth_mode : 0;
-            bind->rows[i].peer_allowlist_active = cfg ? (bool)cfg->opts.peer_allowlist_active : false;
-            bind->rows[i].peer_allowlist_count = cfg ? (uint64_t)cfg->opts.peer_allowlist_count : 0;
-            bind->rows[i].peer_allowlist_json = cfg && cfg->opts.peer_allowlist_json ? ducknng_strdup(cfg->opts.peer_allowlist_json) : NULL;
-        }
-    }
-    ducknng_mutex_unlock(&ctx->rt->mu);
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "tls_config_id", type);
     duckdb_destroy_logical_type(&type);
@@ -439,26 +394,68 @@ static void ducknng_tls_configs_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "peer_allowlist_json", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_tls_configs_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
 }
 
+/* Snapshot the TLS config table under rt->mu into init-owned rows so a
+ * prepared plan lists the configs present at execution, not at prepare. */
 static void ducknng_tls_configs_init(duckdb_init_info info) {
-    ducknng_tls_configs_bind_data *bind = (ducknng_tls_configs_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_tls_configs_init_data *init = (ducknng_tls_configs_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    ducknng_tls_configs_init_data *init;
+    size_t count;
+    size_t i;
+    if (!ctx || !ctx->rt) {
+        duckdb_init_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    init = (ducknng_tls_configs_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+    ducknng_mutex_lock(&ctx->rt->mu);
+    count = ctx->rt->tls_config_count;
+    if (count > 0) {
+        if (count > SIZE_MAX / sizeof(*init->rows)) goto oom_locked;
+        init->rows = (ducknng_tls_config_row *)duckdb_malloc(sizeof(*init->rows) * count);
+        if (!init->rows) goto oom_locked;
+        memset(init->rows, 0, sizeof(*init->rows) * count);
+        for (i = 0; i < count; i++) {
+            ducknng_tls_config *cfg = ctx->rt->tls_configs[i];
+            ducknng_tls_config_row *row = &init->rows[i];
+            /* Count each row before its strings so cleanup frees partial copies. */
+            init->row_count = (idx_t)(i + 1);
+            if (!cfg) continue;
+            row->tls_config_id = cfg->tls_config_id;
+            if (cfg->source && !(row->source = ducknng_strdup(cfg->source)))
+                goto oom_locked;
+            row->enabled = (bool)cfg->opts.enabled;
+            row->has_cert_key_file = cfg->opts.cert_key_file && cfg->opts.cert_key_file[0];
+            row->has_ca_file = cfg->opts.ca_file && cfg->opts.ca_file[0];
+            row->has_cert_pem = cfg->opts.cert_pem && cfg->opts.cert_pem[0];
+            row->has_key_pem = cfg->opts.key_pem && cfg->opts.key_pem[0];
+            row->has_ca_pem = cfg->opts.ca_pem && cfg->opts.ca_pem[0];
+            row->has_password = cfg->opts.password && cfg->opts.password[0];
+            row->auth_mode = cfg->opts.auth_mode;
+            row->peer_allowlist_active = (bool)cfg->opts.peer_allowlist_active;
+            row->peer_allowlist_count = (uint64_t)cfg->opts.peer_allowlist_count;
+            if (cfg->opts.peer_allowlist_json &&
+                !(row->peer_allowlist_json = ducknng_strdup(cfg->opts.peer_allowlist_json)))
+                goto oom_locked;
+        }
+    }
+    ducknng_mutex_unlock(&ctx->rt->mu);
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_tls_configs_init_data);
+    return;
+oom_locked:
+    ducknng_mutex_unlock(&ctx->rt->mu);
+    destroy_tls_configs_init_data(init);
+    duckdb_init_set_error(info, "ducknng: out of memory");
 }
 
 static void ducknng_tls_configs_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_tls_configs_init_data *init = (ducknng_tls_configs_init_data *)duckdb_function_get_init_data(info);
-    ducknng_tls_configs_bind_data *bind;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
@@ -473,12 +470,11 @@ static void ducknng_tls_configs_scan(duckdb_function_info info, duckdb_data_chun
     int32_t *auth_mode;
     bool *peer_allowlist_active;
     uint64_t *peer_allowlist_count;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!init || init->offset >= init->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = init->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     ids = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     enabled = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
@@ -492,7 +488,7 @@ static void ducknng_tls_configs_scan(duckdb_function_info info, duckdb_data_chun
     peer_allowlist_active = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 10));
     peer_allowlist_count = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
     for (i = 0; i < chunk_size; i++) {
-        ducknng_tls_config_row *row = &bind->rows[init->offset + i];
+        ducknng_tls_config_row *row = &init->rows[init->offset + i];
         ids[i] = row->tls_config_id;
         enabled[i] = row->enabled;
         has_cert_key_file[i] = row->has_cert_key_file;

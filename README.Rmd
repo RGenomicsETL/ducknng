@@ -19,7 +19,7 @@ knitr::knit_hooks$set(document = function(x) {
 # can be loaded. duckknit_start_session() only accepts a db path, not extra
 # CLI flags, so we launch the process directly and register it in duckknit's
 # internal session table.
-options(duckknit.duckdb = Sys.getenv("DUCKDB_CLI", "duckdb"))
+options(duckknit.duckdb = Sys.getenv("DUCKDB_CLI", Sys.which("duckdb")))
 local({
   ns  <- asNamespace("duckknit")
   cmd <- duckknit:::find_duckdb()
@@ -45,7 +45,16 @@ LOAD 'build/release/ducknng.duckdb_extension';
 
 # ducknng
 
-`ducknng` is a pure C DuckDB extension providing a binding to the [NNG](https://nng.nanomsg.org/) scalability protocols. It is inspired by [`nanonext`](https://github.com/r-lib/nanonext) and follows its ergonomic model: transport is chosen by URL scheme, aio handles wrap pending NNG operations as SQL-visible futures, and TLS material may come from filesystem paths or in-memory PEM. On top of the raw socket and transport layer, `ducknng` adds a framed RPC envelope, Arrow IPC tabular payloads, manifest-declared methods, and an HTTP/HTTPS carrier so DuckDB sessions can reach one another over `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`, `ws://`, `wss://`, `http://`, or `https://`. Long-lived handles — servers, sockets, AIO futures, TLS configs, query sessions — are manually managed at the SQL surface.
+`ducknng` is a pure C DuckDB extension that serves SQL and manifest-declared RPC
+methods. Arrow IPC carries portable tabular payloads; the RPC envelope defines
+method and session semantics. [NNG](https://nng.nanomsg.org/), HTTP/HTTPS, and
+browser frame carriers move the bytes.
+
+The URL scheme selects transport: `inproc://`, `ipc://`, `tcp://`, `tls+tcp://`,
+`ws://`, `wss://`, `http://`, or `https://`. An AIO handle represents one pending
+operation. TLS material can come from filesystem paths or in-memory PEM.
+SQL callers explicitly close servers, sockets, AIO handles, TLS configurations,
+and query sessions when they no longer need them.
 
 It also draws on [`mangoro`](https://github.com/sounkou-bioinfo/mangoro) for the thin versioned RPC envelope design. The optional `ducknng_quack_batch` row serializer is informed by DuckDB's experimental [`quack`](https://github.com/duckdb/duckdb-quack) extension and related Quack client work such as [`@quack-protocol/sdk`](https://github.com/tobilg/quack-protocol) and [`adbc-driver-quack`](https://github.com/gizmodata/adbc-driver-quack). In ducknng today, that Quack-derived encoding is a row-payload mode inside the ducknng RPC/session protocol; it is not yet a full Quack `POST /quack` / `application/vnd.duckdb` server or client.
 
@@ -203,7 +212,7 @@ SELECT CASE WHEN ducknng_drop_http_profile('tour-profile')
   THEN 1 ELSE 0 END AS profile_dropped;
 ```
 
-**Query session: open, fetch Arrow IPC, parse the batch.** `ducknng_open_query` returns a `session_id` + `session_token`. `ducknng_fetch_query_table` decodes the first Arrow batch directly as rows. The raw fetch frame carries the same Arrow bytes as a BLOB for callers that need to forward or inspect the payload.
+**Query session: open, fetch Arrow IPC, parse the batch.** `ducknng_open_query` returns a `session_id` + `session_token`. `ducknng_fetch_query_table` uses a declared schema and fetches one Arrow batch during execution. The caller controls the session's close or cancel operation. Raw fetch returns the Arrow bytes as a BLOB for forwarding or inspection.
 
 ```{duckdb collapse=TRUE, comment=""}
 CREATE TEMP TABLE tour_session AS
@@ -223,7 +232,8 @@ FROM ducknng_fetch_query_table(
   getvariable('tour_url'),
   getvariable('tour_sid')::UBIGINT,
   getvariable('tour_token')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT
+  0::UBIGINT, 0::UBIGINT, getvariable('tour_tls')::UBIGINT,
+  schema := NULL::STRUCT(i BIGINT, sq BIGINT)
 );
 ```
 
@@ -636,7 +646,8 @@ SELECT *
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_readme_rpc.ipc',
   'SELECT i, i > 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER, gt_10 BOOLEAN)
 );
 ```
 
@@ -658,24 +669,46 @@ FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_readme_rpc.ipc',
   'SELECT i FROM rpc_demo_t WHERE i >= ? ORDER BY i',
   struct_pack(minimum := 11::INTEGER),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER)
 );
 
+-- This executed statement requests a schema descriptor from the server.
+SET VARIABLE rpc_result_schema = (
+  SELECT schema_ipc
+  FROM ducknng_prepare_query_params(
+    'ipc:///tmp/ducknng_readme_rpc.ipc',
+    'SELECT i FROM rpc_demo_t WHERE i >= ?',
+    struct_pack(minimum := 11::INTEGER),
+    0::UBIGINT
+  )
+);
+
+-- DESCRIBE uses the stored descriptor without sending another request.
 DESCRIBE SELECT *
-FROM ducknng_prepare_query_params(
+FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_readme_rpc.ipc',
   'SELECT i FROM rpc_demo_t WHERE i >= ?',
   struct_pack(minimum := 11::INTEGER),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := getvariable('rpc_result_schema')
 );
 ```
 
-The query helpers discover the remote result schema during DuckDB bind, which
-may happen more than once; use them for read-only or idempotent SQL. The
-fixed-schema `run_rpc` helpers send `exec` during scan, so `EXPLAIN` does not
-perform the remote statement. This avoids bind-time mutation but does not make
-a network write exactly once: after a lost reply, retry policy belongs to the
-application.
+Query helpers require a result schema: either a typed `STRUCT` or an Arrow
+schema descriptor obtained in a separate executed statement. They validate
+received columns before writing output. The schema is an output contract,
+not a cast request. Each execution opens a fresh query session and owns its
+cleanup.
+
+`EXPLAIN`, `DESCRIBE`, and `PREPARE` do not send these client requests.
+`EXPLAIN ANALYZE` executes the plan. Pass inert arguments: DuckDB can evaluate
+effectful argument expressions before it calls an extension binder.
+
+Schema discovery prepares SQL on the server and can invoke functions during
+SQL binding. It is an explicit operation, not a read-only security boundary.
+Network writes are not exactly-once operations: after a lost reply, retry
+policy belongs to the application.
 
 You can also request the Quack-derived batch serializer over the same session contract. Unlike upstream [Quack](https://github.com/duckdb/duckdb-quack), ducknng keeps transport choice separate from row serialization, so the same `ducknng_quack_batch` mode can ride over `http`, `tcp`, `ipc`, or `ws`. Version and schema compatibility belong to the negotiated ducknng session contract rather than to a suffix on the serializer token; full Quack protocol traffic uses `application/vnd.duckdb` messages and negotiates `quackVersion` during the connection exchange, but this fetch payload is not wrapped in that Quack connection envelope. `ducknng.fetch_batch_chunks` controls the default number of DuckDB chunks requested per fetch; it defaults to 12 and applies to Arrow IPC and `ducknng_quack_batch` alike unless the client sends an explicit `batch_rows` hint.
 
@@ -685,7 +718,8 @@ FROM ducknng_query_rpc_mode(
   'ipc:///tmp/ducknng_readme_rpc.ipc',
   'SELECT i, i > 10 AS gt_10 FROM rpc_demo_t ORDER BY i',
   0::UBIGINT,
-  'ducknng_quack_batch'
+  'ducknng_quack_batch',
+  schema := NULL::STRUCT(i INTEGER, gt_10 BOOLEAN)
 );
 ```
 
@@ -700,7 +734,8 @@ FROM ducknng_query_rpc_mode(
   'ipc:///tmp/ducknng_readme_rpc.ipc',
   'SELECT {''a'': 7::INTEGER, ''xs'': [1,2,3]::INTEGER[]} AS st',
   0::UBIGINT,
-  'ducknng_quack_batch'
+  'ducknng_quack_batch',
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, xs INTEGER[]))
 );
 ```
 
@@ -719,11 +754,21 @@ FROM ducknng_query_rpc(
           123.45::DECIMAL(10,2) AS dec,
           [1, NULL, 3]::INTEGER[] AS xs,
           {''a'': 7::INTEGER, ''b'': ''bee''} AS st',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(
+    d DATE, ts TIMESTAMP, dec DECIMAL(10,2), xs INTEGER[],
+    st STRUCT(a INTEGER, b VARCHAR)
+  )
 );
 ```
 
-`ducknng_parse_body(...)` decodes content-type-tagged BLOBs. The built-in providers cover Arrow IPC, JSON, ducknng frames, the ducknng `application/vnd.ducknng.quack-batch` batch media type, and a text/raw fallback.
+`ducknng_parse_body(...)` decodes content-type-tagged BLOBs. Text, forms, frames,
+Arrow IPC, Quack batches, and native CSV/TSV parsing derive columns from supplied
+bytes without SQL or temporary files.
+
+JSON, NDJSON, and Parquet need a declared schema because their decoders invoke
+DuckDB SQL during execution. Registered SQL codecs declare `value VARCHAR`
+locally and invoke their SQL function during execution.
 
 ```{duckdb collapse=TRUE, comment=""}
 SELECT provider, output FROM ducknng_list_codecs() ORDER BY provider;
@@ -731,9 +776,52 @@ SELECT provider, output FROM ducknng_list_codecs() ORDER BY provider;
 SELECT a, b
 FROM ducknng_parse_body(
   '[{"a":1,"b":"x"},{"a":2,"b":"y"}]'::BLOB,
-  'application/json; charset=utf-8'
+  'application/json; charset=utf-8',
+  schema := NULL::STRUCT(a UBIGINT, b VARCHAR)
 )
 ORDER BY a;
+
+SELECT * FROM ducknng_parse_body(
+  encode('id,name' || chr(10) || '1,Ada'), 'text/csv'
+);
+```
+
+The `ducknng_parse_csv()`, `ducknng_parse_tsv()`, and `ducknng_parse_parquet()`
+aliases use DuckDB's readers through temporary files. Each needs a declared
+schema. Bind creates no file. Execution creates an exclusive temporary file,
+reads it, and removes it. DuckDB's external-access policy applies.
+
+```{duckdb collapse=TRUE, comment=""}
+SET VARIABLE readme_csv = encode('id,name' || chr(10) || '1,Ada');
+SET VARIABLE readme_tsv = encode(
+  replace(decode(getvariable('readme_csv')), ',', chr(9))
+);
+
+COPY (SELECT 1::BIGINT AS id, 'Ada' AS name)
+TO 'build/readme-codec.parquet' (FORMAT PARQUET);
+SET VARIABLE readme_parquet = (
+  SELECT content FROM read_blob('build/readme-codec.parquet')
+);
+
+SELECT 'csv' AS format, * FROM ducknng_parse_csv(
+  getvariable('readme_csv'),
+  schema := NULL::STRUCT(id BIGINT, name VARCHAR)
+)
+UNION ALL
+SELECT 'tsv', * FROM ducknng_parse_tsv(
+  getvariable('readme_tsv'),
+  schema := NULL::STRUCT(id BIGINT, name VARCHAR)
+)
+UNION ALL
+SELECT 'parquet', * FROM ducknng_parse_parquet(
+  getvariable('readme_parquet'),
+  schema := NULL::STRUCT(id BIGINT, name VARCHAR)
+)
+ORDER BY format;
+```
+
+```{r body-reader-cleanup, include=FALSE}
+unlink("build/readme-codec.parquet")
 ```
 
 ### Raw frame helpers
@@ -848,7 +936,8 @@ SELECT * FROM ducknng_fetch_query_table(
   'ipc:///tmp/ducknng_readme_session.ipc',
   getvariable('sid')::UBIGINT,
   getvariable('stok')::VARCHAR,
-  0::UBIGINT, 0::UBIGINT, 0::UBIGINT
+  0::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(id INTEGER)
 );
 
 -- Next fetch returns the exhausted control reply.
@@ -1099,6 +1188,17 @@ FROM ducknng_ncurl(
   getvariable('tls_http')::UBIGINT
 );
 
+-- Decode an HTTPS response with a declared output schema.
+SELECT * FROM ducknng_ncurl_table(
+  'https://127.0.0.1:18443/echo',
+  'POST',
+  '[{"name":"Content-Type","value":"application/json"}]',
+  '[{"id":1,"name":"Ada"}]'::BLOB,
+  2000,
+  getvariable('tls_http')::UBIGINT,
+  schema := NULL::STRUCT(id UBIGINT, name VARCHAR)
+);
+
 SELECT ducknng_drop_tls_config(getvariable('tls_http')::UBIGINT);
 ```
 
@@ -1112,7 +1212,14 @@ if (file.exists(pidfile)) {
 unlink(c(script, logfile, cafile))
 ```
 
-`ducknng_ncurl_aio(...)` is the unary async form and still completes with the full response body. The `ducknng_ncurl_stream_open_aio(...)` / `ducknng_ncurl_stream_recv_aio(...)` family below is the incremental form; `ducknng_ncurl_table(...)` parses a complete response body through the codec layer.
+`ducknng_ncurl_table(...)` needs the `schema` declaration. Bind sends no request.
+Each execution resolves the profile and TLS configuration, requests the response,
+and checks its decoded columns against the declaration. The optional
+`profile_id := ...` argument selects an outbound HTTP profile.
+
+`ducknng_ncurl_aio(...)` completes with the full response body.
+`ducknng_ncurl_stream_open_aio(...)` and `ducknng_ncurl_stream_recv_aio(...)` deliver
+incremental response chunks.
 
 ### `ducknng_start_server` on `http://` and `https://`
 

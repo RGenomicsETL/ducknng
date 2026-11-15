@@ -46,8 +46,8 @@ FROM ducknng_get_rpc_manifest(
 ----
 1	1	1	1	1
 
-# Registry policy is locally inspectable and truthful: query_open can execute
-# arbitrary DuckDB SQL, whereas query_prepare is stateless and non-mutating.
+# Both SQL execution and SQL binding can have side effects.
+# Schema discovery remains stateless but declares possible state changes.
 query TTIIII
 SELECT name, session_behavior, opens_session, mutates_state, idempotent, disabled
 FROM ducknng_list_methods()
@@ -55,7 +55,7 @@ WHERE name IN ('query_open', 'query_prepare')
 ORDER BY name
 ----
 query_open	opens_session	true	true	false	false
-query_prepare	stateless	false	false	false	false
+query_prepare	stateless	false	true	false	false
 
 # The params STRUCT is a typed positional tuple. Child names are descriptive;
 # child order determines ? binding order.
@@ -75,7 +75,9 @@ FROM ducknng_query_rpc_params(
     p4 := from_hex('00ff10'),
     p5 := 12345.678::DECIMAL(18,3)
   ),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(null_ok BOOLEAN, list_ok BOOLEAN, struct_ok BOOLEAN,
+    blob_hex VARCHAR, decimal_text VARCHAR)
 )
 ----
 true	true	true	00FF10	12345.678
@@ -92,7 +94,8 @@ FROM ducknng_query_rpc_params(
     p2 := [10, 20, 30]::INTEGER[3],
     p3 := union_value(s := 'yes')
   ),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(map_b INTEGER, array_2 INTEGER, union_tag VARCHAR)
 )
 ----
 2	20	s
@@ -105,7 +108,8 @@ FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT ?::INTEGER[3] AS remote_array',
   struct_pack(p1 := [10, 20, 30]::INTEGER[3]),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(remote_array INTEGER[3])
 )
 ----
 20
@@ -117,7 +121,8 @@ FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT 42::INTEGER AS answer',
   NULL::STRUCT(p1 INTEGER),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(answer INTEGER)
 )
 ----
 42
@@ -129,7 +134,8 @@ FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT ?::VARCHAR AS supplied',
   struct_pack(p1 := '''; DROP TABLE important; --'),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(supplied VARCHAR)
 )
 ----
 '; DROP TABLE important; --
@@ -140,7 +146,8 @@ FROM ducknng_query_rpc_params(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT ?::INTEGER AS a, ?::INTEGER AS b',
   struct_pack(p1 := 1),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(a INTEGER, b INTEGER)
 )
 ----
 ducknng: SQL expects 2 parameter(s), request supplied 1
@@ -154,7 +161,8 @@ FROM ducknng_query_rpc_params(
   'CREATE TABLE parameterized_open_must_not_run(i INTEGER);
    SELECT ?::INTEGER AS i',
   struct_pack(p1 := 1),
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER)
 )
 ----
 ducknng: parameterized query_open requires exactly one SQL statement
@@ -166,30 +174,50 @@ FROM ducknng_query_rpc(
   'SELECT count(*)::INTEGER AS n
    FROM duckdb_tables()
    WHERE table_name = ''parameterized_open_must_not_run''',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(n INTEGER)
 )
 ----
 0
 
-# query_prepare returns a zero-row Arrow stream carrying the remote schema.
-query TT
-SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM ducknng_prepare_query(
+# query_prepare returns one schema_ipc descriptor carrying the remote schema;
+# the descriptor declares the columns of a later query_rpc.
+statement ok
+SET VARIABLE pb_prepare_schema = (SELECT schema_ipc FROM ducknng_prepare_query(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT 42::INTEGER AS answer, ''x''::VARCHAR AS label',
   0::UBIGINT
+))
+
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_query_rpc(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT 42::INTEGER AS answer, ''x''::VARCHAR AS label',
+  0::UBIGINT,
+  schema := getvariable('pb_prepare_schema')
 ))
 ----
 answer	INTEGER
 label	VARCHAR
 
-query TT
-SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM ducknng_prepare_query_params(
+statement ok
+SET VARIABLE pb_prepare_params_schema = (SELECT schema_ipc
+FROM ducknng_prepare_query_params(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT ?::BIGINT AS answer',
   struct_pack(p1 := 42::BIGINT),
   0::UBIGINT
+))
+
+query TT
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM ducknng_query_rpc_params(
+  'ipc:///tmp/ducknng_parameter_binding.ipc',
+  'SELECT ?::BIGINT AS answer',
+  struct_pack(p1 := 42::BIGINT),
+  0::UBIGINT,
+  schema := getvariable('pb_prepare_params_schema')
 ))
 ----
 answer	BIGINT
@@ -212,7 +240,8 @@ FROM ducknng_query_rpc(
   'SELECT count(*)::INTEGER AS n
    FROM duckdb_tables()
    WHERE table_name = ''prepare_must_not_run''',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(n INTEGER)
 )
 ----
 0
@@ -243,7 +272,8 @@ SELECT n
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT count(*)::INTEGER AS n FROM parameterized_write',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(n INTEGER)
 )
 ----
 0
@@ -264,7 +294,8 @@ SELECT n
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_parameter_binding.ipc',
   'SELECT count(*)::INTEGER AS n FROM parameterized_write',
-  0::UBIGINT
+  0::UBIGINT,
+  schema := NULL::STRUCT(n INTEGER)
 )
 ----
 1

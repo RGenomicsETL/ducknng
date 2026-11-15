@@ -1,0 +1,208 @@
+# name: test/sql/ducknng_ncurl_table_bind.test
+# group: [ducknng]
+#
+# ducknng_ncurl_table declares its columns from `schema` and sends its request
+# during execution. Every route response advances the ncurl_hits sequence, so
+# last_value counts the requests the server answered.
+
+require ducknng
+
+statement ok
+CREATE SEQUENCE ncurl_hits START 1
+
+query I
+SELECT CASE
+  WHEN ducknng_start_server('ncurl_bind', 'http://127.0.0.1:0/_ducknng', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE ncurl_base = replace(
+  (SELECT listen FROM ducknng_list_servers() WHERE name = 'ncurl_bind')::VARCHAR,
+  '/_ducknng', '')
+
+query I
+SELECT CASE WHEN ducknng_register_http_route('ncurl_bind', 'GET', '/text',
+  'SELECT 200 AS status, ''text/plain; charset=utf-8'' AS content_type,
+          nextval(''ncurl_hits'')::VARCHAR AS body_text') THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_register_http_route('ncurl_bind', 'GET', '/json',
+  'SELECT 200 AS status, ''application/json'' AS content_type,
+          ''[{"n":'' || nextval(''ncurl_hits'') || '',"s":"x"}]'' AS body_text') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE ncurl_text_url = getvariable('ncurl_base')::VARCHAR || '/text'
+
+statement ok
+SET VARIABLE ncurl_json_url = getvariable('ncurl_base')::VARCHAR || '/json'
+
+query I
+SELECT last_value IS NULL FROM duckdb_sequences() WHERE sequence_name = 'ncurl_hits'
+----
+true
+
+# Planning, description, and preparation send no request.
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(body_text VARCHAR))
+
+query TT
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL,
+    2000, 0::UBIGINT, schema := NULL::STRUCT(body_text VARCHAR)))
+----
+body_text	VARCHAR
+
+statement ok
+PREPARE ncurl_text AS
+SELECT body_text FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(body_text VARCHAR))
+
+# A missing schema fails locally.
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000, 0::UBIGINT)
+----
+schema must be a nonempty STRUCT
+
+query I
+SELECT last_value IS NULL FROM duckdb_sequences() WHERE sequence_name = 'ncurl_hits'
+----
+true
+
+# Each execution sends one fresh request.
+
+query T
+EXECUTE ncurl_text
+----
+1
+
+query T
+EXECUTE ncurl_text
+----
+2
+
+query I
+SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'ncurl_hits'
+----
+2
+
+statement ok
+DEALLOCATE ncurl_text
+
+# JSON integers infer as UBIGINT; the declared schema must say so.
+
+query IT
+SELECT n, s FROM ducknng_ncurl_table(getvariable('ncurl_json_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(n UBIGINT, s VARCHAR))
+----
+3	x
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_json_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(n BIGINT, s VARCHAR))
+----
+ducknng:
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_json_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(m UBIGINT, s VARCHAR))
+----
+ducknng:
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_json_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(n UBIGINT))
+----
+ducknng:
+
+# Fixed text layout mismatches.
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(body VARCHAR))
+----
+is named 'body' but the body column is 'body_text'
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(body_text BLOB))
+----
+does not match the body column type
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_text_url'), 'GET', NULL, NULL, 2000,
+  0::UBIGINT, schema := NULL::STRUCT(body_text VARCHAR, extra VARCHAR))
+----
+declared schema has 2 columns
+
+# Every mismatch was detected after one real request.
+
+query I
+SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'ncurl_hits'
+----
+9
+
+# A schema-only Arrow IPC reply is an empty result with declared columns.
+
+query I
+SELECT CASE WHEN ducknng_register_exec_method() THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE ncurl_mount = (SELECT listen FROM ducknng_list_servers() WHERE name = 'ncurl_bind')
+
+statement ok
+CREATE TABLE ncurl_arrow_reply AS
+SELECT schema_ipc FROM ducknng_prepare_query(getvariable('ncurl_mount')::VARCHAR,
+  'SELECT 1::INTEGER AS k, ''a''::VARCHAR AS v', 0::UBIGINT)
+
+statement ok
+SET VARIABLE ncurl_arrow_schema = (SELECT schema_ipc FROM ncurl_arrow_reply)
+
+query I
+SELECT CASE WHEN ducknng_register_http_route('ncurl_bind', 'GET', '/arrow',
+  'SELECT 200 AS status, ''application/vnd.apache.arrow.stream'' AS content_type,
+          (SELECT schema_ipc FROM ncurl_arrow_reply) AS body') THEN 1 ELSE 0 END
+----
+1
+
+query IIT
+SELECT count(*), count(k), string_agg(v, ',')
+FROM ducknng_ncurl_table(getvariable('ncurl_base')::VARCHAR || '/arrow', 'GET', NULL, NULL,
+  2000, 0::UBIGINT, schema := getvariable('ncurl_arrow_schema'))
+----
+0	0	NULL
+
+query TT
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_base')::VARCHAR || '/arrow',
+    'GET', NULL, NULL, 2000, 0::UBIGINT, schema := NULL::STRUCT(k INTEGER, v VARCHAR)))
+----
+k	INTEGER
+v	VARCHAR
+
+statement error
+SELECT * FROM ducknng_ncurl_table(getvariable('ncurl_base')::VARCHAR || '/arrow', 'GET', NULL,
+  NULL, 2000, 0::UBIGINT, schema := NULL::STRUCT(k BIGINT, v VARCHAR))
+----
+ducknng:
+
+statement ok
+DROP TABLE ncurl_arrow_reply
+
+query I
+SELECT CASE WHEN ducknng_stop_server('ncurl_bind') THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+DROP SEQUENCE ncurl_hits

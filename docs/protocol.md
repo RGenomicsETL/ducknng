@@ -30,7 +30,7 @@ PUB/SUB is reserved for future server-originated fanout at the manifest-declared
 
 ## Method families
 
-The initial method families are discovery and control, optional unary SQL execution, and session-based query execution. The always-on built-ins are `manifest`, `handshake`, `query_prepare`, `query_open`, `fetch`, `close`, and `cancel`. `query_prepare` accepts exactly one statement and returns a zero-row Arrow stream carrying the prepared result schema; it never executes the statement. `exec` is opt-in and returns unary rows or execution metadata. `query_open` starts the session path for large or incremental results. Names such as `server_info` remain reserved until they exist in the registry and manifest.
+The initial method families are discovery and control, optional unary SQL execution, and session-based query execution. The always-on built-ins are `manifest`, `handshake`, `query_prepare`, `query_open`, `fetch`, `close`, and `cancel`. `query_prepare` accepts exactly one statement and returns a schema-only Arrow IPC stream. It does not run the SQL execution plan. SQL binding can invoke functions with side effects. `exec` is opt-in and returns unary rows or execution metadata. `query_open` starts the session path for large or incremental results. Names such as `server_info` remain reserved until they exist in the registry and manifest.
 
 ## The query session family
 
@@ -52,7 +52,13 @@ Logical-type compatibility is narrower than the set of internal ids present in e
 
 `query_open` is a streaming lifecycle, not a read-only privilege. It accepts DuckDB SQL and its descriptor truthfully reports `mutates_state = true`; multi-statement SQL may execute leading statements before opening the final result. Registering or withholding `exec` only controls the unary exec method. Hosts that require read-only service must enforce that through the SQL authorizer or the capabilities of the injected DuckDB connection.
 
-The SQL client helpers reflect DuckDB table-function planning. `ducknng_query_rpc(...)` and `ducknng_query_rpc_params(...)` need the remote result schema during bind, so DuckDB planning can open and fetch a remote query more than once. They are convenience surfaces for read-only or otherwise idempotent SQL. `ducknng_prepare_query(...)` and `ducknng_prepare_query_params(...)` also contact the server during bind, but the server only prepares one statement and returns its schema. `ducknng_run_rpc(...)` and `ducknng_run_rpc_params(...)` have a fixed result schema and defer the remote `exec` call until scan; `EXPLAIN` does not execute them. That prevents bind-time mutation, but it is not distributed exactly-once delivery: a lost reply can leave the caller uncertain whether the remote statement committed, and retries require application-level idempotency or deduplication.
+With inert arguments, the SQL client table helpers send no request during `EXPLAIN`, `DESCRIBE`, or `PREPARE`. Their bind callbacks validate arguments and declare columns locally. DuckDB can evaluate caller-supplied expressions before an extension binder runs. `EXPLAIN ANALYZE` intentionally executes. `docs/lifetime.md` defines ownership.
+
+`ducknng_query_rpc(...)`, `ducknng_query_rpc_params(...)`, and `ducknng_query_rpc_mode(...)` require a named `schema`: a typed STRUCT or a schema-only Arrow IPC BLOB. Each execution opens a fresh session, fetches its batches, and owns session cleanup. Received column counts, names, and types must match the declaration before output vectors are written. `ducknng_fetch_query_table(...)` takes the same declaration and sends exactly one `fetch` per execution. Its session remains caller-owned, including after errors or early termination.
+
+`ducknng_prepare_query(...)` and `ducknng_prepare_query_params(...)` return one `schema_ipc BLOB` row during execution. Each execution sends `query_prepare` and returns the schema-only Arrow stream. Store that descriptor in a separate executed statement before using it as `schema`. Discovery can have side effects because remote SQL binding can invoke functions.
+
+`ducknng_run_rpc(...)` and `ducknng_run_rpc_params(...)` have fixed result columns and send the remote `exec` call once per execution. This is not distributed exactly-once delivery. A lost reply can leave the caller uncertain whether the remote statement committed. Retries require application-level idempotency or deduplication.
 
 The current contract deliberately does not promise multiplexed cursors inside one session, server-push streaming, or capability-by-obscurity session ids. One session represents one opened query lifecycle. Every subsequent `fetch`, `close`, or `cancel` call names that session explicitly and proves ownership with the session token returned by `query_open`. The session id is only a lookup key; the bearer token is the session-scoped capability, and deployments that expose the service beyond a trusted boundary must protect it with an appropriate transport such as TLS.
 
@@ -120,7 +126,7 @@ The error surface is divided by abstraction level. The rule is simple: the lower
 
 **Configuration and lifecycle mutators** (service start/stop, TLS registration, registry and method-auth changes, allowlist and authorizer registration) throw a DuckDB exception for missing IDs, invalid arguments, or internal state violations. These are programmer or configuration errors for which in-band rows would add no diagnostic value. The correct recovery action is to fix the caller, not to branch on `ok`.
 
-**Dynamic-schema table helpers** throw at bind time when required configuration is absent, because DuckDB requires the result schema to be fixed at bind time and a NULL schema cannot be returned.
+**Declared-schema table helpers** reject a missing or invalid `schema` during bind. The declaration must be a nonempty STRUCT or a valid schema-only Arrow IPC BLOB. A received schema that differs from the declaration raises an execution error.
 
 **Scalar frame accessors** (`ducknng_frame_error_text`, `ducknng_frame_name`, `ducknng_frame_type`, and similar) return NULL for absent or invalid frames rather than throwing. This is the correct SQL behavior for projection and filtering use cases.
 

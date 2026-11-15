@@ -36,18 +36,15 @@ typedef struct {
     char *response_schema_json;
 } ducknng_method_row;
 
+/* The live registry is enumerated per execution; bind only declares columns. */
 typedef struct {
     ducknng_method_row *rows;
     idx_t row_count;
-} ducknng_methods_bind_data;
-
-typedef struct {
-    ducknng_methods_bind_data *bind;
     idx_t offset;
 } ducknng_methods_init_data;
 
-static void destroy_methods_bind_data(void *ptr) {
-    ducknng_methods_bind_data *data = (ducknng_methods_bind_data *)ptr;
+static void destroy_methods_init_data(void *ptr) {
+    ducknng_methods_init_data *data = (ducknng_methods_init_data *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -64,11 +61,6 @@ static void destroy_methods_bind_data(void *ptr) {
     }
     if (data->rows) duckdb_free(data->rows);
     duckdb_free(data);
-}
-
-static void destroy_methods_init_data(void *ptr) {
-    ducknng_methods_init_data *data = (ducknng_methods_init_data *)ptr;
-    if (data) duckdb_free(data);
 }
 
 static int ducknng_strdup_field(char **out, const char *value) {
@@ -394,46 +386,11 @@ static void ducknng_unregister_family_scalar(duckdb_function_info info, duckdb_d
 
 static void ducknng_methods_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    ducknng_methods_bind_data *bind;
     duckdb_logical_type type;
-    size_t i;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
         return;
     }
-    bind = (ducknng_methods_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-
-    ducknng_mutex_lock(&ctx->rt->mu);
-    bind->row_count = (idx_t)ctx->rt->registry.method_count;
-    if (bind->row_count > 0) {
-        bind->rows = (ducknng_method_row *)duckdb_malloc(sizeof(*bind->rows) * (size_t)bind->row_count);
-        if (!bind->rows) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            duckdb_free(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory");
-            return;
-        }
-        memset(bind->rows, 0, sizeof(*bind->rows) * (size_t)bind->row_count);
-        for (i = 0; i < (size_t)bind->row_count; i++) {
-            const ducknng_method_descriptor *m = ctx->rt->registry.methods[i];
-            ducknng_method_projection view;
-
-            ducknng_method_descriptor_project(m, &view);
-            if (!ducknng_method_row_copy(&bind->rows[i], &view)) {
-                ducknng_mutex_unlock(&ctx->rt->mu);
-                destroy_methods_bind_data(bind);
-                duckdb_bind_set_error(info,
-                    "ducknng: out of memory copying method descriptor");
-                return;
-            }
-        }
-    }
-    ducknng_mutex_unlock(&ctx->rt->mu);
 
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "name", type);
@@ -468,25 +425,56 @@ static void ducknng_methods_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
     duckdb_bind_add_result_column(info, "version_introduced", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_methods_bind_data);
 }
 
 static void ducknng_methods_init(duckdb_init_info info) {
-    ducknng_methods_bind_data *bind = (ducknng_methods_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_methods_init_data *init = (ducknng_methods_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    ducknng_methods_init_data *init;
+    ducknng_runtime *rt;
+    size_t i;
+    if (!ctx || !ctx->rt) {
+        duckdb_init_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    rt = ctx->rt;
+    init = (ducknng_methods_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+
+    ducknng_mutex_lock(&rt->mu);
+    if (rt->registry.method_count > 0) {
+        init->rows = (ducknng_method_row *)duckdb_malloc(sizeof(*init->rows) * rt->registry.method_count);
+        if (!init->rows) {
+            ducknng_mutex_unlock(&rt->mu);
+            duckdb_free(init);
+            duckdb_init_set_error(info, "ducknng: out of memory");
+            return;
+        }
+        memset(init->rows, 0, sizeof(*init->rows) * rt->registry.method_count);
+        init->row_count = (idx_t)rt->registry.method_count;
+        for (i = 0; i < rt->registry.method_count; i++) {
+            ducknng_method_projection view;
+
+            ducknng_method_descriptor_project(rt->registry.methods[i], &view);
+            if (!ducknng_method_row_copy(&init->rows[i], &view)) {
+                ducknng_mutex_unlock(&rt->mu);
+                destroy_methods_init_data(init);
+                duckdb_init_set_error(info,
+                    "ducknng: out of memory copying method descriptor");
+                return;
+            }
+        }
+    }
+    ducknng_mutex_unlock(&rt->mu);
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_methods_init_data);
 }
 
 static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_methods_init_data *init = (ducknng_methods_init_data *)duckdb_function_get_init_data(info);
-    ducknng_methods_bind_data *bind;
     duckdb_vector name_col;
     duckdb_vector family_col;
     duckdb_vector summary_col;
@@ -514,13 +502,12 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
     idx_t chunk_size;
     idx_t i;
 
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!init || init->offset >= init->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
 
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = init->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
 
     name_col = duckdb_data_chunk_get_vector(output, 0);
@@ -548,7 +535,7 @@ static void ducknng_methods_scan(duckdb_function_info info, duckdb_data_chunk ou
     version_introduced = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 22));
 
     for (i = 0; i < chunk_size; i++) {
-        ducknng_method_row *row = &bind->rows[init->offset + i];
+        ducknng_method_row *row = &init->rows[init->offset + i];
 
         ducknng_methods_assign_string(name_col, i, row->name);
         ducknng_methods_assign_string(family_col, i, row->family);

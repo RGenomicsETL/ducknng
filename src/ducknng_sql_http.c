@@ -23,19 +23,19 @@ typedef struct {
     uint32_t event_heartbeat_ms;
 } ducknng_http_route_row;
 
+/* Per-execution snapshot owned by init data. */
 typedef struct {
     ducknng_http_route_row *rows;
     idx_t row_count;
     idx_t row_cap;
-} ducknng_http_routes_bind_data;
-
-typedef struct {
-    ducknng_http_routes_bind_data *bind;
     idx_t offset;
-} ducknng_http_routes_init_data;
+} ducknng_http_routes_snapshot;
 
+/* Per-execution copy of the HTTP request context, owned by init data.
+ * row_count is 0 when the binding connection is not in an HTTP route scope. */
 typedef struct {
     idx_t row_count;
+    idx_t emitted;
     char *service_name;
     char *listen;
     char *scheme;
@@ -54,18 +54,20 @@ typedef struct {
     char *route_match_kind;
     char *route_path;
     char *path_params_json;
-} ducknng_http_request_bind_data;
+} ducknng_http_request_snapshot;
 
 typedef struct {
     idx_t row_count;
+    idx_t emitted;
     uint8_t *body;
     idx_t body_len;
     char *body_text;
-} ducknng_http_request_body_bind_data;
+} ducknng_http_request_body_snapshot;
 
+/* Bind data of the request context tables: the binding connection id only. */
 typedef struct {
-    int emitted;
-} ducknng_sql_http_single_row_init_data;
+    uint64_t connection_id;
+} ducknng_http_request_bind_data;
 
 static int execute_sql(duckdb_connection con, const char *sql) {
     duckdb_result result;
@@ -148,8 +150,8 @@ static char *ducknng_http_json_escape_dup(const char *s) {
     return out;
 }
 
-static void destroy_http_routes_bind_data(void *ptr) {
-    ducknng_http_routes_bind_data *data = (ducknng_http_routes_bind_data *)ptr;
+static void destroy_http_routes_snapshot(void *ptr) {
+    ducknng_http_routes_snapshot *data = (ducknng_http_routes_snapshot *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -166,31 +168,28 @@ static void destroy_http_routes_bind_data(void *ptr) {
     duckdb_free(data);
 }
 
-static void destroy_http_routes_init_data(void *ptr) {
-    if (ptr) duckdb_free(ptr);
-}
-
-static int ducknng_http_routes_bind_reserve(ducknng_http_routes_bind_data *bind, idx_t want) {
+static int ducknng_http_routes_snapshot_reserve(ducknng_http_routes_snapshot *snap, idx_t want) {
     ducknng_http_route_row *next;
-    idx_t new_cap = bind && bind->row_cap ? bind->row_cap * 2 : 8;
-    if (!bind) return -1;
-    if (!bind->rows) new_cap = want > 8 ? want : 8;
-    if (bind->rows && bind->row_cap >= want) return 0;
-    while (new_cap < want) new_cap *= 2;
+    idx_t new_cap = snap->row_cap ? snap->row_cap : 8;
+    if (snap->row_cap >= want) return 0;
+    while (new_cap < want) {
+        if (new_cap > ((idx_t)SIZE_MAX / sizeof(*next)) / 2) return -1;
+        new_cap *= 2;
+    }
     next = (ducknng_http_route_row *)duckdb_malloc(sizeof(*next) * (size_t)new_cap);
     if (!next) return -1;
     memset(next, 0, sizeof(*next) * (size_t)new_cap);
-    if (bind->rows && bind->row_count > 0) {
-        memcpy(next, bind->rows, sizeof(*next) * (size_t)bind->row_count);
-        duckdb_free(bind->rows);
+    if (snap->rows) {
+        if (snap->row_count > 0) memcpy(next, snap->rows, sizeof(*next) * (size_t)snap->row_count);
+        duckdb_free(snap->rows);
     }
-    bind->rows = next;
-    bind->row_cap = new_cap;
+    snap->rows = next;
+    snap->row_cap = new_cap;
     return 0;
 }
 
-static void destroy_http_request_bind_data(void *ptr) {
-    ducknng_http_request_bind_data *data = (ducknng_http_request_bind_data *)ptr;
+static void destroy_http_request_snapshot(void *ptr) {
+    ducknng_http_request_snapshot *data = (ducknng_http_request_snapshot *)ptr;
     if (!data) return;
     if (data->service_name) duckdb_free(data->service_name);
     if (data->listen) duckdb_free(data->listen);
@@ -210,23 +209,25 @@ static void destroy_http_request_bind_data(void *ptr) {
     duckdb_free(data);
 }
 
-static void destroy_http_request_body_bind_data(void *ptr) {
-    ducknng_http_request_body_bind_data *data = (ducknng_http_request_body_bind_data *)ptr;
+static void destroy_http_request_body_snapshot(void *ptr) {
+    ducknng_http_request_body_snapshot *data = (ducknng_http_request_body_snapshot *)ptr;
     if (!data) return;
     if (data->body) duckdb_free(data->body);
     if (data->body_text) duckdb_free(data->body_text);
     duckdb_free(data);
 }
 
-static void destroy_sql_http_single_row_init_data(void *ptr) {
-    if (ptr) duckdb_free(ptr);
-}
-
 static int ducknng_http_sql_reject_inside_request_handler(duckdb_function_info info, ducknng_sql_context *ctx,
     const char *what) {
-    if (ctx && ctx->rt &&
-        (ducknng_runtime_current_thread_request_service_get(ctx->rt) != NULL ||
-         ducknng_runtime_current_request_service_get(ctx->rt) != NULL)) {
+    uint64_t connection_id;
+
+    if (!ctx || !ctx->rt || !ducknng_sql_scalar_connection_id(info, &connection_id)) {
+        duckdb_scalar_function_set_error(info, "ducknng: cannot identify HTTP control connection");
+        return 1;
+    }
+    if (ducknng_runtime_connection_scope_get(ctx->rt, connection_id) !=
+            DUCKNNG_CONNECTION_SCOPE_NONE ||
+        ducknng_runtime_current_request_service_get(ctx->rt) != NULL) {
         duckdb_scalar_function_set_error(info, what);
         return 1;
     }
@@ -235,9 +236,16 @@ static int ducknng_http_sql_reject_inside_request_handler(duckdb_function_info i
 
 static int ducknng_http_sql_reject_table_inside_request_handler(duckdb_bind_info info,
     ducknng_sql_context *ctx, const char *what) {
-    if (ctx && ctx->rt &&
-        (ducknng_runtime_current_thread_request_service_get(ctx->rt) != NULL ||
-         ducknng_runtime_current_request_service_get(ctx->rt) != NULL)) {
+    uint64_t connection_id;
+
+    if (!ctx || !ctx->rt ||
+        ducknng_sql_table_bind_connection_id(info, &connection_id) != 0) {
+        duckdb_bind_set_error(info, "ducknng: cannot identify HTTP control connection");
+        return 1;
+    }
+    if (ducknng_runtime_connection_scope_get(ctx->rt, connection_id) !=
+            DUCKNNG_CONNECTION_SCOPE_NONE ||
+        ducknng_runtime_current_request_service_get(ctx->rt) != NULL) {
         duckdb_bind_set_error(info, what);
         return 1;
     }
@@ -956,77 +964,58 @@ static void ducknng_unregister_http_route_pattern_scalar(duckdb_function_info in
     }
 }
 
-static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    ducknng_http_routes_bind_data *bind;
-    duckdb_logical_type type;
-    size_t i;
-    idx_t row = 0;
+/* The listing tables bind only the binding connection id; every execution
+ * repeats the guards and takes its own snapshot at init. */
+typedef struct {
+    uint64_t connection_id;
+} ducknng_http_list_bind_data;
+
+static ducknng_http_list_bind_data *ducknng_http_list_bind(duckdb_bind_info info,
+    ducknng_sql_context *ctx, const char *inside_handler_msg) {
+    ducknng_http_list_bind_data *bind;
+    uint64_t connection_id;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
-        return;
+        return NULL;
     }
-    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
-    if (ducknng_http_sql_reject_table_inside_request_handler(info, ctx,
-            "ducknng: ducknng_list_http_routes() cannot run inside a request handler")) return;
-    bind = (ducknng_http_routes_bind_data *)duckdb_malloc(sizeof(*bind));
+    if (ducknng_reject_table_inside_authorizer(info, ctx, &connection_id)) return NULL;
+    if (ducknng_http_sql_reject_table_inside_request_handler(info, ctx, inside_handler_msg)) return NULL;
+    bind = (ducknng_http_list_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
         duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
+        return NULL;
     }
-    memset(bind, 0, sizeof(*bind));
-    ducknng_mutex_lock(&ctx->rt->mu);
-    for (i = 0; i < ctx->rt->service_count; i++) {
-        ducknng_service *svc = ctx->rt->services[i];
-        ducknng_http_route *routes = NULL;
-        size_t route_count = 0;
-        size_t j;
-        if (!svc) continue;
-        if (ducknng_service_http_routes_snapshot(svc, &routes, &route_count, NULL) != 0) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            destroy_http_routes_bind_data(bind);
-            duckdb_bind_set_error(info, "ducknng: failed to snapshot HTTP routes");
-            return;
-        }
-        if (route_count > 0 && ducknng_http_routes_bind_reserve(bind, row + (idx_t)route_count) != 0) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            ducknng_service_http_routes_free(routes, route_count);
-            destroy_http_routes_bind_data(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory");
-            return;
-        }
-        for (j = 0; j < route_count; j++, row++) {
-            bind->rows[row].service_id = svc->service_id;
-            bind->rows[row].route_id = routes[j].route_id;
-            bind->rows[row].request_max_bytes = routes[j].request_max_bytes;
-            bind->rows[row].service_name = svc->name ? ducknng_strdup(svc->name) : NULL;
-            bind->rows[row].method = routes[j].method ? ducknng_strdup(routes[j].method) : NULL;
-            bind->rows[row].match_kind = ducknng_strdup(
-                ducknng_http_route_match_kind_name(routes[j].match_kind));
-            bind->rows[row].path = routes[j].path ? ducknng_strdup(routes[j].path) : NULL;
-            bind->rows[row].handler_sql = routes[j].handler_sql ? ducknng_strdup(routes[j].handler_sql) : NULL;
-            bind->rows[row].static_dir_path = routes[j].static_dir_path ? ducknng_strdup(routes[j].static_dir_path) : NULL;
-            bind->rows[row].auth_require_identity = routes[j].auth_require_identity;
-            bind->rows[row].auth_allow_identities_json = routes[j].auth_allow_identities_json ? ducknng_strdup(routes[j].auth_allow_identities_json) : NULL;
-            bind->rows[row].response_mode = routes[j].response_mode;
-            bind->rows[row].stream_content_type = routes[j].stream_content_type ? ducknng_strdup(routes[j].stream_content_type) : NULL;
-            bind->rows[row].event_heartbeat_ms = routes[j].event_heartbeat_ms;
-            if ((svc->name && !bind->rows[row].service_name) ||
-                (routes[j].method && !bind->rows[row].method) ||
-                !bind->rows[row].match_kind ||
-                (routes[j].path && !bind->rows[row].path) ||
-                (routes[j].handler_sql && !bind->rows[row].handler_sql)) {
-                ducknng_mutex_unlock(&ctx->rt->mu);
-                ducknng_service_http_routes_free(routes, route_count);
-                destroy_http_routes_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory");
-                return;
-            }
-        }
-        ducknng_service_http_routes_free(routes, route_count);
+    bind->connection_id = connection_id;
+    duckdb_bind_set_bind_data(info, bind, duckdb_free);
+    return bind;
+}
+
+/* Execution-time form of the bind guards: a connection that carries any
+ * ducknng execution context is inside a request, session, route, or
+ * authorizer scope. */
+static int ducknng_http_list_init_reject(duckdb_init_info info, ducknng_sql_context *ctx,
+    const ducknng_http_list_bind_data *bind, const char *inside_handler_msg) {
+    if (!ctx || !ctx->rt || !bind) {
+        duckdb_init_set_error(info, "ducknng: missing HTTP listing bind data");
+        return 1;
     }
-    bind->row_count = row;
-    ducknng_mutex_unlock(&ctx->rt->mu);
+    if (ducknng_reject_init_inside_authorizer(info, ctx, bind->connection_id)) return 1;
+    if (ducknng_runtime_connection_scope_get(ctx->rt, bind->connection_id) !=
+            DUCKNNG_CONNECTION_SCOPE_NONE ||
+        ducknng_runtime_current_request_service_get(ctx->rt) != NULL) {
+        duckdb_init_set_error(info, inside_handler_msg);
+        return 1;
+    }
+    return 0;
+}
+
+#define DUCKNNG_LIST_HTTP_ROUTES_IN_HANDLER \
+    "ducknng: ducknng_list_http_routes() cannot run inside a request handler"
+
+static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    duckdb_logical_type type;
+    if (!ducknng_http_list_bind(info, ctx, DUCKNNG_LIST_HTTP_ROUTES_IN_HANDLER)) return;
 
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "service_id", type);
@@ -1044,62 +1033,112 @@ static void ducknng_list_http_routes_bind(duckdb_bind_info info) {
     duckdb_bind_add_result_column(info, "auth_require_identity", type);
     duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-     duckdb_bind_add_result_column(info, "static_dir_path", type);
-     duckdb_bind_add_result_column(info, "auth_allow_identities_json", type);
-     duckdb_destroy_logical_type(&type);
-     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-     duckdb_bind_add_result_column(info, "is_stream", type);
-     duckdb_destroy_logical_type(&type);
-     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-     duckdb_bind_add_result_column(info, "stream_content_type", type);
-     duckdb_destroy_logical_type(&type);
-     type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-     duckdb_bind_add_result_column(info, "is_event_route", type);
-     duckdb_destroy_logical_type(&type);
-     type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
-     duckdb_bind_add_result_column(info, "event_heartbeat_ms", type);
-     duckdb_destroy_logical_type(&type);
-     duckdb_bind_set_bind_data(info, bind, destroy_http_routes_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
+    duckdb_bind_add_result_column(info, "static_dir_path", type);
+    duckdb_bind_add_result_column(info, "auth_allow_identities_json", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    duckdb_bind_add_result_column(info, "is_stream", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_bind_add_result_column(info, "stream_content_type", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+    duckdb_bind_add_result_column(info, "is_event_route", type);
+    duckdb_destroy_logical_type(&type);
+    type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
+    duckdb_bind_add_result_column(info, "event_heartbeat_ms", type);
+    duckdb_destroy_logical_type(&type);
+}
+
+/* Copies src into *out; NULL stays NULL. Returns -1 only on allocation failure. */
+static int ducknng_http_list_dup(const char *src, char **out) {
+    *out = NULL;
+    if (!src) return 0;
+    *out = ducknng_strdup(src);
+    return *out ? 0 : -1;
 }
 
 static void ducknng_list_http_routes_init(duckdb_init_info info) {
-    ducknng_http_routes_bind_data *bind =
-        (ducknng_http_routes_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_http_routes_init_data *init =
-        (ducknng_http_routes_init_data *)duckdb_malloc(sizeof(*init));
-    if (!init) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    const ducknng_http_list_bind_data *bind =
+        (const ducknng_http_list_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_http_routes_snapshot *snap;
+    const char *err = NULL;
+    size_t i;
+    if (ducknng_http_list_init_reject(info, ctx, bind, DUCKNNG_LIST_HTTP_ROUTES_IN_HANDLER)) return;
+    snap = (ducknng_http_routes_snapshot *)duckdb_malloc(sizeof(*snap));
+    if (!snap) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(snap, 0, sizeof(*snap));
+    ducknng_mutex_lock(&ctx->rt->mu);
+    for (i = 0; i < ctx->rt->service_count && !err; i++) {
+        ducknng_service *svc = ctx->rt->services[i];
+        ducknng_http_route *routes = NULL;
+        size_t route_count = 0;
+        size_t j;
+        if (!svc) continue;
+        if (ducknng_service_http_routes_snapshot(svc, &routes, &route_count, NULL) != 0) {
+            err = "ducknng: failed to snapshot HTTP routes";
+            break;
+        }
+        if (route_count > 0 &&
+                ducknng_http_routes_snapshot_reserve(snap, snap->row_count + (idx_t)route_count) != 0)
+            err = "ducknng: out of memory";
+        for (j = 0; j < route_count && !err; j++) {
+            /* Count the row before filling it so cleanup frees partial copies. */
+            ducknng_http_route_row *row = &snap->rows[snap->row_count++];
+            row->service_id = svc->service_id;
+            row->route_id = routes[j].route_id;
+            row->request_max_bytes = routes[j].request_max_bytes;
+            row->auth_require_identity = routes[j].auth_require_identity;
+            row->response_mode = routes[j].response_mode;
+            row->event_heartbeat_ms = routes[j].event_heartbeat_ms;
+            row->match_kind = ducknng_strdup(ducknng_http_route_match_kind_name(routes[j].match_kind));
+            if (!row->match_kind ||
+                ducknng_http_list_dup(svc->name, &row->service_name) != 0 ||
+                ducknng_http_list_dup(routes[j].method, &row->method) != 0 ||
+                ducknng_http_list_dup(routes[j].path, &row->path) != 0 ||
+                ducknng_http_list_dup(routes[j].handler_sql, &row->handler_sql) != 0 ||
+                ducknng_http_list_dup(routes[j].static_dir_path, &row->static_dir_path) != 0 ||
+                ducknng_http_list_dup(routes[j].auth_allow_identities_json,
+                    &row->auth_allow_identities_json) != 0 ||
+                ducknng_http_list_dup(routes[j].stream_content_type, &row->stream_content_type) != 0)
+                err = "ducknng: out of memory";
+        }
+        ducknng_service_http_routes_free(routes, route_count);
+    }
+    ducknng_mutex_unlock(&ctx->rt->mu);
+    if (err) {
+        destroy_http_routes_snapshot(snap);
+        duckdb_init_set_error(info, err);
+        return;
+    }
     duckdb_init_set_max_threads(info, 1);
-    duckdb_init_set_init_data(info, init, destroy_http_routes_init_data);
+    duckdb_init_set_init_data(info, snap, destroy_http_routes_snapshot);
 }
 
 static void ducknng_list_http_routes_scan(duckdb_function_info info, duckdb_data_chunk output) {
-    ducknng_http_routes_init_data *init =
-        (ducknng_http_routes_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_routes_bind_data *bind;
+    ducknng_http_routes_snapshot *snap =
+        (ducknng_http_routes_snapshot *)duckdb_function_get_init_data(info);
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
     uint64_t *service_ids;
     uint64_t *route_ids;
     uint64_t *request_max_bytes;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!snap || snap->offset >= snap->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = snap->row_count - snap->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     service_ids = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 0));
     route_ids = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 1));
     request_max_bytes = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 2));
     for (i = 0; i < chunk_size; i++) {
-        ducknng_http_route_row *row = &bind->rows[init->offset + i];
+        ducknng_http_route_row *row = &snap->rows[snap->offset + i];
         service_ids[i] = row->service_id;
         route_ids[i] = row->route_id;
         request_max_bytes[i] = row->request_max_bytes;
@@ -1129,48 +1168,70 @@ static void ducknng_list_http_routes_scan(duckdb_function_info info, duckdb_data
                 row->event_heartbeat_ms;
         else set_null(duckdb_data_chunk_get_vector(output, 14), i);
     }
-    init->offset += chunk_size;
+    snap->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
 }
 
-static void ducknng_http_request_bind(duckdb_bind_info info) {
+/* ducknng_http_request() and ducknng_http_request_body() describe the HTTP
+ * request whose route handler SQL is running on the binding connection. Bind
+ * captures only that connection id and the fixed columns; every execution
+ * copies the record's borrowed request context at init. A connection that is
+ * not in an HTTP route scope returns no rows. */
+static int ducknng_http_request_bind_common(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    const ducknng_http_request_context *request_ctx = NULL;
     ducknng_http_request_bind_data *bind;
-    duckdb_logical_type type;
+    uint64_t connection_id;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
-        return;
+        return -1;
+    }
+    if (ducknng_sql_table_bind_connection_id(info, &connection_id) != 0) {
+        duckdb_bind_set_error(info, "ducknng: missing DuckDB connection id for an execution-context table");
+        return -1;
     }
     bind = (ducknng_http_request_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
         duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
+        return -1;
     }
-    memset(bind, 0, sizeof(*bind));
-    request_ctx = ducknng_runtime_current_thread_http_request_context_get(ctx->rt);
-    if (request_ctx && request_ctx->svc) {
-        bind->row_count = 1;
-        bind->service_name = request_ctx->svc->name ? ducknng_strdup(request_ctx->svc->name) : NULL;
-        bind->listen = ducknng_service_resolved_listen(request_ctx->svc) ?
-            ducknng_strdup(ducknng_service_resolved_listen(request_ctx->svc)) : NULL;
-        bind->scheme = ducknng_strdup(ducknng_transport_scheme_name(request_ctx->scheme));
-        bind->method = request_ctx->method ? ducknng_strdup(request_ctx->method) : NULL;
-        bind->path = request_ctx->path ? ducknng_strdup(request_ctx->path) : NULL;
-        bind->query_string = request_ctx->query_string ? ducknng_strdup(request_ctx->query_string) : NULL;
-        bind->content_type = request_ctx->content_type ? ducknng_strdup(request_ctx->content_type) : NULL;
-        bind->headers_json = request_ctx->headers_json ? ducknng_strdup(request_ctx->headers_json) : NULL;
-        bind->body_bytes = (uint64_t)request_ctx->body_len;
-        bind->caller_identity = request_ctx->caller_identity ? ducknng_strdup(request_ctx->caller_identity) : NULL;
-        bind->remote_addr = ducknng_sql_sockaddr_addr_dup(request_ctx->remote_addr, &bind->remote_ip, &bind->remote_port);
-        bind->route_id = request_ctx->route.route_id;
-        bind->route_method = request_ctx->route.method ? ducknng_strdup(request_ctx->route.method) : NULL;
-        bind->route_match_kind = ducknng_strdup(
-            ducknng_http_route_match_kind_name(request_ctx->route.match_kind));
-        bind->route_path = request_ctx->route.path ? ducknng_strdup(request_ctx->route.path) : NULL;
-        bind->path_params_json = request_ctx->path_params_json ?
-            ducknng_strdup(request_ctx->path_params_json) : NULL;
+    bind->connection_id = connection_id;
+    duckdb_bind_set_bind_data(info, bind, duckdb_free);
+    duckdb_bind_set_cardinality(info, 1, false);
+    return 0;
+}
+
+/* Returns the borrowed request context of the binding connection, or NULL when
+ * it is not in an HTTP route scope. The context stays valid while the route's
+ * synchronous query, which includes this init, runs. Sets an error and returns
+ * NULL with *failed set when the bind data is missing. */
+static const ducknng_http_request_context *ducknng_http_request_init_context(
+    duckdb_init_info info, int *failed) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    const ducknng_http_request_bind_data *bind =
+        (const ducknng_http_request_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_connection_context_view view;
+    *failed = 0;
+    if (!ctx || !ctx->rt || !bind) {
+        duckdb_init_set_error(info, "ducknng: missing HTTP request bind data");
+        *failed = 1;
+        return NULL;
     }
+    if (!ducknng_runtime_connection_context_view_get(ctx->rt, bind->connection_id, &view) ||
+            view.scope != DUCKNNG_CONNECTION_SCOPE_HTTP_ROUTE)
+        return NULL;
+    return view.http_ctx;
+}
+
+static int ducknng_http_request_dup(const char *src, char **out) {
+    *out = NULL;
+    if (!src) return 0;
+    *out = ducknng_strdup(src);
+    return *out ? 0 : -1;
+}
+
+static void ducknng_http_request_bind(duckdb_bind_info info) {
+    duckdb_logical_type type;
+    if (ducknng_http_request_bind_common(info) != 0) return;
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "service_name", type);
     duckdb_bind_add_result_column(info, "listen", type);
@@ -1195,77 +1256,108 @@ static void ducknng_http_request_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
     duckdb_bind_add_result_column(info, "remote_port", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_http_request_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+static void ducknng_http_request_init(duckdb_init_info info) {
+    const ducknng_http_request_context *request_ctx;
+    ducknng_http_request_snapshot *snap;
+    const char *listen;
+    int failed;
+    request_ctx = ducknng_http_request_init_context(info, &failed);
+    if (failed) return;
+    snap = (ducknng_http_request_snapshot *)duckdb_malloc(sizeof(*snap));
+    if (!snap) {
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(snap, 0, sizeof(*snap));
+    if (request_ctx && request_ctx->svc) {
+        listen = ducknng_service_resolved_listen(request_ctx->svc);
+        snap->row_count = 1;
+        snap->body_bytes = (uint64_t)request_ctx->body_len;
+        snap->route_id = request_ctx->route.route_id;
+        snap->remote_addr = ducknng_sql_sockaddr_addr_dup(request_ctx->remote_addr,
+            &snap->remote_ip, &snap->remote_port);
+        if (ducknng_http_request_dup(request_ctx->svc->name, &snap->service_name) != 0 ||
+            ducknng_http_request_dup(listen, &snap->listen) != 0 ||
+            ducknng_http_request_dup(ducknng_transport_scheme_name(request_ctx->scheme), &snap->scheme) != 0 ||
+            ducknng_http_request_dup(request_ctx->method, &snap->method) != 0 ||
+            ducknng_http_request_dup(request_ctx->path, &snap->path) != 0 ||
+            ducknng_http_request_dup(request_ctx->query_string, &snap->query_string) != 0 ||
+            ducknng_http_request_dup(request_ctx->content_type, &snap->content_type) != 0 ||
+            ducknng_http_request_dup(request_ctx->headers_json, &snap->headers_json) != 0 ||
+            ducknng_http_request_dup(request_ctx->caller_identity, &snap->caller_identity) != 0 ||
+            ducknng_http_request_dup(request_ctx->route.method, &snap->route_method) != 0 ||
+            ducknng_http_request_dup(ducknng_http_route_match_kind_name(request_ctx->route.match_kind),
+                &snap->route_match_kind) != 0 ||
+            ducknng_http_request_dup(request_ctx->route.path, &snap->route_path) != 0 ||
+            ducknng_http_request_dup(request_ctx->path_params_json, &snap->path_params_json) != 0) {
+            destroy_http_request_snapshot(snap);
+            duckdb_init_set_error(info, "ducknng: out of memory copying HTTP request context");
+            return;
+        }
+    }
+    duckdb_init_set_max_threads(info, 1);
+    duckdb_init_set_init_data(info, snap, destroy_http_request_snapshot);
 }
 
 static void ducknng_http_request_body_bind(duckdb_bind_info info) {
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    const ducknng_http_request_context *request_ctx = NULL;
-    ducknng_http_request_body_bind_data *bind;
     duckdb_logical_type type;
-    if (!ctx || !ctx->rt) {
-        duckdb_bind_set_error(info, "ducknng: missing runtime");
-        return;
-    }
-    bind = (ducknng_http_request_body_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    request_ctx = ducknng_runtime_current_thread_http_request_context_get(ctx->rt);
-    if (request_ctx) {
-        bind->row_count = 1;
-        bind->body_len = (idx_t)request_ctx->body_len;
-        if (request_ctx->body_len > 0) {
-            bind->body = (uint8_t *)duckdb_malloc(request_ctx->body_len);
-            if (!bind->body) {
-                destroy_http_request_body_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory");
-                return;
-            }
-            memcpy(bind->body, request_ctx->body, request_ctx->body_len);
-            if (ducknng_sql_bytes_look_text(request_ctx->body, request_ctx->body_len)) {
-                bind->body_text = (char *)duckdb_malloc(request_ctx->body_len + 1);
-                if (!bind->body_text) {
-                    destroy_http_request_body_bind_data(bind);
-                    duckdb_bind_set_error(info, "ducknng: out of memory");
-                    return;
-                }
-                memcpy(bind->body_text, request_ctx->body, request_ctx->body_len);
-                bind->body_text[request_ctx->body_len] = '\0';
-            }
-        }
-    }
+    if (ducknng_http_request_bind_common(info) != 0) return;
     type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
     duckdb_bind_add_result_column(info, "body", type);
     duckdb_destroy_logical_type(&type);
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "body_text", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_http_request_body_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
 }
 
-static void ducknng_sql_http_single_row_init(duckdb_init_info info) {
-    ducknng_sql_http_single_row_init_data *init =
-        (ducknng_sql_http_single_row_init_data *)duckdb_malloc(sizeof(*init));
-    if (!init) {
+static void ducknng_http_request_body_init(duckdb_init_info info) {
+    const ducknng_http_request_context *request_ctx;
+    ducknng_http_request_body_snapshot *snap;
+    int failed;
+    request_ctx = ducknng_http_request_init_context(info, &failed);
+    if (failed) return;
+    snap = (ducknng_http_request_body_snapshot *)duckdb_malloc(sizeof(*snap));
+    if (!snap) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->emitted = 0;
+    memset(snap, 0, sizeof(*snap));
+    /* The body copy runs without rt->mu: the view lookup already released it,
+     * and request_ctx outlives this init. */
+    if (request_ctx) {
+        snap->row_count = 1;
+        snap->body_len = (idx_t)request_ctx->body_len;
+        if (request_ctx->body_len > 0) {
+            snap->body = (uint8_t *)duckdb_malloc(request_ctx->body_len);
+            if (snap->body && ducknng_sql_bytes_look_text(request_ctx->body, request_ctx->body_len)) {
+                snap->body_text = (char *)duckdb_malloc(request_ctx->body_len + 1);
+                if (!snap->body_text) {
+                    duckdb_free(snap->body);
+                    snap->body = NULL;
+                }
+            }
+            if (!snap->body) {
+                destroy_http_request_body_snapshot(snap);
+                duckdb_init_set_error(info, "ducknng: out of memory copying HTTP request body");
+                return;
+            }
+            memcpy(snap->body, request_ctx->body, request_ctx->body_len);
+            if (snap->body_text) {
+                memcpy(snap->body_text, request_ctx->body, request_ctx->body_len);
+                snap->body_text[request_ctx->body_len] = '\0';
+            }
+        }
+    }
     duckdb_init_set_max_threads(info, 1);
-    duckdb_init_set_init_data(info, init, destroy_sql_http_single_row_init_data);
+    duckdb_init_set_init_data(info, snap, destroy_http_request_body_snapshot);
 }
 
 static void ducknng_http_request_scan(duckdb_function_info info, duckdb_data_chunk output) {
-    ducknng_sql_http_single_row_init_data *init =
-        (ducknng_sql_http_single_row_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_request_bind_data *bind =
-        (ducknng_http_request_bind_data *)duckdb_function_get_bind_data(info);
-    if (!init || !bind || init->emitted || bind->row_count == 0) {
+    ducknng_http_request_snapshot *snap =
+        (ducknng_http_request_snapshot *)duckdb_function_get_init_data(info);
+    if (!snap || snap->emitted || snap->row_count == 0) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
@@ -1273,43 +1365,41 @@ static void ducknng_http_request_scan(duckdb_function_info info, duckdb_data_chu
         if ((VALUE)) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, (IDX)), 0, (VALUE), (idx_t)strlen((VALUE))); \
         else set_null(duckdb_data_chunk_get_vector(output, (IDX)), 0); \
     } while (0)
-    ASSIGN_REQ_STRING(0, bind->service_name);
-    ASSIGN_REQ_STRING(1, bind->listen);
-    ASSIGN_REQ_STRING(2, bind->scheme);
-    ASSIGN_REQ_STRING(3, bind->method);
-    ASSIGN_REQ_STRING(4, bind->path);
-    ASSIGN_REQ_STRING(5, bind->query_string);
-    ASSIGN_REQ_STRING(6, bind->content_type);
-    ASSIGN_REQ_STRING(7, bind->headers_json);
-    ASSIGN_REQ_STRING(8, bind->caller_identity);
-    ASSIGN_REQ_STRING(9, bind->remote_addr);
-    ASSIGN_REQ_STRING(10, bind->remote_ip);
-    ASSIGN_REQ_STRING(11, bind->route_method);
-    ASSIGN_REQ_STRING(12, bind->route_match_kind);
-    ASSIGN_REQ_STRING(13, bind->route_path);
-    ASSIGN_REQ_STRING(14, bind->path_params_json);
-    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 15)))[0] = bind->body_bytes;
-    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 16)))[0] = bind->route_id;
-    ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 17)))[0] = bind->remote_port;
+    ASSIGN_REQ_STRING(0, snap->service_name);
+    ASSIGN_REQ_STRING(1, snap->listen);
+    ASSIGN_REQ_STRING(2, snap->scheme);
+    ASSIGN_REQ_STRING(3, snap->method);
+    ASSIGN_REQ_STRING(4, snap->path);
+    ASSIGN_REQ_STRING(5, snap->query_string);
+    ASSIGN_REQ_STRING(6, snap->content_type);
+    ASSIGN_REQ_STRING(7, snap->headers_json);
+    ASSIGN_REQ_STRING(8, snap->caller_identity);
+    ASSIGN_REQ_STRING(9, snap->remote_addr);
+    ASSIGN_REQ_STRING(10, snap->remote_ip);
+    ASSIGN_REQ_STRING(11, snap->route_method);
+    ASSIGN_REQ_STRING(12, snap->route_match_kind);
+    ASSIGN_REQ_STRING(13, snap->route_path);
+    ASSIGN_REQ_STRING(14, snap->path_params_json);
+    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 15)))[0] = snap->body_bytes;
+    ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 16)))[0] = snap->route_id;
+    ((int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 17)))[0] = snap->remote_port;
 #undef ASSIGN_REQ_STRING
-    init->emitted = 1;
+    snap->emitted = 1;
     duckdb_data_chunk_set_size(output, 1);
 }
 
 static void ducknng_http_request_body_scan(duckdb_function_info info, duckdb_data_chunk output) {
-    ducknng_sql_http_single_row_init_data *init =
-        (ducknng_sql_http_single_row_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_request_body_bind_data *bind =
-        (ducknng_http_request_body_bind_data *)duckdb_function_get_bind_data(info);
-    if (!init || !bind || init->emitted || bind->row_count == 0) {
+    ducknng_http_request_body_snapshot *snap =
+        (ducknng_http_request_body_snapshot *)duckdb_function_get_init_data(info);
+    if (!snap || snap->emitted || snap->row_count == 0) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
     assign_blob(duckdb_data_chunk_get_vector(output, 0), 0,
-        bind->body ? bind->body : (const uint8_t *)"", bind->body_len);
-    if (bind->body_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, bind->body_text, (idx_t)strlen(bind->body_text));
+        snap->body ? snap->body : (const uint8_t *)"", snap->body_len);
+    if (snap->body_text) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), 0, snap->body_text, (idx_t)strlen(snap->body_text));
     else set_null(duckdb_data_chunk_get_vector(output, 1), 0);
-    init->emitted = 1;
+    snap->emitted = 1;
     duckdb_data_chunk_set_size(output, 1);
 }
 
@@ -1566,19 +1656,16 @@ typedef struct {
     uint64_t interval_ms;
 } ducknng_http_worker_row;
 
+/* Per-execution snapshot owned by init data. */
 typedef struct {
     ducknng_http_worker_row *rows;
     idx_t row_count;
     idx_t row_cap;
-} ducknng_http_workers_bind_data;
-
-typedef struct {
-    ducknng_http_workers_bind_data *bind;
     idx_t offset;
-} ducknng_http_workers_init_data;
+} ducknng_http_workers_snapshot;
 
-static void destroy_http_workers_bind_data(void *ptr) {
-    ducknng_http_workers_bind_data *data = (ducknng_http_workers_bind_data *)ptr;
+static void destroy_http_workers_snapshot(void *ptr) {
+    ducknng_http_workers_snapshot *data = (ducknng_http_workers_snapshot *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -1590,66 +1677,33 @@ static void destroy_http_workers_bind_data(void *ptr) {
     duckdb_free(data);
 }
 
-static void destroy_http_workers_init_data(void *ptr) {
-    if (ptr) duckdb_free(ptr);
+static int ducknng_http_workers_snapshot_reserve(ducknng_http_workers_snapshot *snap, idx_t want) {
+    ducknng_http_worker_row *next;
+    idx_t new_cap = snap->row_cap ? snap->row_cap : 8;
+    if (snap->row_cap >= want) return 0;
+    while (new_cap < want) {
+        if (new_cap > ((idx_t)SIZE_MAX / sizeof(*next)) / 2) return -1;
+        new_cap *= 2;
+    }
+    next = (ducknng_http_worker_row *)duckdb_malloc(sizeof(*next) * (size_t)new_cap);
+    if (!next) return -1;
+    memset(next, 0, sizeof(*next) * (size_t)new_cap);
+    if (snap->rows) {
+        if (snap->row_count > 0) memcpy(next, snap->rows, sizeof(*next) * (size_t)snap->row_count);
+        duckdb_free(snap->rows);
+    }
+    snap->rows = next;
+    snap->row_cap = new_cap;
+    return 0;
 }
+
+#define DUCKNNG_LIST_HTTP_WORKERS_IN_HANDLER \
+    "ducknng: ducknng_list_http_workers() cannot run inside a request handler"
 
 static void ducknng_list_http_workers_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    ducknng_http_workers_bind_data *bind;
     duckdb_logical_type type;
-    size_t i;
-    if (!ctx || !ctx->rt) {
-        duckdb_bind_set_error(info, "ducknng: missing runtime");
-        return;
-    }
-    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
-    if (ducknng_http_sql_reject_table_inside_request_handler(info, ctx,
-            "ducknng: ducknng_list_http_workers() cannot run inside a request handler")) return;
-    bind = (ducknng_http_workers_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    ducknng_mutex_lock(&ctx->rt->mu);
-    for (i = 0; i < ctx->rt->service_count; i++) {
-        ducknng_service *svc = ctx->rt->services[i];
-        ducknng_http_worker *workers = NULL;
-        size_t worker_count = 0;
-        size_t j;
-        if (!svc) continue;
-        if (ducknng_service_http_workers_snapshot(svc, &workers, &worker_count, NULL) != 0) continue;
-        if (worker_count > 0) {
-            ducknng_http_worker_row *new_rows;
-            idx_t new_cap = bind->row_cap ? bind->row_cap * 2 : 8;
-            while (new_cap < bind->row_count + (idx_t)worker_count) new_cap *= 2;
-            if (!bind->rows || bind->row_cap < bind->row_count + (idx_t)worker_count) {
-                new_rows = (ducknng_http_worker_row *)duckdb_malloc(sizeof(*new_rows) * (size_t)new_cap);
-                if (!new_rows) {
-                    ducknng_service_http_workers_free(workers, worker_count);
-                    break;
-                }
-                memset(new_rows, 0, sizeof(*new_rows) * (size_t)new_cap);
-                if (bind->rows) {
-                    memcpy(new_rows, bind->rows, sizeof(*new_rows) * (size_t)bind->row_count);
-                    duckdb_free(bind->rows);
-                }
-                bind->rows = new_rows;
-                bind->row_cap = new_cap;
-            }
-        }
-        for (j = 0; j < worker_count; j++) {
-            bind->rows[bind->row_count].service_name = svc->name ? ducknng_strdup(svc->name) : NULL;
-            bind->rows[bind->row_count].worker_name = workers[j].name ? ducknng_strdup(workers[j].name) : NULL;
-            bind->rows[bind->row_count].sql = workers[j].sql ? ducknng_strdup(workers[j].sql) : NULL;
-            bind->rows[bind->row_count].interval_ms = workers[j].interval_ms;
-            bind->row_count++;
-        }
-        ducknng_service_http_workers_free(workers, worker_count);
-    }
-    ducknng_mutex_unlock(&ctx->rt->mu);
-
+    if (!ducknng_http_list_bind(info, ctx, DUCKNNG_LIST_HTTP_WORKERS_IN_HANDLER)) return;
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "service_name", type);
     duckdb_bind_add_result_column(info, "worker_name", type);
@@ -1658,41 +1712,70 @@ static void ducknng_list_http_workers_bind(duckdb_bind_info info) {
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "interval_ms", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_http_workers_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
 }
 
 static void ducknng_list_http_workers_init(duckdb_init_info info) {
-    ducknng_http_workers_bind_data *bind =
-        (ducknng_http_workers_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_http_workers_init_data *init =
-        (ducknng_http_workers_init_data *)duckdb_malloc(sizeof(*init));
-    if (!init) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    const ducknng_http_list_bind_data *bind =
+        (const ducknng_http_list_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_http_workers_snapshot *snap;
+    const char *err = NULL;
+    size_t i;
+    if (ducknng_http_list_init_reject(info, ctx, bind, DUCKNNG_LIST_HTTP_WORKERS_IN_HANDLER)) return;
+    snap = (ducknng_http_workers_snapshot *)duckdb_malloc(sizeof(*snap));
+    if (!snap) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(snap, 0, sizeof(*snap));
+    ducknng_mutex_lock(&ctx->rt->mu);
+    for (i = 0; i < ctx->rt->service_count && !err; i++) {
+        ducknng_service *svc = ctx->rt->services[i];
+        ducknng_http_worker *workers = NULL;
+        size_t worker_count = 0;
+        size_t j;
+        if (!svc) continue;
+        if (ducknng_service_http_workers_snapshot(svc, &workers, &worker_count, NULL) != 0) {
+            err = "ducknng: failed to snapshot HTTP workers";
+            break;
+        }
+        if (worker_count > 0 &&
+                ducknng_http_workers_snapshot_reserve(snap, snap->row_count + (idx_t)worker_count) != 0)
+            err = "ducknng: out of memory";
+        for (j = 0; j < worker_count && !err; j++) {
+            ducknng_http_worker_row *row = &snap->rows[snap->row_count++];
+            row->interval_ms = workers[j].interval_ms;
+            if (ducknng_http_list_dup(svc->name, &row->service_name) != 0 ||
+                ducknng_http_list_dup(workers[j].name, &row->worker_name) != 0 ||
+                ducknng_http_list_dup(workers[j].sql, &row->sql) != 0)
+                err = "ducknng: out of memory";
+        }
+        ducknng_service_http_workers_free(workers, worker_count);
+    }
+    ducknng_mutex_unlock(&ctx->rt->mu);
+    if (err) {
+        destroy_http_workers_snapshot(snap);
+        duckdb_init_set_error(info, err);
+        return;
+    }
     duckdb_init_set_max_threads(info, 1);
-    duckdb_init_set_init_data(info, init, destroy_http_workers_init_data);
+    duckdb_init_set_init_data(info, snap, destroy_http_workers_snapshot);
 }
 
 static void ducknng_list_http_workers_scan(duckdb_function_info info, duckdb_data_chunk output) {
-    ducknng_http_workers_init_data *init =
-        (ducknng_http_workers_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_workers_bind_data *bind;
+    ducknng_http_workers_snapshot *snap =
+        (ducknng_http_workers_snapshot *)duckdb_function_get_init_data(info);
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!snap || snap->offset >= snap->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = snap->row_count - snap->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     for (i = 0; i < chunk_size; i++) {
-        ducknng_http_worker_row *row = &bind->rows[init->offset + i];
+        ducknng_http_worker_row *row = &snap->rows[snap->offset + i];
         if (row->service_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), i, row->service_name, (idx_t)strlen(row->service_name));
         else set_null(duckdb_data_chunk_get_vector(output, 0), i);
         if (row->worker_name) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->worker_name, (idx_t)strlen(row->worker_name));
@@ -1701,7 +1784,7 @@ static void ducknng_list_http_workers_scan(duckdb_function_info info, duckdb_dat
         else set_null(duckdb_data_chunk_get_vector(output, 2), i);
         ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3)))[i] = row->interval_ms;
     }
-    init->offset += chunk_size;
+    snap->offset += chunk_size;
     duckdb_data_chunk_set_size(output, chunk_size);
 }
 
@@ -1792,9 +1875,9 @@ int ducknng_register_sql_http(duckdb_connection con, ducknng_sql_context *ctx) {
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_list_http_workers", ctx, 0, NULL,
             ducknng_list_http_workers_bind, ducknng_list_http_workers_init, ducknng_list_http_workers_scan)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_http_request", ctx, 0, NULL,
-            ducknng_http_request_bind, ducknng_sql_http_single_row_init, ducknng_http_request_scan)) return 0;
+            ducknng_http_request_bind, ducknng_http_request_init, ducknng_http_request_scan)) return 0;
     if (!DUCKNNG_REGISTER_TABLE(con, "ducknng_http_request_body", ctx, 0, NULL,
-            ducknng_http_request_body_bind, ducknng_sql_http_single_row_init, ducknng_http_request_body_scan)) return 0;
+            ducknng_http_request_body_bind, ducknng_http_request_body_init, ducknng_http_request_body_scan)) return 0;
     if (!register_http_request_accessor_macros(con)) return 0;
     if (!register_http_response_macros(con)) return 0;
     return 1;

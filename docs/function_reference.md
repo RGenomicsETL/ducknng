@@ -62,21 +62,21 @@ List all open NNG sockets with kind and state.
 
 Request the RPC method manifest from a remote server.
 
-#### `ducknng_query_rpc(url, sql, tls_config_id)`
+#### `ducknng_query_rpc(url, sql, tls_config_id, schema := declared_schema)`
 
-Run read-only or idempotent remote SQL through a query session and return its rows.
+Execute a remote query with a declared output schema. Bind sends no request; each execution owns a fresh session.
 
-#### `ducknng_query_rpc_params(url, sql, params, tls_config_id)`
+#### `ducknng_query_rpc_params(url, sql, params, tls_config_id, schema := declared_schema)`
 
-Run one parameterized read-only or idempotent remote statement and return its rows.
+Execute one parameterized remote statement with a declared output schema and execution-owned session.
 
 #### `ducknng_prepare_query(url, sql, tls_config_id)`
 
-Prepare one remote statement without executing it and expose its result schema.
+Return one schema_ipc BLOB during execution. Remote SQL binding can invoke functions with side effects.
 
 #### `ducknng_prepare_query_params(url, sql, params, tls_config_id)`
 
-Bind a typed parameter tuple and expose the prepared remote result schema without execution.
+Discover a parameterized remote result schema during execution and return one schema_ipc BLOB. Remote SQL binding can have side effects.
 
 #### `ducknng_upload_table(url, source_query, target_table[, tls_config_id])`
 
@@ -94,9 +94,9 @@ Execute one parameterized statement through exec and return rows_changed plus me
 
 Open a remote query session. Returns session_id + session_token needed for fetch/close/cancel.
 
-#### `ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)`
+#### `ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id, schema := declared_schema)`
 
-Fetch the next batch of rows from an open query session. Returns decoded Arrow IPC rows.
+Fetch one Arrow batch per execution with a declared output schema. The caller retains ownership of the session.
 
 #### `ducknng_close_query(url, session_id, session_token, tls_config_id)`
 
@@ -140,9 +140,9 @@ Cancel a query and return the raw reply frame.
 
 Perform an HTTP request. Returns status, headers_json, body BLOB, body_text VARCHAR.
 
-#### `ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)`
+#### `ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, schema := declared_schema[, profile_id := profile])`
 
-HTTP request with auto-parsed response body via Content-Type codec dispatch. Requires 2xx status.
+Request and decode one HTTP response during execution. Requires 2xx status and an exact declared output schema.
 
 ### HTTP Routes
 
@@ -264,21 +264,21 @@ Collect async HTTP results into ncurl-style table.
 
 ### Body Codecs
 
-#### `ducknng_parse_body(body, content_type)`
+#### `ducknng_parse_body(body, content_type[, schema := declared_schema])`
 
-Parse a BLOB using the supplied content type. Supports JSON, NDJSON, CSV, TSV, Parquet, Arrow IPC, form-urlencoded, ducknng frames.
+Decode supplied bytes by content type. JSON, NDJSON, and Parquet require a schema and execute their SQL readers during execution.
 
-#### `ducknng_parse_csv(body)`
+#### `ducknng_parse_csv(body, schema := declared_schema)`
 
-Parse a CSV BLOB via DuckDB read_csv_auto through a tempfile round-trip.
+Read a CSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.
 
-#### `ducknng_parse_tsv(body)`
+#### `ducknng_parse_tsv(body, schema := declared_schema)`
 
-Parse a TSV BLOB via DuckDB read_csv_auto(delim='	') through a tempfile round-trip.
+Read a TSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.
 
-#### `ducknng_parse_parquet(body)`
+#### `ducknng_parse_parquet(body, schema := declared_schema)`
 
-Parse a Parquet BLOB via DuckDB read_parquet through a tempfile round-trip.
+Read a Parquet BLOB during execution through an exclusive temporary file. Output must match the declared schema.
 
 #### `ducknng_list_codecs()`
 

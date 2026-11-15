@@ -9,6 +9,23 @@ The executable contract is the end-to-end matrix in
 and compares the decoded values on the client over both codecs. Parameter
 binding is covered separately by `test/sql/ducknng_parameter_binding.test`.
 
+## Declared output schemas
+
+Remote query and fetch tables require a named `schema`. Supply a nonempty typed
+STRUCT, such as `NULL::STRUCT(id BIGINT, label VARCHAR)`, or a schema-only Arrow
+IPC BLOB. Obtain discovery descriptors in a separate executed statement with
+`ducknng_prepare_query` or its parameterized variant.
+
+The declaration must match received column names, order, counts, and complete
+logical types. Nested names, array sizes, decimal precision and scale, and enum
+labels participate in comparison. The declaration does not request casts.
+Validation occurs before output vector writes, including for empty results.
+
+Declare the codec's received types, not necessarily the source DuckDB types.
+For example, Arrow output from a UUID column requires VARCHAR. A schema-only
+Arrow descriptor represents Arrow's portable projections; use a typed STRUCT
+for Quack-specific types that Arrow cannot describe faithfully.
+
 ## Arrow IPC
 
 The receive path accepts these Arrow storage types and constructs the listed

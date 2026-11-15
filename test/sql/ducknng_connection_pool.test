@@ -5,9 +5,9 @@
 # demand up to a ceiling, then waits (bounded) for a release before reporting
 # exhaustion. This test pins the growth behaviour: a single statement that nests
 # several correlated query_rpc table functions holds many sessions at once (each
-# query_rpc holds a pooled connection from bind through scan). With a fixed pool
-# of 8 this exhausted and errored; with grow-on-demand the statement obtains the
-# connections it needs and completes.
+# query_rpc session holds a pooled server connection while it is scanned). With
+# a fixed pool of 8 this exhausted and errored; with grow-on-demand the statement
+# obtains the connections it needs and completes.
 
 require ducknng
 
@@ -23,11 +23,14 @@ query III
 SELECT max(a)::INTEGER, max(b)::INTEGER, max(c)::INTEGER FROM (
   SELECT
     (SELECT v FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_connection_pool.ipc',
-      'SELECT 1::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream')) AS a,
+      'SELECT 1::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream',
+      schema := NULL::STRUCT(v INTEGER))) AS a,
     (SELECT v FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_connection_pool.ipc',
-      'SELECT 2::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream')) AS b,
+      'SELECT 2::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream',
+      schema := NULL::STRUCT(v INTEGER))) AS b,
     (SELECT v FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_connection_pool.ipc',
-      'SELECT 3::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream')) AS c
+      'SELECT 3::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream',
+      schema := NULL::STRUCT(v INTEGER))) AS c
   FROM range(12)
 )
 ----
@@ -37,7 +40,8 @@ SELECT max(a)::INTEGER, max(b)::INTEGER, max(c)::INTEGER FROM (
 # are returned to the pool (reset) and reused rather than leaked.
 query I
 SELECT v FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_connection_pool.ipc',
-  'SELECT 99::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream')
+  'SELECT 99::INTEGER AS v', 0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(v INTEGER))
 ----
 99
 

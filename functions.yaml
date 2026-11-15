@@ -171,18 +171,18 @@
       "name": "ducknng_query_rpc",
       "kind": "table",
       "category": "Framed RPC",
-      "signature": "query_rpc(url, sql, tls_config_id)",
+      "signature": "query_rpc(url, sql, tls_config_id, schema := declared_schema)",
       "returns": "table",
-      "description": "Run read-only or idempotent remote SQL through a query session and return its rows.",
+      "description": "Execute a remote query with a declared output schema. Bind sends no request; each execution owns a fresh session.",
       "examples": []
     },
     {
       "name": "ducknng_query_rpc_params",
       "kind": "table",
       "category": "Framed RPC",
-      "signature": "query_rpc_params(url, sql, params, tls_config_id)",
+      "signature": "query_rpc_params(url, sql, params, tls_config_id, schema := declared_schema)",
       "returns": "table",
-      "description": "Run one parameterized read-only or idempotent remote statement and return its rows.",
+      "description": "Execute one parameterized remote statement with a declared output schema and execution-owned session.",
       "examples": []
     },
     {
@@ -191,7 +191,7 @@
       "category": "Framed RPC",
       "signature": "prepare_query(url, sql, tls_config_id)",
       "returns": "table",
-      "description": "Prepare one remote statement without executing it and expose its result schema.",
+      "description": "Return one schema_ipc BLOB during execution. Remote SQL binding can invoke functions with side effects.",
       "examples": []
     },
     {
@@ -200,7 +200,7 @@
       "category": "Framed RPC",
       "signature": "prepare_query_params(url, sql, params, tls_config_id)",
       "returns": "table",
-      "description": "Bind a typed parameter tuple and expose the prepared remote result schema without execution.",
+      "description": "Discover a parameterized remote result schema during execution and return one schema_ipc BLOB. Remote SQL binding can have side effects.",
       "examples": []
     },
     {
@@ -243,9 +243,9 @@
       "name": "ducknng_fetch_query_table",
       "kind": "table",
       "category": "Framed RPC",
-      "signature": "fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)",
+      "signature": "fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id, schema := declared_schema)",
       "returns": "table",
-      "description": "Fetch the next batch of rows from an open query session. Returns decoded Arrow IPC rows.",
+      "description": "Fetch one Arrow batch per execution with a declared output schema. The caller retains ownership of the session.",
       "examples": []
     },
     {
@@ -342,9 +342,9 @@
       "name": "ducknng_ncurl_table",
       "kind": "table",
       "category": "HTTP Client",
-      "signature": "ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id)",
+      "signature": "ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, schema := declared_schema[, profile_id := profile])",
       "returns": "table",
-      "description": "HTTP request with auto-parsed response body via Content-Type codec dispatch. Requires 2xx status.",
+      "description": "Request and decode one HTTP response during execution. Requires 2xx status and an exact declared output schema.",
       "examples": []
     },
     {
@@ -441,36 +441,36 @@
       "name": "ducknng_parse_body",
       "kind": "table",
       "category": "Body Codecs",
-      "signature": "parse_body(body, content_type)",
+      "signature": "parse_body(body, content_type[, schema := declared_schema])",
       "returns": "table",
-      "description": "Parse a BLOB using the supplied content type. Supports JSON, NDJSON, CSV, TSV, Parquet, Arrow IPC, form-urlencoded, ducknng frames.",
+      "description": "Decode supplied bytes by content type. JSON, NDJSON, and Parquet require a schema and execute their SQL readers during execution.",
       "examples": []
     },
     {
       "name": "ducknng_parse_csv",
       "kind": "table",
       "category": "Body Codecs",
-      "signature": "parse_csv(body)",
+      "signature": "parse_csv(body, schema := declared_schema)",
       "returns": "table",
-      "description": "Parse a CSV BLOB via DuckDB read_csv_auto through a tempfile round-trip.",
+      "description": "Read a CSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.",
       "examples": []
     },
     {
       "name": "ducknng_parse_tsv",
       "kind": "table",
       "category": "Body Codecs",
-      "signature": "parse_tsv(body)",
+      "signature": "parse_tsv(body, schema := declared_schema)",
       "returns": "table",
-      "description": "Parse a TSV BLOB via DuckDB read_csv_auto(delim='\t') through a tempfile round-trip.",
+      "description": "Read a TSV BLOB during execution through an exclusive temporary file. Output must match the declared schema.",
       "examples": []
     },
     {
       "name": "ducknng_parse_parquet",
       "kind": "table",
       "category": "Body Codecs",
-      "signature": "parse_parquet(body)",
+      "signature": "parse_parquet(body, schema := declared_schema)",
       "returns": "table",
-      "description": "Parse a Parquet BLOB via DuckDB read_parquet through a tempfile round-trip.",
+      "description": "Read a Parquet BLOB during execution through an exclusive temporary file. Output must match the declared schema.",
       "examples": []
     },
     {

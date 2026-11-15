@@ -191,14 +191,59 @@ typedef struct ducknng_execution_subject {
     const char *claims_json;   /* optional context; not interpreted by profile admission */
 } ducknng_execution_subject;
 
-/* One request-scoped subject bound to the DuckDB connection executing that
- * request's SQL. DuckDB runs query pipelines on worker threads, so the
- * connection id is the carrier that survives thread hops; bindings live only
- * between enter/leave of a request SQL scope. */
-typedef struct ducknng_subject_binding {
+/* Kind of ducknng scope currently executing SQL on one DuckDB connection.
+ * The kinds are mutually exclusive: an authorizer or HTTP route scope is a
+ * request scope that also carries its borrowed callback context. */
+typedef enum ducknng_connection_scope {
+    DUCKNNG_CONNECTION_SCOPE_NONE = 0,
+    DUCKNNG_CONNECTION_SCOPE_REQUEST = 1,
+    DUCKNNG_CONNECTION_SCOPE_SESSION = 2,
+    DUCKNNG_CONNECTION_SCOPE_AUTHORIZER = 3,
+    DUCKNNG_CONNECTION_SCOPE_HTTP_ROUTE = 4
+} ducknng_connection_scope;
+
+/* Execution context bound to the DuckDB connection that runs a scope's SQL.
+ * DuckDB runs bind, init, and scan on different threads, so the connection id,
+ * not thread-local state, is the carrier that reaches every pipeline thread.
+ * At most one record exists per connection id; installing a second one fails.
+ * A record with no subject strings is a present anonymous scope, distinct
+ * from no record at all. has_subject records whether the scope runs on behalf
+ * of a dispatched caller (an anonymous one included); authorizer callbacks,
+ * which run before the caller's subject is decided, and background SQL such
+ * as HTTP workers have none. Records live in rt->context_bindings under
+ * rt->mu.
+ *
+ * The four strings are owned copies. auth_ctx and http_ctx are borrowed: the
+ * scope that installs them runs exactly one synchronous duckdb_query() and
+ * removes the record only after that call returns and its result is
+ * materialized, so the pointed-to contexts outlive every reader of the
+ * record. A scope that ever keeps a pending or streaming result past its
+ * leave call must own these contexts instead of borrowing them. */
+typedef struct ducknng_connection_context {
     uint64_t connection_id;
+    ducknng_connection_scope scope;
+    int has_subject;
+    char *peer_identity;
+    char *principal;
     char *subject;
-} ducknng_subject_binding;
+    char *claims_json;
+    const ducknng_authorizer_context *auth_ctx;   /* AUTHORIZER only */
+    const ducknng_http_request_context *http_ctx; /* HTTP_ROUTE only */
+} ducknng_connection_context;
+
+/* Value copy of one record taken under rt->mu. The pointers borrow the
+ * record's storage and stay valid only while the caller is executing SQL on
+ * that connection inside the installing scope; callers copy what they keep. */
+typedef struct ducknng_connection_context_view {
+    ducknng_connection_scope scope;
+    int has_subject;
+    const char *peer_identity;
+    const char *principal;
+    const char *subject;
+    const char *claims_json;
+    const ducknng_authorizer_context *auth_ctx;
+    const ducknng_http_request_context *http_ctx;
+} ducknng_connection_context_view;
 
 typedef struct ducknng_runtime {
     duckdb_database db;
@@ -241,9 +286,9 @@ typedef struct ducknng_runtime {
     ducknng_http_profile *http_profiles;
     size_t http_profile_count;
     size_t http_profile_cap;
-    ducknng_subject_binding *subject_bindings;
-    size_t subject_binding_count;
-    size_t subject_binding_cap;
+    ducknng_connection_context *context_bindings;
+    size_t context_binding_count;
+    size_t context_binding_cap;
     uint64_t next_service_id;
     uint64_t next_client_socket_id;
     uint64_t next_client_aio_id;
@@ -333,6 +378,22 @@ void ducknng_runtime_init_con_unlock(ducknng_runtime *rt);
 duckdb_connection ducknng_runtime_codec_connection(ducknng_runtime *rt);
 void ducknng_runtime_codec_connection_lock(ducknng_runtime *rt);
 void ducknng_runtime_codec_connection_unlock(ducknng_runtime *rt);
+/* One synchronous use of codec_con on behalf of the SQL connection
+ * parent_connection_id. Enter fails without blocking when the parent is
+ * codec_con itself (codec_con_mu is not recursive); otherwise it locks
+ * codec_con_mu and, when the parent has an execution-context record, installs
+ * a copy for codec_con so codec SQL keeps the caller's scope and identity. A
+ * parent without a record yields no codec record. On success the scope owns
+ * the mutex until leave, which removes the record before unlocking. The
+ * parent's borrowed auth and HTTP pointers stay valid because the parent is
+ * blocked in its own synchronous query for the whole codec window. */
+typedef struct ducknng_codec_scope {
+    uint64_t codec_connection_id;
+    int context_installed;
+} ducknng_codec_scope;
+int ducknng_runtime_codec_enter(ducknng_runtime *rt, uint64_t parent_connection_id,
+    const char *recursion_error, ducknng_codec_scope *scope, char **errmsg);
+void ducknng_runtime_codec_leave(ducknng_runtime *rt, ducknng_codec_scope *scope);
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc);
 ducknng_service *ducknng_runtime_current_request_service_get(ducknng_runtime *rt);
 ducknng_service *ducknng_runtime_current_thread_request_service_get(ducknng_runtime *rt);
@@ -347,12 +408,26 @@ void ducknng_runtime_current_execution_subject_set(ducknng_runtime *rt,
     const ducknng_execution_subject *subject_ctx);
 const ducknng_execution_subject *ducknng_runtime_current_thread_execution_subject_get(
     ducknng_runtime *rt);
-int ducknng_runtime_execution_subject_bind_connection(ducknng_runtime *rt,
-    uint64_t connection_id, const char *subject);
-void ducknng_runtime_execution_subject_unbind_connection(ducknng_runtime *rt,
+/* Installs the complete record for connection_id. subject is NULL for a scope
+ * without a dispatched caller. auth_ctx is required for AUTHORIZER and http_ctx for
+ * HTTP_ROUTE; both must be NULL otherwise. Fails without modifying the map
+ * on invalid arguments, allocation failure, or an existing record. */
+int ducknng_runtime_connection_context_install(ducknng_runtime *rt,
+    uint64_t connection_id, ducknng_connection_scope scope,
+    const ducknng_execution_subject *subject,
+    const ducknng_authorizer_context *auth_ctx,
+    const ducknng_http_request_context *http_ctx, char **errmsg);
+void ducknng_runtime_connection_context_remove(ducknng_runtime *rt,
     uint64_t connection_id);
+/* Returns NONE when no record is installed for connection_id. */
+ducknng_connection_scope ducknng_runtime_connection_scope_get(ducknng_runtime *rt,
+    uint64_t connection_id);
+/* Returns 1 and fills *out when a record exists, 0 when none exists. */
+int ducknng_runtime_connection_context_view_get(ducknng_runtime *rt,
+    uint64_t connection_id, ducknng_connection_context_view *out);
 /* Returns a duckdb-allocated copy of the subject bound to connection_id, or
- * NULL when no binding is installed. Caller frees with duckdb_free. */
+ * NULL when no record is installed or the record is anonymous. Caller frees
+ * with duckdb_free. */
 char *ducknng_runtime_execution_subject_for_connection_dup(ducknng_runtime *rt,
     uint64_t connection_id);
 

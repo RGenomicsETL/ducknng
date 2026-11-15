@@ -10,7 +10,8 @@ SELECT count(*) FROM ducknng_list_codecs()
 
 query IT
 SELECT a, b
-FROM ducknng_parse_body('[{"a":1,"b":"x"},{"a":2,"b":"y"}]'::BLOB, 'application/json; charset=utf-8')
+FROM ducknng_parse_body('[{"a":1,"b":"x"},{"a":2,"b":"y"}]'::BLOB, 'application/json; charset=utf-8',
+  schema := NULL::STRUCT(a UBIGINT, b VARCHAR))
 ORDER BY a
 ----
 1	x
@@ -207,7 +208,8 @@ query IT
 SELECT a, b
 FROM ducknng_parse_body(
   (concat('{"a":1,"b":"x"}', chr(10), '{"a":2,"b":"y"}', chr(10)))::BLOB,
-  'application/x-ndjson'
+  'application/x-ndjson',
+  schema := NULL::STRUCT(a UBIGINT, b VARCHAR)
 )
 ORDER BY a
 ----
@@ -251,8 +253,10 @@ query IT
 SELECT a, b
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng_body_codecs.ipc',
-  'SELECT * FROM ducknng_parse_body(''[{"a":3,"b":"z"}]''::BLOB, ''application/json'')',
-  0::UBIGINT
+  'SELECT * FROM ducknng_parse_body(''[{"a":3,"b":"z"}]''::BLOB, ''application/json'',
+     schema := NULL::STRUCT(a UBIGINT, b VARCHAR))',
+  0::UBIGINT,
+  schema := NULL::STRUCT(a UBIGINT, b VARCHAR)
 )
 ----
 3	z
@@ -270,6 +274,11 @@ SELECT CASE
 1
 
 statement ok
+SET VARIABLE codec_frame_schema = NULL::STRUCT(ok BOOLEAN, error VARCHAR, version UTINYINT,
+  type UTINYINT, status UTINYINT, flags UINTEGER, type_name VARCHAR, name VARCHAR,
+  payload BLOB, payload_text VARCHAR)
+
+statement ok
 SET VARIABLE codec_http_url = (
   SELECT listen FROM ducknng_list_servers() WHERE name = 'codec_http'
 )
@@ -282,7 +291,8 @@ FROM ducknng_ncurl_table(
   '[{"name":"Content-Type","value":"application/vnd.ducknng.frame"}]',
   from_hex('01000000000000000000000000000000000000000000'),
   2000,
-  0::UBIGINT
+  0::UBIGINT,
+  schema := getvariable('codec_frame_schema')
 )
 ----
 1	result
@@ -295,7 +305,8 @@ FROM ducknng_ncurl_table(
   '[{"name":"Content-Type","value":"Application/Vnd.Ducknng.Frame; charset=binary"}]',
   from_hex('01000000000000000000000000000000000000000000'),
   2000,
-  0::UBIGINT
+  0::UBIGINT,
+  schema := getvariable('codec_frame_schema')
 )
 ----
 1	result
@@ -365,7 +376,8 @@ SELECT CASE WHEN ducknng_unregister_codec('application/json') THEN 1 ELSE 0 END
 
 query I
 SELECT a
-FROM ducknng_parse_body('[{"a":42}]'::BLOB, 'application/json')
+FROM ducknng_parse_body('[{"a":42}]'::BLOB, 'application/json',
+  schema := NULL::STRUCT(a UBIGINT))
 ----
 42
 

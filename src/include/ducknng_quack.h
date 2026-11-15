@@ -43,9 +43,14 @@ int ducknng_result_empty_quack_message(duckdb_result result,
  * fail-closed against arbitrary bytes. */
 int ducknng_quack_payload_parse_schema(const uint8_t *payload, size_t payload_len,
     ducknng_quack_schema *out_schema, char **errmsg);
-int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
-    const uint8_t *payload, size_t payload_len,
+/* Strictly parse a whole quack batch without a bind_info: schema, DuckDB type
+ * convertibility of every column, chunk structure, terminator, and no trailing
+ * bytes. Fills *out_schema and *out_row_count; the schema is reset on failure. */
+int ducknng_quack_payload_parse_table(const uint8_t *payload, size_t payload_len,
     ducknng_quack_schema *out_schema, idx_t *out_row_count, char **errmsg);
+/* Declare one result column per top-level schema column. */
+int ducknng_quack_schema_bind_columns(duckdb_bind_info info,
+    const ducknng_quack_schema *schema, char **errmsg);
 /* Decode a quack batch and append its rows to an open appender whose column
  * types must match the batch schema. Adds the appended row count to
  * *inout_rows. Fail-closed: any malformed byte, schema/appender column
@@ -58,6 +63,22 @@ int ducknng_quack_payload_append_to_appender(duckdb_appender appender,
     const uint8_t *payload, size_t payload_len,
     const char *const *expected_names, idx_t expected_name_count,
     uint64_t *inout_rows, char **errmsg);
+/* Deep structural equality of two DuckDB logical types (parameters, children,
+ * member names, and enum labels included). Neither argument is consumed. */
+int ducknng_quack_logical_type_equal(duckdb_logical_type a, duckdb_logical_type b);
+/* Require a parsed quack schema to match a declared column list exactly:
+ * same count, same names in order, and deep-equal DuckDB types. */
+int ducknng_quack_schema_validate_declared(const ducknng_quack_schema *schema,
+    idx_t ncols, const char *const *names, const duckdb_logical_type *types,
+    char **errmsg);
+/* Validate the schema header of one quack payload against a declared column
+ * list. A payload without a header passes unless require_header is set. When
+ * out_schema is non-NULL and validation succeeds, the parsed schema replaces
+ * *out_schema (previous contents are reset). */
+int ducknng_quack_payload_validate_declared(const uint8_t *payload,
+    size_t payload_len, int require_header, idx_t ncols,
+    const char *const *names, const duckdb_logical_type *types,
+    ducknng_quack_schema *out_schema, char **errmsg);
 int ducknng_quack_payload_read_row_count(const uint8_t *payload, size_t payload_len,
     const ducknng_quack_schema *schema, idx_t *out_row_count, char **errmsg);
 int ducknng_quack_payload_scan_begin(const uint8_t *payload, size_t payload_len,

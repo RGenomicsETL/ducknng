@@ -19,7 +19,7 @@ MAINTAINER="sounkou-bioinfo"
 HELLO_SQL=$(cat <<'SQLEOF'
 LOAD ducknng;
 SELECT ducknng_start_server('demo', 'inproc://ducknng_demo', 1, 134217728, 30000, 0::UBIGINT);
-SELECT * FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);
+SELECT * FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));
 SELECT ducknng_stop_server('demo');
 SQLEOF
 )
@@ -55,7 +55,7 @@ render_hello() {
     echo ""
     echo "    -- ducknng_query_rpc returns the actual result rows"
     echo "    SELECT *"
-    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);"
+    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));"
     echo ""
     echo "$t2" | sed 's/^/    /'
     echo ""
@@ -73,7 +73,7 @@ non_render_hello() {
     echo ""
     echo "    -- ducknng_query_rpc returns the actual result rows"
     echo "    SELECT *"
-    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);"
+    echo "    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));"
     echo ""
     echo "    SELECT ducknng_stop_server('demo');"
 }
@@ -90,7 +90,7 @@ else
 
     -- ducknng_query_rpc returns the actual result rows
     SELECT *
-    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT);
+    FROM ducknng_query_rpc('inproc://ducknng_demo', 'SELECT 42 AS answer', 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));
 
     SELECT ducknng_stop_server('demo');"
 fi

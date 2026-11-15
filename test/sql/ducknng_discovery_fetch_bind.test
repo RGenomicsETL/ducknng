@@ -1,0 +1,267 @@
+# name: test/sql/ducknng_discovery_fetch_bind.test
+# group: [ducknng]
+#
+# ducknng_prepare_query and ducknng_prepare_query_params return one row with a
+# fixed `schema_ipc BLOB` column. Bind sends nothing; each execution sends one
+# query_prepare. The descriptor is accepted by the named `schema` parameter of
+# ducknng_query_rpc and ducknng_fetch_query_table, decoded locally at bind.
+#
+# ducknng_fetch_query_table reads one batch per execution from a caller-owned
+# session and never closes it.
+
+require ducknng
+
+statement ok
+CREATE SEQUENCE dfb START 1
+
+# A dedicated service with no earlier connections.
+statement ok
+SELECT ducknng_start_server('dfb_plan', 'inproc://ducknng-dfb-plan',
+  1, 134217728, 300000, 0::UBIGINT)
+
+# This source string is only ever planned locally. It is never executed.
+statement ok
+EXPLAIN SELECT * FROM ducknng_prepare_query('inproc://ducknng-dfb-plan',
+  'SELECT * FROM range(nextval(''dfb''))', 0::UBIGINT)
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM ducknng_prepare_query(
+  'inproc://ducknng-dfb-plan', 'SELECT * FROM range(nextval(''dfb''))', 0::UBIGINT))
+----
+schema_ipc	BLOB
+
+statement ok
+PREPARE dfb_plan_only AS
+SELECT schema_ipc FROM ducknng_prepare_query('inproc://ducknng-dfb-plan',
+  'SELECT * FROM range(nextval(''dfb''))', 0::UBIGINT)
+
+statement ok
+PREPARE dfb_discover AS
+SELECT octet_length(schema_ipc) > 0 FROM ducknng_prepare_query(
+  'inproc://ducknng-dfb-plan', 'SELECT 1::BIGINT AS n, ''x'' AS label', 0::UBIGINT)
+
+statement ok
+DEALLOCATE dfb_plan_only
+
+query I
+SELECT newest_seq FROM ducknng_monitor_status('dfb_plan')
+----
+0
+
+statement error
+SELECT currval('dfb')
+----
+currval
+
+query I
+EXECUTE dfb_discover
+----
+true
+
+query I
+SELECT newest_seq > 0 FROM ducknng_monitor_status('dfb_plan')
+----
+true
+
+# Two-statement workflow: discovery is executed, then the descriptor declares
+# the executor's columns. query_prepare does not run the plan, so nextval in
+# the discovered SQL has not been evaluated.
+statement ok
+SET VARIABLE dfb_schema = (SELECT schema_ipc FROM ducknng_prepare_query(
+  'inproc://ducknng-dfb-plan', 'SELECT nextval(''dfb'') AS n, ''x'' AS label', 0::UBIGINT))
+
+query T
+SELECT typeof(getvariable('dfb_schema'))
+----
+BLOB
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM ducknng_query_rpc(
+  'inproc://ducknng-dfb-plan', 'SELECT nextval(''dfb'') AS n, ''x'' AS label', 0::UBIGINT,
+  schema := getvariable('dfb_schema')))
+----
+n	BIGINT
+label	VARCHAR
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan',
+  'SELECT nextval(''dfb'') AS n, ''x'' AS label', 0::UBIGINT,
+  schema := getvariable('dfb_schema'))
+
+statement ok
+PREPARE dfb_exec AS
+SELECT n, label FROM ducknng_query_rpc('inproc://ducknng-dfb-plan',
+  'SELECT nextval(''dfb'') AS n, ''x'' AS label', 0::UBIGINT,
+  schema := getvariable('dfb_schema'))
+
+statement error
+SELECT currval('dfb')
+----
+currval
+
+query IT
+EXECUTE dfb_exec
+----
+1	x
+
+query IT
+EXECUTE dfb_exec
+----
+2	x
+
+# The descriptor is checked against the reply like a STRUCT declaration.
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan',
+  'SELECT 1::INTEGER AS n, ''x'' AS label', 0::UBIGINT,
+  schema := getvariable('dfb_schema'))
+----
+schema
+
+# Parameterized discovery.
+statement ok
+SET VARIABLE dfb_params_schema = (SELECT schema_ipc FROM ducknng_prepare_query_params(
+  'inproc://ducknng-dfb-plan', 'SELECT ?::DOUBLE AS v, ?::VARCHAR AS tag',
+  struct_pack(p1 := 1.5::DOUBLE, p2 := 'a'), 0::UBIGINT))
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM ducknng_query_rpc_params(
+  'inproc://ducknng-dfb-plan', 'SELECT ?::DOUBLE AS v, ?::VARCHAR AS tag',
+  struct_pack(p1 := 2.5::DOUBLE, p2 := 'b'), 0::UBIGINT,
+  schema := getvariable('dfb_params_schema')))
+----
+v	DOUBLE
+tag	VARCHAR
+
+query RT
+SELECT v, tag FROM ducknng_query_rpc_params(
+  'inproc://ducknng-dfb-plan', 'SELECT ?::DOUBLE AS v, ?::VARCHAR AS tag',
+  struct_pack(p1 := 2.5::DOUBLE, p2 := 'b'), 0::UBIGINT,
+  schema := getvariable('dfb_params_schema'))
+----
+2.5	b
+
+# Discovery failure is an execution error, not a NULL descriptor.
+statement error
+SELECT schema_ipc FROM ducknng_prepare_query('inproc://ducknng-dfb-plan',
+  'SELECT * FROM dfb_missing_table', 0::UBIGINT)
+----
+dfb_missing_table
+
+# Malformed descriptors fail closed at bind.
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan', 'SELECT 1 AS n', 0::UBIGINT,
+  schema := from_hex('00010203'))
+----
+invalid Arrow IPC schema descriptor
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan', 'SELECT 1 AS n', 0::UBIGINT,
+  schema := ''::BLOB)
+----
+schema descriptor BLOB is empty
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan', 'SELECT 1 AS n', 0::UBIGINT,
+  schema := unhex(left(hex(getvariable('dfb_schema')), 24)))
+----
+invalid Arrow IPC schema descriptor
+
+statement error
+SELECT * FROM ducknng_query_rpc('inproc://ducknng-dfb-plan', 'SELECT 1 AS n', 0::UBIGINT,
+  schema := NULL::BLOB)
+----
+schema must be a nonempty STRUCT
+
+# ducknng_fetch_query_table: the caller opens and owns the session. The server
+# batches whole DuckDB vectors, so batch_rows 1 yields one 2048-row vector per
+# fetch.
+statement ok
+CREATE TEMP TABLE dfb_open AS
+SELECT * FROM ducknng_open_query('inproc://ducknng-dfb-plan',
+  'SELECT i::BIGINT AS i FROM range(7000) t(i)', 1::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+
+statement ok
+SET VARIABLE dfb_sid = (SELECT session_id FROM dfb_open)
+
+statement ok
+SET VARIABLE dfb_token = (SELECT session_token FROM dfb_open)
+
+statement error
+SELECT * FROM ducknng_fetch_query_table('inproc://ducknng-dfb-plan',
+  getvariable('dfb_sid')::UBIGINT, getvariable('dfb_token')::VARCHAR,
+  3::UBIGINT, 0::UBIGINT, 0::UBIGINT)
+----
+schema must be a nonempty STRUCT
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(i BIGINT)))
+----
+i	BIGINT
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(i BIGINT))
+
+statement ok
+PREPARE dfb_fetch AS
+SELECT min(i), max(i), count(*) FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(i BIGINT))
+
+# Planning fetched nothing: the first execution returns the first batch.
+query III
+EXECUTE dfb_fetch
+----
+0	2047	2048
+
+query III
+EXECUTE dfb_fetch
+----
+2048	4095	2048
+
+# A mismatched declaration fails after its fetch; that batch is consumed and
+# the session stays open for the caller.
+statement error
+SELECT * FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER))
+----
+schema
+
+# An early LIMIT does not close the session either.
+query I
+SELECT i FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := NULL::STRUCT(i BIGINT)) LIMIT 1
+----
+6144
+
+# A descriptor from discovery works as the fetch declaration.
+statement ok
+SET VARIABLE dfb_fetch_schema = (SELECT schema_ipc FROM ducknng_prepare_query(
+  'inproc://ducknng-dfb-plan', 'SELECT 1::BIGINT AS i', 0::UBIGINT))
+
+query II
+SELECT ok, state FROM ducknng_close_query('inproc://ducknng-dfb-plan',
+  getvariable('dfb_sid')::UBIGINT, getvariable('dfb_token')::VARCHAR, 0::UBIGINT)
+----
+true	closed
+
+statement error
+SELECT * FROM ducknng_fetch_query_table(
+  'inproc://ducknng-dfb-plan', getvariable('dfb_sid')::UBIGINT,
+  getvariable('dfb_token')::VARCHAR, 3::UBIGINT, 0::UBIGINT, 0::UBIGINT,
+  schema := getvariable('dfb_fetch_schema'))
+----
+session
+
+statement ok
+SELECT ducknng_stop_server('dfb_plan')

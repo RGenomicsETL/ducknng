@@ -3,6 +3,7 @@
 #include "ducknng_runtime.h"
 #include "ducknng_transport.h"
 #include "ducknng_util.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,10 +47,6 @@ typedef struct {
 typedef struct {
     ducknng_socket_row *rows;
     idx_t row_count;
-} ducknng_sockets_bind_data;
-
-typedef struct {
-    ducknng_sockets_bind_data *bind;
     idx_t offset;
 } ducknng_sockets_init_data;
 
@@ -289,8 +286,8 @@ static int ducknng_socket_is_req_protocol(const ducknng_client_socket *sock) {
     return sock && sock->protocol && strcmp(sock->protocol, "req") == 0;
 }
 
-static void destroy_sockets_bind_data(void *ptr) {
-    ducknng_sockets_bind_data *data = (ducknng_sockets_bind_data *)ptr;
+static void destroy_sockets_init_data(void *ptr) {
+    ducknng_sockets_init_data *data = (ducknng_sockets_init_data *)ptr;
     idx_t i;
     if (!data) return;
     for (i = 0; i < data->row_count; i++) {
@@ -299,11 +296,6 @@ static void destroy_sockets_bind_data(void *ptr) {
     }
     if (data->rows) duckdb_free(data->rows);
     duckdb_free(data);
-}
-
-static void destroy_sockets_init_data(void *ptr) {
-    ducknng_sockets_init_data *data = (ducknng_sockets_init_data *)ptr;
-    if (data) duckdb_free(data);
 }
 
 static void ducknng_socket_scalar(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
@@ -819,43 +811,11 @@ emit:
 
 static void ducknng_sockets_bind(duckdb_bind_info info) {
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    ducknng_sockets_bind_data *bind;
     duckdb_logical_type type;
-    size_t i;
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
         return;
     }
-    bind = (ducknng_sockets_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    ducknng_mutex_lock(&ctx->rt->mu);
-    bind->row_count = (idx_t)ctx->rt->client_socket_count;
-    if (bind->row_count > 0) {
-        bind->rows = (ducknng_socket_row *)duckdb_malloc(sizeof(*bind->rows) * (size_t)bind->row_count);
-        if (!bind->rows) {
-            ducknng_mutex_unlock(&ctx->rt->mu);
-            duckdb_free(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory");
-            return;
-        }
-        memset(bind->rows, 0, sizeof(*bind->rows) * (size_t)bind->row_count);
-        for (i = 0; i < (size_t)bind->row_count; i++) {
-            ducknng_client_socket *sock = ctx->rt->client_sockets[i];
-            bind->rows[i].socket_id = sock ? sock->socket_id : 0;
-            bind->rows[i].protocol = sock && sock->protocol ? ducknng_strdup(sock->protocol) : NULL;
-            bind->rows[i].url = sock ? ducknng_strdup(sock->url ? sock->url : sock->listen_url) : NULL;
-            bind->rows[i].open = sock ? (bool)sock->open : false;
-            bind->rows[i].connected = sock ? (bool)sock->connected : false;
-            bind->rows[i].listening = sock ? (bool)sock->has_listener : false;
-            bind->rows[i].send_timeout_ms = sock ? sock->send_timeout_ms : 0;
-            bind->rows[i].recv_timeout_ms = sock ? sock->recv_timeout_ms : 0;
-        }
-    }
-    ducknng_mutex_unlock(&ctx->rt->mu);
     type = duckdb_create_logical_type(DUCKDB_TYPE_UBIGINT);
     duckdb_bind_add_result_column(info, "socket_id", type);
     duckdb_destroy_logical_type(&type);
@@ -872,26 +832,63 @@ static void ducknng_sockets_bind(duckdb_bind_info info) {
     duckdb_bind_add_result_column(info, "send_timeout_ms", type);
     duckdb_bind_add_result_column(info, "recv_timeout_ms", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_sockets_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
 }
 
+/* Snapshot the socket table under rt->mu into init-owned rows so a prepared
+ * plan lists the sockets present at execution, not at prepare. */
 static void ducknng_sockets_init(duckdb_init_info info) {
-    ducknng_sockets_bind_data *bind = (ducknng_sockets_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_sockets_init_data *init = (ducknng_sockets_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    ducknng_sockets_init_data *init;
+    size_t count;
+    size_t i;
+    if (!ctx || !ctx->rt) {
+        duckdb_init_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    init = (ducknng_sockets_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+    ducknng_mutex_lock(&ctx->rt->mu);
+    count = ctx->rt->client_socket_count;
+    if (count > 0) {
+        if (count > SIZE_MAX / sizeof(*init->rows)) goto oom_locked;
+        init->rows = (ducknng_socket_row *)duckdb_malloc(sizeof(*init->rows) * count);
+        if (!init->rows) goto oom_locked;
+        memset(init->rows, 0, sizeof(*init->rows) * count);
+        for (i = 0; i < count; i++) {
+            ducknng_client_socket *sock = ctx->rt->client_sockets[i];
+            ducknng_socket_row *row = &init->rows[i];
+            const char *url;
+            /* Count each row before its strings so cleanup frees partial copies. */
+            init->row_count = (idx_t)(i + 1);
+            if (!sock) continue;
+            url = sock->url ? sock->url : sock->listen_url;
+            row->socket_id = sock->socket_id;
+            if (sock->protocol && !(row->protocol = ducknng_strdup(sock->protocol)))
+                goto oom_locked;
+            if (url && !(row->url = ducknng_strdup(url))) goto oom_locked;
+            row->open = (bool)sock->open;
+            row->connected = (bool)sock->connected;
+            row->listening = (bool)sock->has_listener;
+            row->send_timeout_ms = sock->send_timeout_ms;
+            row->recv_timeout_ms = sock->recv_timeout_ms;
+        }
+    }
+    ducknng_mutex_unlock(&ctx->rt->mu);
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_sockets_init_data);
+    return;
+oom_locked:
+    ducknng_mutex_unlock(&ctx->rt->mu);
+    destroy_sockets_init_data(init);
+    duckdb_init_set_error(info, "ducknng: out of memory");
 }
 
 static void ducknng_sockets_scan(duckdb_function_info info, duckdb_data_chunk output) {
     ducknng_sockets_init_data *init = (ducknng_sockets_init_data *)duckdb_function_get_init_data(info);
-    ducknng_sockets_bind_data *bind;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
@@ -909,12 +906,11 @@ static void ducknng_sockets_scan(duckdb_function_info info, duckdb_data_chunk ou
     bool *listening;
     int32_t *send_timeout_ms;
     int32_t *recv_timeout_ms;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!init || init->offset >= init->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    bind = init->bind;
-    remaining = bind->row_count - init->offset;
+    remaining = init->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     vec_socket_id = duckdb_data_chunk_get_vector(output, 0);
     vec_protocol = duckdb_data_chunk_get_vector(output, 1);
@@ -931,7 +927,7 @@ static void ducknng_sockets_scan(duckdb_function_info info, duckdb_data_chunk ou
     send_timeout_ms = (int32_t *)duckdb_vector_get_data(vec_send_timeout_ms);
     recv_timeout_ms = (int32_t *)duckdb_vector_get_data(vec_recv_timeout_ms);
     for (i = 0; i < chunk_size; i++) {
-        ducknng_socket_row *row = &bind->rows[init->offset + i];
+        ducknng_socket_row *row = &init->rows[init->offset + i];
         socket_ids[i] = row->socket_id;
         open[i] = row->open;
         connected[i] = row->connected;

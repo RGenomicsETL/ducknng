@@ -51,6 +51,29 @@ int ducknng_sql_scalar_connection_id(duckdb_function_info info, uint64_t *out_co
 int ducknng_sql_register_table(duckdb_connection con, const char *name, ducknng_sql_context *ctx,
     idx_t nparams, duckdb_type *param_types, duckdb_table_function_bind_t bind_fn,
     duckdb_table_function_init_t init_fn, duckdb_table_function_t scan_fn);
+/* Same as ducknng_sql_register_table, plus a named `schema` parameter of type
+ * ANY whose bind reads it with ducknng_sql_bind_declared_schema. */
+int ducknng_sql_register_table_with_schema(duckdb_connection con, const char *name,
+    ducknng_sql_context *ctx, idx_t nparams, duckdb_type *param_types,
+    duckdb_table_function_bind_t bind_fn, duckdb_table_function_init_t init_fn,
+    duckdb_table_function_t scan_fn);
+
+/* Result columns declared by `schema := NULL::STRUCT(...)` or by an Arrow IPC
+ * schema descriptor BLOB. names[i] and types[i] are owned; release with
+ * ducknng_sql_declared_schema_reset. */
+typedef struct ducknng_sql_declared_schema {
+    idx_t ncols;
+    char **names;
+    duckdb_logical_type *types;
+} ducknng_sql_declared_schema;
+/* Read the named `schema` parameter, which is either a nonempty STRUCT or a
+ * non-NULL BLOB holding a schema-only Arrow IPC stream decoded locally with
+ * nanoarrow. Take owned copies of the column names and types and add one
+ * result column per member.
+ * Returns 0 on success. On failure sets the bind error, leaves *out empty,
+ * and returns -1. */
+int ducknng_sql_bind_declared_schema(duckdb_bind_info info, ducknng_sql_declared_schema *out);
+void ducknng_sql_declared_schema_reset(ducknng_sql_declared_schema *schema);
 
 /* Read a UBIGINT config option registered by ducknng from a client context.
  * Returns fallback if ctx is NULL or the option is absent. */
@@ -63,6 +86,7 @@ uint64_t ducknng_sql_get_config_ubigint(duckdb_client_context ctx,
 #define DUCKNNG_REGISTER_VOLATILE_SCALAR_LOGICAL_TYPES(...) ducknng_sql_register_volatile_scalar_logical_types(__VA_ARGS__)
 #define DUCKNNG_REGISTER_VOLATILE_SCALAR_WITH_BIND(...) ducknng_sql_register_volatile_scalar_with_bind(__VA_ARGS__)
 #define DUCKNNG_REGISTER_TABLE(...) ducknng_sql_register_table(__VA_ARGS__)
+#define DUCKNNG_REGISTER_TABLE_WITH_SCHEMA(...) ducknng_sql_register_table_with_schema(__VA_ARGS__)
 
 #define arg_is_null ducknng_sql_arg_is_null
 #define arg_varchar_dup ducknng_sql_arg_varchar_dup
@@ -75,8 +99,19 @@ uint64_t ducknng_sql_get_config_ubigint(duckdb_client_context ctx,
 
 int ducknng_set_table_sql_context(duckdb_table_function tf, const ducknng_sql_context *ctx);
 int ducknng_set_scalar_sql_context(duckdb_scalar_function fn, const ducknng_sql_context *ctx);
-int ducknng_sql_inside_authorizer(ducknng_sql_context *ctx);
-int ducknng_reject_table_inside_authorizer(duckdb_bind_info info, ducknng_sql_context *ctx);
+/* Writes the id of the connection binding a table function. Returns 0, or -1
+ * when DuckDB exposes no client context. Every id, including 0, is valid. */
+int ducknng_sql_table_bind_connection_id(duckdb_bind_info info, uint64_t *out_connection_id);
+/* Authorizer guards consult the runtime record for the executing connection.
+ * Each returns 1 after setting a DuckDB error when the call must not run.
+ * The table bind guard also rejects when no connection id is available, and
+ * on success writes the id for bind data so init can repeat the check for
+ * every execution of a prepared plan. The scalar guard requires the id
+ * captured by ducknng_sql_connection_bind_cb. */
+int ducknng_reject_table_inside_authorizer(duckdb_bind_info info, ducknng_sql_context *ctx,
+    uint64_t *out_connection_id);
+int ducknng_reject_init_inside_authorizer(duckdb_init_info info, ducknng_sql_context *ctx,
+    uint64_t connection_id);
 int ducknng_reject_scalar_inside_authorizer(duckdb_function_info info, ducknng_sql_context *ctx);
 
 int ducknng_register_sql_auth(duckdb_connection con, ducknng_sql_context *ctx);

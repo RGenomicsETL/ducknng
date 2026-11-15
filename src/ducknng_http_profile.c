@@ -667,16 +667,14 @@ ducknng_runtime_resolve_http_profile_headers(ducknng_runtime *rt,
         const char *subject = NULL;
         char *connection_subject = NULL;
         int admitted;
-        /* The connection binding takes precedence over the thread-local
-         * subject: a session connection carries its opener's subject, which
-         * must govern the session's SQL even when a different caller's fetch
-         * request is driving execution on this thread. */
+        /* SQL authority comes from the executing connection. An absent or
+         * anonymous record grants no restricted-profile access. C dispatch
+         * without a connection ID uses its request-thread context. */
         if (has_connection_id) {
             connection_subject =
                 ducknng_runtime_execution_subject_for_connection_dup(rt, connection_id);
             subject = connection_subject;
-        }
-        if (!subject || !subject[0]) {
+        } else {
             const ducknng_execution_subject *subject_ctx =
                 ducknng_runtime_current_thread_execution_subject_get(rt);
             subject = subject_ctx ? subject_ctx->subject : NULL;

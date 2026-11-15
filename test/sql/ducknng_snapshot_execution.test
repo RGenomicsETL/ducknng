@@ -1,0 +1,307 @@
+# name: test/sql/ducknng_snapshot_execution.test
+# group: [ducknng]
+#
+# Runtime snapshot table functions copy arguments and declare columns at bind.
+# Service lookup and registry, profile and monitor snapshots happen at
+# execution, so EXPLAIN, DESCRIBE and PREPARE do not touch runtime state and
+# every EXECUTE of a prepared statement observes current state.
+
+require ducknng
+
+# A missing service binds; execution reports it.
+statement ok
+EXPLAIN SELECT * FROM ducknng_read_monitor('snap_missing', 0::UBIGINT, 10::UBIGINT)
+
+statement ok
+DESCRIBE SELECT * FROM ducknng_list_pipes('snap_missing')
+
+statement ok
+DESCRIBE SELECT * FROM ducknng_monitor_status('snap_missing')
+
+statement ok
+PREPARE snap_missing_status AS
+SELECT active_pipes FROM ducknng_monitor_status('snap_missing')
+
+statement ok
+PREPARE snap_missing_pipes AS
+SELECT count(*) FROM ducknng_list_pipes('snap_missing')
+
+statement ok
+PREPARE snap_missing_monitor AS
+SELECT count(*) FROM ducknng_read_monitor('snap_missing', 0::UBIGINT, 10::UBIGINT)
+
+statement error
+EXECUTE snap_missing_status
+----
+ducknng: service not found
+
+statement error
+EXECUTE snap_missing_pipes
+----
+ducknng: service not found
+
+statement error
+EXECUTE snap_missing_monitor
+----
+ducknng: service not found
+
+# Starting the service after PREPARE makes the same statement succeed.
+statement ok
+SELECT ducknng_start_server('snap_missing', 'ipc:///tmp/ducknng_snap_missing.ipc',
+  1, 134217728, 300000, 0::UBIGINT)
+
+query I
+EXECUTE snap_missing_status
+----
+0
+
+query I
+EXECUTE snap_missing_pipes
+----
+0
+
+statement ok
+SELECT ducknng_stop_server('snap_missing')
+
+statement error
+EXECUTE snap_missing_status
+----
+ducknng: service not found
+
+# ducknng_list_servers refreshes per execution.
+statement ok
+PREPARE snap_servers AS
+SELECT count(*) FROM ducknng_list_servers() WHERE name = 'snap_servers'
+
+query I
+EXECUTE snap_servers
+----
+0
+
+statement ok
+SELECT ducknng_start_server('snap_servers', 'ipc:///tmp/ducknng_snap_servers.ipc',
+  1, 134217728, 300000, 0::UBIGINT)
+
+query I
+EXECUTE snap_servers
+----
+1
+
+statement ok
+SELECT ducknng_stop_server('snap_servers')
+
+query I
+EXECUTE snap_servers
+----
+0
+
+# ducknng_list_methods enumerates the live registry per execution.
+statement ok
+PREPARE snap_methods AS
+SELECT count(*) FROM ducknng_list_methods() WHERE name = 'snap_method'
+
+query I
+EXECUTE snap_methods
+----
+0
+
+statement ok
+SELECT ducknng_register_sql_method('snap_method', 'SELECT to_json(1)', '{}')
+
+query I
+EXECUTE snap_methods
+----
+1
+
+statement ok
+SELECT ducknng_unregister_method('snap_method')
+
+query I
+EXECUTE snap_methods
+----
+0
+
+# ducknng_list_http_profiles takes its snapshot per execution.
+statement ok
+PREPARE snap_profiles AS
+SELECT count(*) FROM ducknng_list_http_profiles() WHERE profile_id = 'snap-profile'
+
+query I
+EXECUTE snap_profiles
+----
+0
+
+query I
+SELECT CASE WHEN ducknng_register_http_profile(
+  'snap-profile',
+  'http',
+  '127.0.0.1',
+  NULL::INTEGER,
+  '/snap',
+  'GET',
+  false,
+  'Authorization',
+  'Bearer snap-secret'
+) THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_profiles
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_drop_http_profile('snap-profile') THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_profiles
+----
+0
+
+# The ducknng_list_http_profiles guard still rejects use inside an authorizer.
+query I
+SELECT CASE
+  WHEN ducknng_start_server('snap_auth', 'tcp://127.0.0.1:0', 1, 134217728, 300000, 0::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+statement ok
+SET VARIABLE snap_auth_url = (
+  SELECT listen FROM ducknng_list_servers() WHERE name = 'snap_auth'
+)
+
+query I
+SELECT CASE WHEN ducknng_set_service_authorizer(
+  'snap_auth',
+  'SELECT (SELECT count(*) FROM ducknng_list_http_profiles()) >= 0 AS allow FROM ducknng_auth_context()'
+) THEN 1 ELSE 0 END
+----
+1
+
+query II
+SELECT ok, error LIKE '%cannot run inside a SQL authorizer%'
+FROM ducknng_get_rpc_manifest(getvariable('snap_auth_url')::VARCHAR, 0::UBIGINT)
+----
+0	1
+
+statement ok
+SELECT ducknng_stop_server('snap_auth')
+
+# ducknng_list_sockets takes its snapshot per execution.
+statement ok
+PREPARE snap_sockets AS
+SELECT count(*) FROM ducknng_list_sockets() WHERE protocol = 'pair'
+
+query I
+EXECUTE snap_sockets
+----
+0
+
+statement ok
+SET VARIABLE snap_socket_id = (SELECT (ducknng_open_socket('pair')).socket_id)
+
+query I
+EXECUTE snap_sockets
+----
+1
+
+query I
+SELECT CASE WHEN (ducknng_close_socket(getvariable('snap_socket_id')::UBIGINT)).ok
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_sockets
+----
+0
+
+# ducknng_list_tls_configs takes its snapshot per execution.
+statement ok
+PREPARE snap_tls AS
+SELECT count(*) FROM ducknng_list_tls_configs()
+
+query I
+EXECUTE snap_tls
+----
+0
+
+statement ok
+SET VARIABLE snap_tls_id = (SELECT ducknng_tls_config_from_pem(
+  '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n',
+  '-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n',
+  NULL, NULL, 0))
+
+query ITII
+SELECT count(*), min(source), bool_and(has_cert_pem AND has_key_pem)::INTEGER,
+  bool_and(NOT has_ca_pem)::INTEGER
+FROM ducknng_list_tls_configs()
+WHERE tls_config_id = getvariable('snap_tls_id')::UBIGINT
+----
+1	pem	1	1
+
+query I
+EXECUTE snap_tls
+----
+1
+
+query I
+SELECT CASE WHEN ducknng_drop_tls_config(getvariable('snap_tls_id')::UBIGINT)
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_tls
+----
+0
+
+# ducknng_list_codecs declares its columns at bind and copies the builtin and
+# user codec registry per execution.
+statement ok
+DESCRIBE SELECT * FROM ducknng_list_codecs()
+
+statement ok
+PREPARE snap_codecs AS
+SELECT count(*) FROM ducknng_list_codecs()
+WHERE kind = 'user' AND media_types = 'application/x-snap-codec'
+
+query I
+EXECUTE snap_codecs
+----
+0
+
+statement ok
+CREATE MACRO snap_codec_fn(b) AS upper(CAST(b AS VARCHAR))
+
+query I
+SELECT CASE WHEN ducknng_register_codec('application/x-snap-codec', 'snap_codec_fn')
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_codecs
+----
+1
+
+query TTT
+SELECT provider, function_name, output FROM ducknng_list_codecs()
+WHERE media_types = 'application/x-snap-codec'
+----
+user	snap_codec_fn	value VARCHAR
+
+query I
+SELECT CASE WHEN ducknng_unregister_codec('application/x-snap-codec')
+  THEN 1 ELSE 0 END
+----
+1
+
+query I
+EXECUTE snap_codecs
+----
+0

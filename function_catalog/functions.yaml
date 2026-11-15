@@ -56,6 +56,19 @@
   },
   "functions": [
     {
+      "name": "ducknng_nng_version",
+      "kind": "scalar",
+      "category": "Introspection",
+      "signature": "ducknng_nng_version()",
+      "returns": "VARCHAR",
+      "since": "0.1.1",
+      "implemented": true,
+      "description": "Return the version of the linked NNG library.",
+      "examples": [
+        "SELECT ducknng_nng_version();"
+      ]
+    },
+    {
       "name": "ducknng_start_server",
       "kind": "scalar",
       "category": "Service Control",
@@ -1181,44 +1194,94 @@
       ]
     },
     {
+      "name": "ducknng_parse_csv",
+      "kind": "table",
+      "category": "Body Codecs",
+      "signature": "ducknng_parse_csv(body, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
+      "since": "0.1.1",
+      "implemented": true,
+      "description": "Read a supplied CSV BLOB with DuckDB's reader during execution.",
+      "notes": [
+        "Uses a temporary file through DuckDB's filesystem API. The reader's inferred output must match the declared schema.",
+        "For in-memory C parsing without a required declaration, use ducknng_parse_body(body, 'text/csv')."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_parse_csv(encode('id,name' || chr(10) || '1,Ada'), schema := NULL::STRUCT(id BIGINT, name VARCHAR));"
+      ]
+    },
+    {
+      "name": "ducknng_parse_tsv",
+      "kind": "table",
+      "category": "Body Codecs",
+      "signature": "ducknng_parse_tsv(body, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
+      "since": "0.1.1",
+      "implemented": true,
+      "description": "Read a supplied TSV BLOB with DuckDB's reader during execution.",
+      "notes": [
+        "Uses a temporary file and DuckDB's CSV reader with a tab delimiter. Output must match the declared schema."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_parse_tsv(encode('id' || chr(9) || 'name' || chr(10) || '1' || chr(9) || 'Ada'), schema := NULL::STRUCT(id BIGINT, name VARCHAR));"
+      ]
+    },
+    {
+      "name": "ducknng_parse_parquet",
+      "kind": "table",
+      "category": "Body Codecs",
+      "signature": "ducknng_parse_parquet(body, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
+      "since": "0.1.1",
+      "implemented": true,
+      "description": "Decode a supplied Parquet BLOB during execution with a declared result schema.",
+      "notes": [
+        "The reader uses a temporary file through DuckDB's filesystem API and respects external-access policy.",
+        "schema declares expected output columns without opening a file or executing a reader during bind."
+      ],
+      "examples": [
+        "SET VARIABLE parquet_body = (SELECT content FROM read_blob('data.parquet'));",
+        "SELECT * FROM ducknng_parse_parquet(getvariable('parquet_body'), schema := NULL::STRUCT(id BIGINT));"
+      ]
+    },
+    {
       "name": "ducknng_parse_body",
       "kind": "table",
       "category": "Body Codecs",
-      "signature": "ducknng_parse_body(body, content_type)",
-      "returns": "TABLE(dynamic by provider)",
+      "signature": "ducknng_parse_body(body, content_type[, schema := declared_schema])",
+      "returns": "TABLE(provider output schema)",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Parse one response/request body BLOB according to its content type.",
+      "description": "Decode a supplied body BLOB according to its content type.",
       "notes": [
-        "Supported built-ins include raw, UTF-8 text, JSON, Arrow IPC stream, and ducknng frame bodies.",
-        "JSON parses in memory through DuckDB JSON functions and then reuses ducknng's Arrow IPC row mapping for the returned table.",
-        "CSV, TSV, and Parquet media types are recognized but use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
-        "application/vnd.ducknng.frame returns the same decoded envelope columns as ducknng_decode_frame()."
+        "Text, raw bytes, forms, frames, supplied Arrow/Quack streams, and the native CSV/TSV parser can infer columns from inert bytes.",
+        "JSON, NDJSON, and Parquet require schema and execute their DuckDB SQL or file reader during execution, not bind.",
+        "Registered SQL codecs take priority over built-ins. They declare value VARCHAR locally and invoke their SQL function during execution.",
+        "schema accepts a typed STRUCT or a schema-only Arrow IPC BLOB. It is an output contract, not a cast request."
       ],
       "examples": [
-        "SELECT * FROM ducknng_parse_body('[{\"a\":1}]'::BLOB, 'application/json');"
+        "SELECT * FROM ducknng_parse_body('[{\"a\":1}]'::BLOB, 'application/json', schema := NULL::STRUCT(a UBIGINT));"
       ]
     },
     {
       "name": "ducknng_ncurl_table",
-      "kind": "table",
+      "kind": "table_macro",
       "category": "HTTP Transport",
-      "signature": "ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id[, profile_id])",
-      "returns": "TABLE(dynamic by response Content-Type)",
+      "signature": "ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, schema := declared_schema[, profile_id := profile])",
+      "returns": "TABLE(declared schema)",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Perform one HTTP or HTTPS request and parse a successful response body into a DuckDB table using the built-in body codec providers.",
+      "description": "Request and decode one HTTP response during execution with a declared result schema.",
       "notes": [
-        "HTTP status must be 2xx; use ducknng_ncurl() when you need in-band status, headers, or raw error bodies.",
-        "The response Content-Type selects the provider. Missing or unknown content types fall back to raw BLOB output.",
-        "Because its result schema is inferred from the response during binding, this helper is not a lateral per-row HTTP primitive; use ducknng_ncurl() plus an explicit parse step for row-by-row retry or chunk fanout workflows.",
-        "JSON parses in memory; CSV, TSV, and Parquet currently use the generic body BLOB fallback until a scalarfs-style memory-backed reader path lands.",
-        "This helper is transport-local and does not change the framed RPC method surface.",
-        "Optional profile_id uses the same outbound HTTP profile resolution and fail-closed scope checks as ducknng_ncurl().",
-        "The request is sent only after profile scope checks pass and profile-auth-header collisions are rejected."
+        "Bind only retains arguments and declares columns. Each execution resolves the current profile and TLS configuration, then sends one request.",
+        "HTTP status must be 2xx. Use ducknng_ncurl for in-band status, headers, or raw error bodies.",
+        "Content-Type selects the codec, including registered SQL codecs. Missing or unknown content types produce body BLOB.",
+        "Decoded column names, counts, and types must match schema before rows are emitted.",
+        "Optional profile_id uses the same fail-closed scope and authentication-header checks as ducknng_ncurl.",
+        "This HTTP adapter helper does not change the framed RPC method surface."
       ],
       "examples": [
-        "SELECT * FROM ducknng_ncurl_table('http://127.0.0.1:8080/data.json', 'GET', NULL, NULL, 2000, 0::UBIGINT);"
+        "SELECT * FROM ducknng_ncurl_table('http://127.0.0.1:8080/data.json', 'GET', NULL, NULL, 2000, 0::UBIGINT, schema := NULL::STRUCT(a UBIGINT));"
       ]
     },
     {
@@ -1352,6 +1415,23 @@
       ],
       "examples": [
         "SELECT ducknng_unregister_http_route_pattern('api', 'GET', 'template', '/tenant/{tenant_id}/items/{item_id}');"
+      ]
+    },
+    {
+      "name": "ducknng_add_stream_route",
+      "kind": "scalar",
+      "category": "HTTP Routes",
+      "signature": "ducknng_add_stream_route(service_name, method, path, handler_sql[, content_type])",
+      "returns": "BOOLEAN",
+      "since": "0.1.1",
+      "implemented": true,
+      "description": "Register a SQL-backed HTTP route that uses chunked transfer encoding.",
+      "notes": [
+        "handler_sql must return a chunk column. Each non-null row becomes an HTTP chunk.",
+        "For SSE output, use ducknng_format_sse and the text/event-stream content type."
+      ],
+      "examples": [
+        "SELECT ducknng_add_stream_route('api', 'GET', '/chunks', 'SELECT i::VARCHAR AS chunk FROM range(3) t(i)', 'text/plain');"
       ]
     },
     {
@@ -1508,22 +1588,21 @@
       "parameters": "status, body_text"
     },
     {
-      "name": "ducknng_http_sse",
-      "kind": "table_macro",
+      "name": "ducknng_format_sse",
+      "kind": "scalar_macro",
       "category": "HTTP Routes",
-      "signature": "ducknng_http_sse(status, body_text)",
-      "returns": "TABLE(status INTEGER, content_type VARCHAR, body VARCHAR)",
-      "since": "0.1.0",
+      "signature": "ducknng_format_sse(data, event := NULL, id := NULL, retry := NULL)",
+      "returns": "VARCHAR",
+      "since": "0.1.1",
       "implemented": true,
-      "description": "Convenience table macro for returning a Server-Sent Events HTTP response from a route handler.",
+      "description": "Format an SSE event string for a stream-route chunk.",
       "notes": [
-        "Sets content_type to 'text/event-stream'.",
-        "Use inside handler_sql to produce a well-formed SSE response row."
+        "NULL optional fields are omitted. data supplies the data line, followed by the empty line that ends the event.",
+        "Use single-line data and metadata values. This formatter does not split multiline data into separate data fields."
       ],
       "examples": [
-        "SELECT * FROM ducknng_http_sse(200, 'data: hello\n\n');"
-      ],
-      "parameters": "status, body_text"
+        "SELECT ducknng_format_sse('{\"rows\":42}', event := 'progress', id := '1');"
+      ]
     },
     {
       "name": "ducknng_http_request",
@@ -2210,38 +2289,57 @@
       "name": "ducknng_query_rpc",
       "kind": "table",
       "category": "RPC Helper",
-      "signature": "ducknng_query_rpc(url, sql, tls_config_id)",
-      "returns": "table",
+      "signature": "ducknng_query_rpc(url, sql, tls_config_id, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Execute a row-returning RPC query as a session convenience wrapper and expose the fetched Arrow IPC rows as a DuckDB table.",
+      "description": "Execute a session-backed remote query with a declared result schema.",
       "notes": [
-        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "This helper now opens a server-side query session, fetches Arrow IPC batches until end-of-stream, and closes the session automatically.",
-        "It is the ergonomic row path for session-backed SQL queries; use ducknng_open_query(), ducknng_fetch_query(), ducknng_fetch_query_table(), ducknng_close_query(), and ducknng_cancel_query() when you need explicit session lifecycle control.",
-        "Remote schema discovery occurs during table-function bind and DuckDB may bind a plan more than once; use this convenience wrapper for read-only or otherwise idempotent SQL, not mutations."
+        "Transport is selected by the URL scheme: NNG, HTTP, or HTTPS.",
+        "schema is a nonempty STRUCT or a schema-only Arrow IPC BLOB obtained in a separate executed discovery statement.",
+        "Bind declares columns locally. Each execution opens a fresh session, fetches its batches, and owns session cleanup.",
+        "Received names, column counts, and types must match the declaration before output vectors are written. The declaration does not request casts.",
+        "Use the explicit open, fetch, close, and cancel helpers when the caller must own the session."
       ],
       "examples": [
-        "SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT);"
+        "SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));"
       ]
     },
     {
       "name": "ducknng_query_rpc_params",
       "kind": "table",
       "category": "RPC Helper",
-      "signature": "ducknng_query_rpc_params(url, sql, params, tls_config_id)",
-      "returns": "table",
+      "signature": "ducknng_query_rpc_params(url, sql, params, tls_config_id, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
       "since": "0.1.2",
       "implemented": true,
-      "description": "Execute a parameterized row-returning query through the session family and expose its Arrow rows as a DuckDB table.",
+      "description": "Execute a parameterized remote query with a declared result schema and execution-owned session.",
       "notes": [
-        "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
-        "The parameter tuple is encoded as Arrow and bound with duckdb_bind_value on the server; values are not interpolated into SQL text.",
+        "params is a STRUCT whose child order binds positional ? parameters. Child names are descriptive only.",
+        "The parameter tuple is encoded as Arrow and bound with duckdb_bind_value on the server, without SQL interpolation.",
         "Parameterized query_open accepts exactly one SQL statement.",
-        "Like ducknng_query_rpc(), this dynamic-schema convenience wrapper may perform remote read work during bind and is not a mutation surface."
+        "schema has the same STRUCT or Arrow descriptor contract as ducknng_query_rpc. Bind sends no request."
       ],
       "examples": [
-        "SELECT * FROM ducknng_query_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::INTEGER AS answer', struct_pack(p1 := 42), 0::UBIGINT);"
+        "SELECT * FROM ducknng_query_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::INTEGER AS answer', struct_pack(p1 := 42), 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));"
+      ]
+    },
+    {
+      "name": "ducknng_query_rpc_mode",
+      "kind": "table",
+      "category": "RPC Helper",
+      "signature": "ducknng_query_rpc_mode(url, sql, tls_config_id, serialization_mode, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
+      "since": "development",
+      "implemented": true,
+      "description": "Execute a declared-schema remote query with an explicit result codec.",
+      "notes": [
+        "serialization_mode selects arrow_ipc_stream or the DuckDB-specific ducknng_quack_batch codec.",
+        "Bind sends no request. Execution owns a fresh query session and validates returned schemas before writing output.",
+        "Use a typed STRUCT for Quack-specific types that an Arrow schema descriptor cannot represent."
+      ],
+      "examples": [
+        "SELECT * FROM ducknng_query_rpc_mode('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42 AS answer', 0::UBIGINT, 'ducknng_quack_batch', schema := NULL::STRUCT(answer INTEGER));"
       ]
     },
     {
@@ -2249,16 +2347,18 @@
       "kind": "table",
       "category": "RPC Helper",
       "signature": "ducknng_prepare_query(url, sql, tls_config_id)",
-      "returns": "table (zero rows with the prepared remote schema)",
+      "returns": "TABLE(schema_ipc BLOB)",
       "since": "0.1.2",
       "implemented": true,
-      "description": "Prepare exactly one remote SQL statement without executing it and expose its result schema.",
+      "description": "Request a remote SQL result-schema descriptor during execution.",
       "notes": [
-        "Use DESCRIBE SELECT * FROM ducknng_prepare_query(...) to inspect the remote result columns.",
-        "Multiple statements are rejected before any leading statement can execute."
+        "Bind declares one BLOB column and sends no request. Each execution returns one schema-only Arrow IPC stream.",
+        "Store the descriptor in a separate executed statement, then pass the inert value as schema to a query or fetch helper.",
+        "The server accepts exactly one statement. It does not run the resulting execution plan, but SQL binding can invoke functions with side effects."
       ],
       "examples": [
-        "DESCRIBE SELECT * FROM ducknng_prepare_query('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42::INTEGER AS answer', 0::UBIGINT);"
+        "SET VARIABLE remote_schema = (SELECT schema_ipc FROM ducknng_prepare_query('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42::INTEGER AS answer', 0::UBIGINT));",
+        "DESCRIBE SELECT * FROM ducknng_query_rpc('ipc:///tmp/ducknng_sql0.ipc', 'SELECT 42::INTEGER AS answer', 0::UBIGINT, schema := getvariable('remote_schema'));"
       ]
     },
     {
@@ -2266,16 +2366,18 @@
       "kind": "table",
       "category": "RPC Helper",
       "signature": "ducknng_prepare_query_params(url, sql, params, tls_config_id)",
-      "returns": "table (zero rows with the prepared remote schema)",
+      "returns": "TABLE(schema_ipc BLOB)",
       "since": "0.1.2",
       "implemented": true,
-      "description": "Bind a typed parameter tuple, prepare exactly one remote SQL statement without executing it, and expose its result schema.",
+      "description": "Request a result-schema descriptor for one parameterized remote SQL statement during execution.",
       "notes": [
-        "params is a STRUCT whose child order binds positional ? parameters; child names are descriptive only.",
-        "Use this to discover concrete output types for parameterized statements without running them."
+        "params is a STRUCT whose child order binds positional ? parameters. Child names are descriptive only.",
+        "Discovery is a separate executed operation. SQL binding on the server can invoke functions with side effects.",
+        "The returned BLOB can provide the local declaration for query_rpc_params without another bind-time request."
       ],
       "examples": [
-        "DESCRIBE SELECT * FROM ducknng_prepare_query_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::BIGINT AS answer', struct_pack(p1 := 42::BIGINT), 0::UBIGINT);"
+        "SET VARIABLE remote_schema = (SELECT schema_ipc FROM ducknng_prepare_query_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::BIGINT AS answer', struct_pack(p1 := 42::BIGINT), 0::UBIGINT));",
+        "SELECT * FROM ducknng_query_rpc_params('ipc:///tmp/ducknng_sql0.ipc', 'SELECT ?::BIGINT AS answer', struct_pack(p1 := 42::BIGINT), 0::UBIGINT, schema := getvariable('remote_schema'));"
       ]
     },
     {
@@ -2343,20 +2445,20 @@
       "name": "ducknng_fetch_query_table",
       "kind": "table",
       "category": "RPC Session",
-      "signature": "ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id)",
-      "returns": "TABLE(dynamic from Arrow IPC batch)",
+      "signature": "ducknng_fetch_query_table(url, session_id, session_token, batch_rows, batch_bytes, tls_config_id, schema := declared_schema)",
+      "returns": "TABLE(declared schema)",
       "since": "0.1.0",
       "implemented": true,
-      "description": "Fetch one session row batch and decode the returned Arrow IPC payload directly into a DuckDB table.",
+      "description": "Fetch one Arrow batch from a caller-owned session during execution.",
       "notes": [
-        "Transport is selected by the URL scheme; the synchronous helper routes over NNG, HTTP, or HTTPS as appropriate.",
-        "session_token must match the bearer capability returned by ducknng_open_query().",
-        "If the session was opened over verified mTLS, this request must arrive with the same transport-derived peer identity.",
-        "This helper is a one-fetch convenience wrapper. It expects the reply to contain an Arrow IPC row payload and raises an error on a control-only exhausted reply.",
-        "Use ducknng_fetch_query() when you need explicit access to control_json, payload, and end_of_stream in the same structured row."
+        "schema is a typed STRUCT or a schema-only Arrow IPC BLOB. Bind declares columns locally and does not advance the cursor.",
+        "Each execution fetches one batch and validates names and types before writing vectors. Repeated EXECUTE advances the cursor.",
+        "The caller owns session closure, including after schema mismatch or early termination. A fetched batch cannot be rewound.",
+        "session_token must match the capability returned by ducknng_open_query. Verified mTLS sessions also require the same peer identity.",
+        "A control-only reply raises an error. Use ducknng_fetch_query for explicit control_json, payload, and end_of_stream fields."
       ],
       "examples": [
-        "SELECT * FROM ducknng_fetch_query_table('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT);"
+        "SELECT * FROM ducknng_fetch_query_table('ipc:///tmp/ducknng_sql0.ipc', 1::UBIGINT, '<session_token>', 0::UBIGINT, 0::UBIGINT, 0::UBIGINT, schema := NULL::STRUCT(answer INTEGER));"
       ]
     },
     {

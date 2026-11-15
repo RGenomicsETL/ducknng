@@ -141,21 +141,21 @@ ducknng_bench_time_query <- function(con, sql, expected, expected_rows) {
   elapsed
 }
 
-ducknng_bench_ducknng_query_sql <- function(url, rows, serialization_mode = NULL) {
+# Received schema of `SELECT * FROM lineitem` from TPC-H dbgen. Arrow IPC and
+# the Quack batch codec both carry these types unchanged.
+ducknng_bench_lineitem_schema <- paste(
+  "STRUCT(l_orderkey BIGINT, l_partkey BIGINT, l_suppkey BIGINT,",
+  "l_linenumber BIGINT, l_quantity DECIMAL(15,2), l_extendedprice DECIMAL(15,2),",
+  "l_discount DECIMAL(15,2), l_tax DECIMAL(15,2), l_returnflag VARCHAR,",
+  "l_linestatus VARCHAR, l_shipdate DATE, l_commitdate DATE, l_receiptdate DATE,",
+  "l_shipinstruct VARCHAR, l_shipmode VARCHAR, l_comment VARCHAR)"
+)
+
+ducknng_bench_ducknng_query_sql <- function(url, rows, serialization_mode = "arrow_ipc_stream") {
   remote_sql <- sprintf("SELECT * FROM lineitem LIMIT %d", rows)
-  if (is.null(serialization_mode) || identical(serialization_mode, "arrow_ipc_stream")) {
-    source_sql <- sprintf(
-      "ducknng_query_rpc(%s, %s, 0::UBIGINT)",
-      ducknng_bench_sql_quote(url), ducknng_bench_sql_quote(remote_sql)
-    )
-  } else {
-    source_sql <- sprintf(
-      "ducknng_query_rpc_mode(%s, %s, 0::UBIGINT, %s)",
-      ducknng_bench_sql_quote(url),
-      ducknng_bench_sql_quote(remote_sql),
-      ducknng_bench_sql_quote(serialization_mode)
-    )
-  }
+  source_sql <- ducknng_bench_rpc_source_sql(
+    url, remote_sql, ducknng_bench_lineitem_schema, serialization_mode
+  )
   ducknng_bench_aggregate_validation_sql(source_sql)
 }
 
@@ -204,19 +204,23 @@ ducknng_bench_collect_rpc_timings <- function(system_name, protocol_name, transp
   do.call(rbind, results)
 }
 
-ducknng_bench_rpc_source_sql <- function(url, remote_sql, serialization_mode = "arrow_ipc_stream") {
+# `schema` is the SQL STRUCT type naming the exact received columns.
+ducknng_bench_rpc_source_sql <- function(url, remote_sql, schema,
+    serialization_mode = "arrow_ipc_stream") {
   if (identical(serialization_mode, "arrow_ipc_stream")) {
     sprintf(
-      "ducknng_query_rpc(%s, %s, 0::UBIGINT)",
+      "ducknng_query_rpc(%s, %s, 0::UBIGINT, schema := NULL::%s)",
       ducknng_bench_sql_quote(url),
-      ducknng_bench_sql_quote(remote_sql)
+      ducknng_bench_sql_quote(remote_sql),
+      schema
     )
   } else {
     sprintf(
-      "ducknng_query_rpc_mode(%s, %s, 0::UBIGINT, %s)",
+      "ducknng_query_rpc_mode(%s, %s, 0::UBIGINT, %s, schema := NULL::%s)",
       ducknng_bench_sql_quote(url),
       ducknng_bench_sql_quote(remote_sql),
-      ducknng_bench_sql_quote(serialization_mode)
+      ducknng_bench_sql_quote(serialization_mode),
+      schema
     )
   }
 }
@@ -236,6 +240,7 @@ ducknng_bench_concurrent_worker <- function(kind, worker_id, url, serialization_
       source_sql <- ducknng_bench_rpc_source_sql(
         url,
         sprintf("SELECT l_orderkey FROM lineitem LIMIT %d", rows),
+        "STRUCT(l_orderkey BIGINT)",
         serialization_mode
       )
       sql <- sprintf("SELECT count(*) AS n FROM %s", source_sql)

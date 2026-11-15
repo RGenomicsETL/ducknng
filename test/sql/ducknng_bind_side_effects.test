@@ -1,0 +1,186 @@
+# name: test/sql/ducknng_bind_side_effects.test
+# group: [ducknng]
+#
+# Bind callbacks of fixed-schema table functions copy arguments and declare
+# columns only. EXPLAIN, DESCRIBE and PREPARE never send a request; each
+# execution sends exactly one, including repeated EXECUTE of one statement.
+# The remote method increments a local sequence, so currval counts calls.
+
+require ducknng
+
+statement ok
+CREATE SEQUENCE bind_effects START 1
+
+statement ok
+SELECT ducknng_register_sql_method('bind_effects_counter',
+  'SELECT to_json(nextval(''bind_effects''))', '{}')
+
+statement ok
+SELECT ducknng_start_server('bind_effects', 'ipc:///tmp/ducknng_bind_effects.ipc',
+  1, 134217728, 300000, 0::UBIGINT)
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_request('ipc:///tmp/ducknng_bind_effects.ipc',
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000, 0::UBIGINT)
+
+statement ok
+DESCRIBE SELECT * FROM ducknng_request('ipc:///tmp/ducknng_bind_effects.ipc',
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000, 0::UBIGINT)
+
+statement ok
+PREPARE bind_effects_request AS
+SELECT ok FROM ducknng_request('ipc:///tmp/ducknng_bind_effects.ipc',
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000, 0::UBIGINT)
+
+# Nothing above reached the server: the sequence was never advanced.
+statement error
+SELECT currval('bind_effects')
+----
+currval
+
+query I
+EXECUTE bind_effects_request
+----
+true
+
+query I
+SELECT currval('bind_effects')
+----
+1
+
+query I
+EXECUTE bind_effects_request
+----
+true
+
+query I
+SELECT currval('bind_effects')
+----
+2
+
+# EXPLAIN ANALYZE executes the plan and therefore sends the request.
+statement ok
+EXPLAIN ANALYZE SELECT * FROM ducknng_request('ipc:///tmp/ducknng_bind_effects.ipc',
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000, 0::UBIGINT)
+
+query I
+SELECT currval('bind_effects')
+----
+3
+
+# Socket-bound requests follow the same rule.
+query I
+SELECT (ducknng_open_socket('req')).socket_id
+----
+1
+
+query I
+SELECT (ducknng_dial_socket(1, 'ipc:///tmp/ducknng_bind_effects.ipc', 1000, 0::UBIGINT)).ok
+----
+true
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_request_socket(1::UBIGINT,
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000)
+
+statement ok
+PREPARE bind_effects_socket AS
+SELECT ok FROM ducknng_request_socket(1::UBIGINT,
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000)
+
+query I
+SELECT currval('bind_effects')
+----
+3
+
+query I
+EXECUTE bind_effects_socket
+----
+true
+
+query I
+EXECUTE bind_effects_socket
+----
+true
+
+query I
+SELECT currval('bind_effects')
+----
+5
+
+# A socket closed between PREPARE and EXECUTE is an execution-time result, not
+# a stale bind-time reply.
+statement ok
+SELECT ducknng_close_socket(1)
+
+query IT
+SELECT ok, error FROM ducknng_request_socket(1::UBIGINT,
+  ducknng_encode_rpc_call('bind_effects_counter', '{}'), 1000)
+----
+false	ducknng: connected client socket not found
+
+query I
+SELECT currval('bind_effects')
+----
+5
+
+# A dedicated service has no earlier connections or pending disconnect events.
+# Planning a manifest request must not create its first connection.
+statement ok
+SELECT ducknng_start_server('bind_manifest', 'inproc://bind-manifest-effects',
+  1, 134217728, 300000, 0::UBIGINT)
+
+statement ok
+EXPLAIN SELECT * FROM ducknng_get_rpc_manifest('inproc://bind-manifest-effects', 0::UBIGINT)
+
+statement ok
+DESCRIBE SELECT * FROM ducknng_get_rpc_manifest('inproc://bind-manifest-effects', 0::UBIGINT)
+
+statement ok
+PREPARE bind_effects_manifest AS
+SELECT ok FROM ducknng_get_rpc_manifest('inproc://bind-manifest-effects', 0::UBIGINT)
+
+query I
+SELECT newest_seq FROM ducknng_monitor_status('bind_manifest')
+----
+0
+
+query I
+EXECUTE bind_effects_manifest
+----
+true
+
+query I
+SELECT newest_seq > 0 FROM ducknng_monitor_status('bind_manifest')
+----
+true
+
+query I
+EXECUTE bind_effects_manifest
+----
+true
+
+# Unreachable endpoints: bind succeeds and the error belongs to execution.
+statement ok
+DESCRIBE SELECT * FROM ducknng_request('ipc:///tmp/ducknng_bind_effects_missing.ipc',
+  from_hex('00'), 100, 0::UBIGINT)
+
+statement ok
+PREPARE bind_effects_missing AS
+SELECT ok, error IS NOT NULL FROM ducknng_get_rpc_manifest('ipc:///tmp/ducknng_bind_effects_missing.ipc', 0::UBIGINT)
+
+query II
+EXECUTE bind_effects_missing
+----
+false	true
+
+query II
+SELECT ok, error FROM ducknng_get_rpc_manifest('', 0::UBIGINT)
+----
+false	ducknng: remote manifest URL must not be NULL or empty
+
+statement ok
+SELECT ducknng_stop_server('bind_manifest')
+
+statement ok
+SELECT ducknng_stop_server('bind_effects')

@@ -212,7 +212,8 @@ FROM ducknng_ncurl('ftp://127.0.0.1:9', 'GET', NULL, NULL, 10, 0::UBIGINT)
 
 statement error
 SELECT *
-FROM ducknng_ncurl_table('ftp://127.0.0.1:9', 'GET', NULL, NULL, 10, 0::UBIGINT)
+FROM ducknng_ncurl_table('ftp://127.0.0.1:9', 'GET', NULL, NULL, 10, 0::UBIGINT,
+  schema := NULL::STRUCT(body BLOB))
 ----
 ducknng: unsupported transport URL scheme
 
@@ -316,7 +317,8 @@ FROM ducknng_ncurl('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, getvariable('n
 
 statement error
 SELECT *
-FROM ducknng_ncurl_table('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, getvariable('negative_tls_id')::UBIGINT)
+FROM ducknng_ncurl_table('http://127.0.0.1:1/', 'GET', NULL, NULL, 100, getvariable('negative_tls_id')::UBIGINT,
+  schema := NULL::STRUCT(body BLOB))
 ----
 ducknng: TLS configuration requires an https:// URL
 

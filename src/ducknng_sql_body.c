@@ -78,11 +78,50 @@ typedef struct {
     ducknng_quack_schema quack_schema;
 } ducknng_body_parse_bind_data;
 
+/* Scan state over one parse result. ducknng_parse_body borrows the result
+ * owned by its bind data; ducknng_ncurl_table decodes a fresh result in each
+ * init and sets owns_bind so the result is released with the init data. */
 typedef struct {
     ducknng_body_parse_bind_data *bind;
+    int owns_bind;
     idx_t offset;
     int emitted;
 } ducknng_body_parse_init_data;
+
+/* Immutable request arguments of one ducknng_ncurl_table call. client_ctx is
+ * an owned wrapper; the statement keeps the underlying context alive. */
+typedef struct {
+    char *url;
+    char *method;
+    char *headers_json;
+    char *profile_id;
+    uint8_t *body;
+    size_t body_len;
+    int32_t timeout_ms;
+    uint64_t tls_config_id;
+    duckdb_client_context client_ctx;
+    ducknng_sql_declared_schema schema;
+} ducknng_ncurl_table_bind_data;
+
+/* Bind plan of ducknng_parse_body and the ducknng_parse_{csv,tsv,parquet}
+ * reader aliases. A codec that decodes the supplied bytes in C is parsed at
+ * bind into `parsed`, which init borrows. Otherwise `parsed` is NULL and init
+ * decodes `body` with the codec selected at bind (codec_kind and
+ * user_function_name), so registry changes after bind cannot change dispatch.
+ * `reader` marks the aliases, which always use the DuckDB file reader.
+ * has_schema says whether `schema` holds declared columns to validate. */
+typedef struct {
+    uint8_t *body;
+    size_t body_len;
+    char *media_type;
+    int codec_kind;
+    int reader;
+    char *user_function_name;
+    duckdb_client_context client_ctx;
+    int has_schema;
+    ducknng_sql_declared_schema schema;
+    ducknng_body_parse_bind_data *parsed;
+} ducknng_body_plan_bind_data;
 
 typedef struct {
     const char *provider;
@@ -100,13 +139,11 @@ typedef struct {
     char *notes;
 } ducknng_codec_dyn_row;
 
+/* One ducknng_list_codecs execution: its own builtin + user codec snapshot
+ * taken at init, and the scan offset. */
 typedef struct {
     ducknng_codec_dyn_row *rows;
     idx_t row_count;
-} ducknng_codecs_bind_data;
-
-typedef struct {
-    ducknng_codecs_bind_data *bind;
     idx_t offset;
 } ducknng_codecs_init_data;
 
@@ -276,11 +313,37 @@ static void destroy_body_parse_bind_data(void *ptr) {
 static void destroy_body_parse_init_data(void *ptr) {
     ducknng_body_parse_init_data *data = (ducknng_body_parse_init_data *)ptr;
     if (!data) return;
+    if (data->owns_bind && data->bind) destroy_body_parse_bind_data(data->bind);
     duckdb_free(data);
 }
 
-static void destroy_codecs_bind_data(void *ptr) {
-    ducknng_codecs_bind_data *data = (ducknng_codecs_bind_data *)ptr;
+static void destroy_body_plan_bind_data(void *ptr) {
+    ducknng_body_plan_bind_data *plan = (ducknng_body_plan_bind_data *)ptr;
+    if (!plan) return;
+    if (plan->body) duckdb_free(plan->body);
+    if (plan->media_type) duckdb_free(plan->media_type);
+    if (plan->user_function_name) duckdb_free(plan->user_function_name);
+    if (plan->client_ctx) duckdb_destroy_client_context(&plan->client_ctx);
+    ducknng_sql_declared_schema_reset(&plan->schema);
+    if (plan->parsed) destroy_body_parse_bind_data(plan->parsed);
+    duckdb_free(plan);
+}
+
+static void destroy_ncurl_table_bind_data(void *ptr) {
+    ducknng_ncurl_table_bind_data *data = (ducknng_ncurl_table_bind_data *)ptr;
+    if (!data) return;
+    if (data->url) duckdb_free(data->url);
+    if (data->method) duckdb_free(data->method);
+    if (data->headers_json) duckdb_free(data->headers_json);
+    if (data->profile_id) duckdb_free(data->profile_id);
+    if (data->body) duckdb_free(data->body);
+    if (data->client_ctx) duckdb_destroy_client_context(&data->client_ctx);
+    ducknng_sql_declared_schema_reset(&data->schema);
+    duckdb_free(data);
+}
+
+static void destroy_codecs_init_data(void *ptr) {
+    ducknng_codecs_init_data *data = (ducknng_codecs_init_data *)ptr;
     idx_t i;
     if (!data) return;
     if (data->rows) {
@@ -295,11 +358,6 @@ static void destroy_codecs_bind_data(void *ptr) {
         duckdb_free(data->rows);
     }
     duckdb_free(data);
-}
-
-static void destroy_codecs_init_data(void *ptr) {
-    ducknng_codecs_init_data *data = (ducknng_codecs_init_data *)ptr;
-    if (data) duckdb_free(data);
 }
 
 static int ducknng_lookup_tls_config_copy(ducknng_sql_context *ctx, uint64_t tls_config_id,
@@ -757,35 +815,44 @@ static void ducknng_frame_end_of_stream_scalar(duckdb_function_info info, duckdb
     }
 }
 
+/* Fixed body result layouts. Envelope columns of the frame layout follow the
+ * wire order: version, type, status, flags. ducknng_aio_collect_decoded()
+ * emits the same order, so one client tuple-unpacking helper works against
+ * every decoded-frame projection. */
+#define DUCKNNG_BODY_FRAME_NCOLS 10
+static const char *const ducknng_body_frame_names[DUCKNNG_BODY_FRAME_NCOLS] = {
+    "ok", "error", "version", "type", "status", "flags",
+    "type_name", "name", "payload", "payload_text"
+};
+static const duckdb_type ducknng_body_frame_types[DUCKNNG_BODY_FRAME_NCOLS] = {
+    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_UTINYINT,
+    DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_UINTEGER,
+    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_VARCHAR
+};
+static const char *const ducknng_body_value_names[1] = { "value" };
+static const char *const ducknng_body_text_names[1] = { "body_text" };
+static const char *const ducknng_body_raw_names[1] = { "body" };
+static const duckdb_type ducknng_body_varchar_types[2] = {
+    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR
+};
+static const duckdb_type ducknng_body_blob_types[1] = { DUCKDB_TYPE_BLOB };
+static const char *const ducknng_body_form_names[2] = { "name", "value" };
+
+static int ducknng_body_add_fixed_columns(duckdb_bind_info info, idx_t ncols,
+    const char *const *names, const duckdb_type *types) {
+    idx_t i;
+    for (i = 0; i < ncols; i++) {
+        duckdb_logical_type type = duckdb_create_logical_type(types[i]);
+        if (!type) return -1;
+        duckdb_bind_add_result_column(info, names[i], type);
+        duckdb_destroy_logical_type(&type);
+    }
+    return 0;
+}
+
 static void ducknng_body_parse_add_frame_columns(duckdb_bind_info info) {
-    duckdb_logical_type type;
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
-    duckdb_bind_add_result_column(info, "ok", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "error", type);
-    duckdb_destroy_logical_type(&type);
-    /* Envelope columns follow the wire order: version, type, status, flags.
-     * ducknng_aio_collect_decoded() emits the same order, so one client
-     * tuple-unpacking helper works against every decoded-frame projection. */
-    type = duckdb_create_logical_type(DUCKDB_TYPE_UTINYINT);
-    duckdb_bind_add_result_column(info, "version", type);
-    duckdb_bind_add_result_column(info, "type", type);
-    duckdb_bind_add_result_column(info, "status", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_UINTEGER);
-    duckdb_bind_add_result_column(info, "flags", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "type_name", type);
-    duckdb_bind_add_result_column(info, "name", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-    duckdb_bind_add_result_column(info, "payload", type);
-    duckdb_destroy_logical_type(&type);
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-    duckdb_bind_add_result_column(info, "payload_text", type);
-    duckdb_destroy_logical_type(&type);
+    (void)ducknng_body_add_fixed_columns(info, DUCKNNG_BODY_FRAME_NCOLS,
+        ducknng_body_frame_names, ducknng_body_frame_types);
 }
 
 static void ducknng_body_parse_emit_frame_row(duckdb_data_chunk output, const ducknng_frame_decode_bind_data *frame) {
@@ -811,9 +878,29 @@ static void ducknng_body_parse_emit_frame_row(duckdb_data_chunk output, const du
     else set_null(duckdb_data_chunk_get_vector(output, 9), 0);
 }
 
+/* Body decoding runs codec SQL through the runtime codec scope on behalf of
+ * the parent SQL connection. A parent that is codec_con itself is codec SQL
+ * decoding a nested body, which fails instead of deadlocking. */
+static int ducknng_body_codec_enter(ducknng_sql_context *ctx,
+    duckdb_client_context parent, ducknng_codec_scope *scope, char **errmsg) {
+    memset(scope, 0, sizeof(*scope));
+    if (!parent) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB client context for body codec");
+        return -1;
+    }
+    return ducknng_runtime_codec_enter(ctx->rt,
+        (uint64_t)duckdb_client_context_get_connection_id(parent),
+        "ducknng: a body codec cannot decode a nested body", scope, errmsg);
+}
+
+static void ducknng_body_codec_leave(ducknng_sql_context *ctx, ducknng_codec_scope *scope) {
+    ducknng_runtime_codec_leave(ctx->rt, scope);
+}
+
 static int ducknng_body_parse_run_duckdb_reader(ducknng_sql_context *ctx,
-    ducknng_body_parse_bind_data *bind, const uint8_t *body, size_t body_len,
-    int codec_kind, char **errmsg) {
+    duckdb_client_context parent, ducknng_body_parse_bind_data *bind,
+    const uint8_t *body, size_t body_len, int codec_kind, char **errmsg) {
+    ducknng_codec_scope codec_scope;
     char *json_text = NULL;
     char *quoted = NULL;
     char *sql = NULL;
@@ -878,10 +965,10 @@ retry_build:
         goto cleanup;
     }
     snprintf(sql, sql_len, chosen_template, quoted, quoted);
-    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (ducknng_body_codec_enter(ctx, parent, &codec_scope, errmsg) != 0) goto cleanup;
     if (ducknng_query_to_ipc_stream(ducknng_runtime_codec_connection(ctx->rt),
             sql, &payload, &payload_len, errmsg) != 0) {
-        ducknng_runtime_codec_connection_unlock(ctx->rt);
+        ducknng_body_codec_leave(ctx, &codec_scope);
         if (tried_array_struct) {
             if (errmsg && *errmsg) { duckdb_free(*errmsg); *errmsg = NULL; }
             tried_array_struct = 0;
@@ -893,7 +980,7 @@ retry_build:
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: JSON body parser query failed");
         goto cleanup;
     }
-    ducknng_runtime_codec_connection_unlock(ctx->rt);
+    ducknng_body_codec_leave(ctx, &codec_scope);
     if (ducknng_decode_ipc_table_payload(payload, payload_len, &bind->schema, &bind->array, errmsg) != 0) goto cleanup;
     bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
     bind->row_count = (idx_t)bind->array.length;
@@ -921,8 +1008,10 @@ static int ducknng_is_sql_identifier(const char *s) {
     return 1;
 }
 
-static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_body_parse_bind_data *bind,
+static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx,
+    duckdb_client_context parent, ducknng_body_parse_bind_data *bind,
     const uint8_t *body, size_t body_len, const char *function_name, char **errmsg) {
+    ducknng_codec_scope codec_scope;
     duckdb_prepared_statement stmt = NULL;
     duckdb_result result;
     char *sql = NULL;
@@ -949,7 +1038,10 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
         return -1;
     }
     snprintf(sql, sql_len, "SELECT %s(?::BLOB) AS value", function_name);
-    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (ducknng_body_codec_enter(ctx, parent, &codec_scope, errmsg) != 0) {
+        duckdb_free(sql);
+        return -1;
+    }
     if (duckdb_prepare(ducknng_runtime_codec_connection(ctx->rt), sql, &stmt) == DuckDBError) {
         prep_err = stmt ? duckdb_prepare_error(stmt) : NULL;
         if (errmsg) *errmsg = ducknng_strdup(prep_err && prep_err[0] ? prep_err : "ducknng: failed to prepare user codec query");
@@ -1011,7 +1103,7 @@ static int ducknng_body_parse_run_user_codec(ducknng_sql_context *ctx, ducknng_b
 cleanup:
     if (result.internal_data) duckdb_destroy_result(&result);
     if (stmt) duckdb_destroy_prepare(&stmt);
-    ducknng_runtime_codec_connection_unlock(ctx->rt);
+    ducknng_body_codec_leave(ctx, &codec_scope);
     if (sql) duckdb_free(sql);
     return rc;
 }
@@ -1514,19 +1606,25 @@ cleanup:
 /* ---------------------------------------------------------------------------
  * Cross-platform tempfile helpers for Parquet body reader
  * --------------------------------------------------------------------------- */
-/* Generate a unique temporary file path and set *out_path.
+/* Generate a temporary file path and set *out_path.
  * Returns 0 on success, -1 on failure.
- * Uses an atomic counter to build a unique name without creating the file on
- * the OS side; DuckDB FS will create it via duckdb_file_system_open with
- * DUCKDB_FILE_FLAG_CREATE. This avoids mkstemp()/close() on POSIX and
- * _tempnam() on Windows while keeping the path unique across threads.
+ * The name combines the process id and a process-wide atomic counter, so it is
+ * unique among concurrent callers in this process and across processes. It does
+ * not create the file: the caller creates it exclusively through the DuckDB file
+ * system (WRITE + CREATE + CREATE_NEW), which fails if the path already exists,
+ * so a planted or stale file is never written, read, or removed.
  * On POSIX the path lives under /tmp; on Windows under the system temp dir. */
 static atomic_uint_fast64_t ducknng_body_tmp_seq = 0;
 
 static int ducknng_body_make_tempfile_path(char **out_path, char **errmsg) {
-    char buf[64];
+    char buf[96];
     uint64_t seq = (uint64_t)atomic_fetch_add_explicit(
         &ducknng_body_tmp_seq, 1, memory_order_relaxed);
+#ifdef _WIN32
+    uint64_t pid = (uint64_t)GetCurrentProcessId();
+#else
+    uint64_t pid = (uint64_t)getpid();
+#endif
 #ifdef _WIN32
     char tmp_dir[MAX_PATH];
     DWORD len = GetTempPathA(MAX_PATH, tmp_dir);
@@ -1534,7 +1632,7 @@ static int ducknng_body_make_tempfile_path(char **out_path, char **errmsg) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: GetTempPathA failed");
         return -1;
     }
-    snprintf(buf, sizeof(buf), "ducknng_body_%016" PRIx64 ".tmp", seq);
+    snprintf(buf, sizeof(buf), "ducknng_body_%" PRIu64 "_%016" PRIx64 ".tmp", pid, seq);
     {
         size_t dir_len = strlen(tmp_dir);
         char *path = (char *)duckdb_malloc(dir_len + strlen(buf) + 1);
@@ -1547,7 +1645,7 @@ static int ducknng_body_make_tempfile_path(char **out_path, char **errmsg) {
         *out_path = path;
     }
 #else
-    snprintf(buf, sizeof(buf), "/tmp/ducknng_body_%016" PRIx64 ".tmp", seq);
+    snprintf(buf, sizeof(buf), "/tmp/ducknng_body_%" PRIu64 "_%016" PRIx64 ".tmp", pid, seq);
     *out_path = ducknng_strdup(buf);
     if (!*out_path) {
         if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory for temp path");
@@ -1570,8 +1668,10 @@ static void ducknng_body_delete_tempfile(const char *path) {
  * Temp-file based DuckDB reader for Parquet body codec
  * --------------------------------------------------------------------------- */
 static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
-    ducknng_body_parse_bind_data *bind, const uint8_t *body, size_t body_len,
-    int codec_kind, duckdb_file_system fs, char **errmsg) {
+    duckdb_client_context parent, ducknng_body_parse_bind_data *bind,
+    const uint8_t *body, size_t body_len, int codec_kind, duckdb_file_system fs,
+    char **errmsg) {
+    ducknng_codec_scope codec_scope;
     char *path = NULL;
     char *quoted_path = NULL;
     char *sql = NULL;
@@ -1581,6 +1681,7 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
     duckdb_file_handle fh = NULL;
     duckdb_file_open_options opts = NULL;
     int rc = -1;
+    int owned = 0;
     const char *query_template = NULL;
     if (errmsg) *errmsg = NULL;
     if (!ctx || !ctx->rt || !ducknng_runtime_codec_connection(ctx->rt) || !bind || !fs) {
@@ -1599,6 +1700,10 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
         if (errmsg) *errmsg = ducknng_strdup("ducknng: body must not be empty for this codec");
         return -1;
     }
+    if ((uint64_t)body_len > (uint64_t)INT64_MAX) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: body too large for temp file");
+        return -1;
+    }
     if (ducknng_body_make_tempfile_path(&path, errmsg) != 0) goto cleanup;
     opts = duckdb_create_file_open_options();
     if (!opts) {
@@ -1607,7 +1712,10 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
     }
     duckdb_file_open_options_set_flag(opts, DUCKDB_FILE_FLAG_WRITE, true);
     duckdb_file_open_options_set_flag(opts, DUCKDB_FILE_FLAG_CREATE, true);
+    duckdb_file_open_options_set_flag(opts, DUCKDB_FILE_FLAG_CREATE_NEW, true);
     if (duckdb_file_system_open(fs, path, opts, &fh) == DuckDBError || !fh) {
+        if (fh) duckdb_destroy_file_handle(&fh);
+        fh = NULL;
         if (errmsg && !*errmsg) {
             duckdb_error_data err = duckdb_file_system_error_data(fs);
             if (err) {
@@ -1619,6 +1727,8 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
         }
         goto cleanup;
     }
+    /* This call created the path exclusively, so this call removes it. */
+    owned = 1;
     duckdb_destroy_file_open_options(&opts);
     opts = NULL;
     if (duckdb_file_handle_write(fh, (void *)body, (int64_t)body_len) != (int64_t)body_len) {
@@ -1651,14 +1761,14 @@ static int ducknng_body_parse_run_tempfile_reader(ducknng_sql_context *ctx,
         goto cleanup;
     }
     snprintf(sql, sql_len, query_template, quoted_path);
-    ducknng_runtime_codec_connection_lock(ctx->rt);
+    if (ducknng_body_codec_enter(ctx, parent, &codec_scope, errmsg) != 0) goto cleanup;
     if (ducknng_query_to_ipc_stream(ducknng_runtime_codec_connection(ctx->rt),
             sql, &payload, &payload_len, errmsg) != 0) {
-        ducknng_runtime_codec_connection_unlock(ctx->rt);
+        ducknng_body_codec_leave(ctx, &codec_scope);
         if (errmsg && !*errmsg) *errmsg = ducknng_strdup("ducknng: body reader query failed");
         goto cleanup;
     }
-    ducknng_runtime_codec_connection_unlock(ctx->rt);
+    ducknng_body_codec_leave(ctx, &codec_scope);
     if (ducknng_decode_ipc_table_payload(payload, payload_len, &bind->schema, &bind->array, errmsg) != 0) goto cleanup;
     bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
     bind->row_count = (idx_t)bind->array.length;
@@ -1669,321 +1779,530 @@ cleanup:
     if (payload) duckdb_free(payload);
     if (sql) duckdb_free(sql);
     if (quoted_path) duckdb_free(quoted_path);
-    if (path) { ducknng_body_delete_tempfile(path); duckdb_free(path); }
+    if (path) {
+        if (owned) ducknng_body_delete_tempfile(path);
+        duckdb_free(path);
+    }
     return rc;
 }
 
-static int ducknng_body_parse_prepare(duckdb_bind_info info, ducknng_sql_context *ctx,
-    const uint8_t *body, size_t body_len, const char *content_type) {
-    ducknng_body_parse_bind_data *bind;
-    duckdb_logical_type type;
-    char *errmsg = NULL;
+/* Decode one body into an owned parse result. client_ctx is borrowed for the
+ * duration of this call only and is never stored in the result. On failure
+ * *out_bind is NULL and *errmsg holds an owned message when allocation allowed
+ * one. No bind_info is touched: column declaration is a separate step. */
+/* Select the codec for a normalized media type. User-registered codecs take
+ * precedence over built-in providers so a deployment can override
+ * application/json or text wildcard media types with its own scalar. On
+ * DUCKNNG_BODY_CODEC_USER, *user_fn is an owned copy of the function name. */
+static int ducknng_body_resolve_codec(ducknng_sql_context *ctx, const char *media_type,
+    char **user_fn) {
+    *user_fn = ctx && ctx->rt ? ducknng_runtime_find_user_codec(ctx->rt, media_type) : NULL;
+    if (*user_fn) return DUCKNNG_BODY_CODEC_USER;
+    return ducknng_body_codec_for_media_type(media_type);
+}
+
+static int ducknng_body_parse_build_codec(ducknng_sql_context *ctx,
+    duckdb_client_context client_ctx, const uint8_t *body, size_t body_len,
+    const char *media_type, int codec_kind, const char *user_fn,
+    ducknng_body_parse_bind_data **out_bind, char **errmsg);
+
+static int ducknng_body_parse_build(ducknng_sql_context *ctx,
+    duckdb_client_context client_ctx, const uint8_t *body, size_t body_len,
+    const char *content_type, ducknng_body_parse_bind_data **out_bind,
+    char **errmsg) {
+    char *media_type;
     char *user_fn = NULL;
-    idx_t col;
+    int codec_kind, rc;
+    *out_bind = NULL;
+    *errmsg = NULL;
+    media_type = ducknng_normalize_media_type(content_type);
+    if (!media_type) {
+        *errmsg = ducknng_strdup("ducknng: out of memory normalizing content type");
+        return -1;
+    }
+    codec_kind = ducknng_body_resolve_codec(ctx, media_type, &user_fn);
+    rc = ducknng_body_parse_build_codec(ctx, client_ctx, body, body_len, media_type,
+        codec_kind, user_fn, out_bind, errmsg);
+    if (user_fn) duckdb_free(user_fn);
+    duckdb_free(media_type);
+    return rc;
+}
+
+/* Decode one body with an already selected codec. media_type and user_fn are
+ * borrowed and copied into the result. */
+static int ducknng_body_parse_build_codec(ducknng_sql_context *ctx,
+    duckdb_client_context client_ctx, const uint8_t *body, size_t body_len,
+    const char *media_type, int codec_kind, const char *user_fn,
+    ducknng_body_parse_bind_data **out_bind, char **errmsg) {
+    ducknng_body_parse_bind_data *bind;
+    const char *fail_msg = "ducknng: out of memory";
+    *out_bind = NULL;
+    *errmsg = NULL;
     bind = (ducknng_body_parse_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return -1;
-    }
+    if (!bind) goto fail;
     memset(bind, 0, sizeof(*bind));
-    bind->media_type = ducknng_normalize_media_type(content_type);
-    if (!bind->media_type) {
-        destroy_body_parse_bind_data(bind);
-        duckdb_bind_set_error(info, "ducknng: out of memory normalizing content type");
-        return -1;
-    }
-    /* User-registered codecs take precedence over built-in providers so a
-     * deployment can override application/json or text wildcard media types with
-     * its own scalar. */
-    user_fn = ctx && ctx->rt ? ducknng_runtime_find_user_codec(ctx->rt, bind->media_type) : NULL;
-    if (user_fn) {
-        bind->codec_kind = DUCKNNG_BODY_CODEC_USER;
-        bind->user_function_name = user_fn;
-        user_fn = NULL;
-    } else {
-        bind->codec_kind = ducknng_body_codec_for_media_type(bind->media_type);
+    bind->codec_kind = codec_kind;
+    bind->media_type = ducknng_strdup(media_type ? media_type : "");
+    if (!bind->media_type) goto fail;
+    if (codec_kind == DUCKNNG_BODY_CODEC_USER) {
+        bind->user_function_name = user_fn ? ducknng_strdup(user_fn) : NULL;
+        if (!bind->user_function_name) {
+            fail_msg = "ducknng: missing user codec function name";
+            goto fail;
+        }
     }
     bind->provider = ducknng_strdup(ducknng_body_codec_provider_name(bind->codec_kind));
     if (!bind->provider) {
-        destroy_body_parse_bind_data(bind);
-        duckdb_bind_set_error(info, "ducknng: out of memory copying body codec name");
-        return -1;
+        fail_msg = "ducknng: out of memory copying body codec name";
+        goto fail;
     }
     switch (bind->codec_kind) {
         case DUCKNNG_BODY_CODEC_USER:
-            if (ducknng_body_parse_run_user_codec(ctx, bind, body, body_len, bind->user_function_name, &errmsg) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: user codec failed");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+            if (ducknng_body_parse_run_user_codec(ctx, client_ctx, bind, body, body_len,
+                    bind->user_function_name, errmsg) != 0) {
+                fail_msg = "ducknng: user codec failed";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_SINGLE;
-            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-            duckdb_bind_add_result_column(info, "value", type);
-            duckdb_destroy_logical_type(&type);
-            duckdb_bind_set_cardinality(info, 1, true);
             break;
         case DUCKNNG_BODY_CODEC_TEXT:
             if (!ducknng_sql_bytes_look_text(body, body_len)) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: text body is not valid UTF-8 text");
-                return -1;
+                fail_msg = "ducknng: text body is not valid UTF-8 text";
+                goto fail;
             }
             bind->text = ducknng_dup_bytes(body, body_len);
             if (!bind->text) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory copying text body");
-                return -1;
+                fail_msg = "ducknng: out of memory copying text body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_SINGLE;
-            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-            duckdb_bind_add_result_column(info, "body_text", type);
-            duckdb_destroy_logical_type(&type);
-            duckdb_bind_set_cardinality(info, 1, true);
             break;
         case DUCKNNG_BODY_CODEC_DUCKNNG_FRAME:
             if (ducknng_body_parse_frame_copy(body, body_len, &bind->frame) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: failed to decode frame body");
-                return -1;
+                fail_msg = "ducknng: failed to decode frame body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_FRAME;
-            ducknng_body_parse_add_frame_columns(info);
-            duckdb_bind_set_cardinality(info, 1, true);
             break;
         case DUCKNNG_BODY_CODEC_ARROW_IPC:
-            if (ducknng_decode_ipc_table_payload(body, body_len, &bind->schema, &bind->array, &errmsg) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode Arrow IPC body");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+            if (ducknng_decode_ipc_table_payload(body, body_len, &bind->schema,
+                    &bind->array, errmsg) != 0) {
+                fail_msg = "ducknng: failed to decode Arrow IPC body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
             bind->row_count = (idx_t)bind->array.length;
             if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: invalid Arrow IPC body schema");
-                return -1;
+                fail_msg = "ducknng: invalid Arrow IPC body schema";
+                goto fail;
             }
-            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-                duckdb_logical_type col_type;
-                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported Arrow IPC body type");
-                    if (errmsg) duckdb_free(errmsg);
-                    return -1;
-                }
-                duckdb_bind_add_result_column(info, name, col_type);
-                duckdb_destroy_logical_type(&col_type);
-            }
-            duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         case DUCKNNG_BODY_CODEC_QUACK_BATCH:
             if (!body || body_len == 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: ducknng_quack_batch body must not be empty");
-                return -1;
+                fail_msg = "ducknng: ducknng_quack_batch body must not be empty";
+                goto fail;
             }
             bind->raw = (uint8_t *)duckdb_malloc(body_len);
             if (!bind->raw) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory copying ducknng_quack_batch body");
-                return -1;
+                fail_msg = "ducknng: out of memory copying ducknng_quack_batch body";
+                goto fail;
             }
             memcpy(bind->raw, body, body_len);
             bind->raw_len = (idx_t)body_len;
-            if (ducknng_quack_payload_bind_columns(info, bind->raw, body_len,
-                    &bind->quack_schema, &bind->row_count, &errmsg) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to decode ducknng_quack_batch body");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+            if (ducknng_quack_payload_parse_table(bind->raw, body_len,
+                    &bind->quack_schema, &bind->row_count, errmsg) != 0) {
+                fail_msg = "ducknng: failed to decode ducknng_quack_batch body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_QUACK_BATCH;
-            duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         case DUCKNNG_BODY_CODEC_JSON:
         case DUCKNNG_BODY_CODEC_NDJSON: {
             const uint8_t *json_body = body;
             size_t json_len = body_len;
             char *ndjson_arr = NULL;
+            int rc;
             if (bind->codec_kind == DUCKNNG_BODY_CODEC_NDJSON) {
-                ndjson_arr = ducknng_ndjson_to_json_array(body, body_len, &errmsg);
+                ndjson_arr = ducknng_ndjson_to_json_array(body, body_len, errmsg);
                 if (!ndjson_arr) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to convert NDJSON to JSON array");
-                    if (errmsg) duckdb_free(errmsg);
-                    return -1;
+                    fail_msg = "ducknng: failed to convert NDJSON to JSON array";
+                    goto fail;
                 }
                 json_body = (const uint8_t *)ndjson_arr;
                 json_len = strlen(ndjson_arr);
             }
-            if (ducknng_body_parse_run_duckdb_reader(ctx, bind, json_body, json_len, DUCKNNG_BODY_CODEC_JSON, &errmsg) != 0) {
-                if (ndjson_arr) duckdb_free(ndjson_arr);
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body with DuckDB reader");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
-            }
+            rc = ducknng_body_parse_run_duckdb_reader(ctx, client_ctx, bind, json_body, json_len,
+                DUCKNNG_BODY_CODEC_JSON, errmsg);
             if (ndjson_arr) duckdb_free(ndjson_arr);
+            if (rc != 0) {
+                fail_msg = "ducknng: failed to parse body with DuckDB reader";
+                goto fail;
+            }
             if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: invalid parsed body schema");
-                return -1;
+                fail_msg = "ducknng: invalid parsed body schema";
+                goto fail;
             }
-            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-                duckdb_logical_type col_type;
-                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported parsed body type");
-                    if (errmsg) duckdb_free(errmsg);
-                    return -1;
-                }
-                duckdb_bind_add_result_column(info, name, col_type);
-                duckdb_destroy_logical_type(&col_type);
-            }
-            duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         }
         case DUCKNNG_BODY_CODEC_CSV:
         case DUCKNNG_BODY_CODEC_TSV: {
             char csv_delim = (bind->codec_kind == DUCKNNG_BODY_CODEC_TSV) ? '\t' : ',';
-            duckdb_client_context csv_client_ctx = NULL;
             idx_t csv_max_cols;
             if (!body || body_len == 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: CSV/TSV body must not be empty");
-                return -1;
+                fail_msg = "ducknng: CSV/TSV body must not be empty";
+                goto fail;
             }
-            duckdb_table_function_get_client_context(info, &csv_client_ctx);
             csv_max_cols = (idx_t)ducknng_sql_get_config_ubigint(
-                csv_client_ctx, "ducknng.csv_max_columns", DUCKNNG_CSV_MAX_COLS);
-            if (csv_client_ctx) duckdb_destroy_client_context(&csv_client_ctx);
-            if (ducknng_csv_parse_body(body, body_len, csv_delim,
-                    csv_max_cols,
-                    &bind->schema, &bind->array, &errmsg) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse CSV/TSV body");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+                client_ctx, "ducknng.csv_max_columns", DUCKNNG_CSV_MAX_COLS);
+            if (ducknng_csv_parse_body(body, body_len, csv_delim, csv_max_cols,
+                    &bind->schema, &bind->array, errmsg) != 0) {
+                fail_msg = "ducknng: failed to parse CSV/TSV body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_ARROW;
             bind->row_count = (idx_t)bind->array.length;
             if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: invalid CSV/TSV body schema");
-                return -1;
+                fail_msg = "ducknng: invalid CSV/TSV body schema";
+                goto fail;
             }
-            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-                duckdb_logical_type col_type;
-                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported CSV/TSV body column type");
-                    if (errmsg) duckdb_free(errmsg);
-                    return -1;
-                }
-                duckdb_bind_add_result_column(info, name, col_type);
-                duckdb_destroy_logical_type(&col_type);
-            }
-            duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         }
         case DUCKNNG_BODY_CODEC_PARQUET: {
-            duckdb_client_context client_ctx = NULL;
             duckdb_file_system fs = NULL;
-            int trc;
-            duckdb_table_function_get_client_context(info, &client_ctx);
+            int rc;
             if (client_ctx) fs = duckdb_client_context_get_file_system(client_ctx);
-            trc = ducknng_body_parse_run_tempfile_reader(ctx, bind, body, body_len, bind->codec_kind, fs, &errmsg);
+            rc = ducknng_body_parse_run_tempfile_reader(ctx, client_ctx, bind, body, body_len,
+                bind->codec_kind, fs, errmsg);
             if (fs) duckdb_destroy_file_system(&fs);
-            if (client_ctx) duckdb_destroy_client_context(&client_ctx);
-            if (trc != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body with DuckDB file reader");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+            if (rc != 0) {
+                fail_msg = "ducknng: failed to parse body with DuckDB file reader";
+                goto fail;
             }
             if (bind->schema.n_children < 0 || bind->schema.n_children != bind->array.n_children) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: invalid parsed body schema");
-                return -1;
+                fail_msg = "ducknng: invalid parsed body schema";
+                goto fail;
             }
-            for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-                duckdb_logical_type col_type;
-                const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-                if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported parsed body type");
-                    if (errmsg) duckdb_free(errmsg);
-                    return -1;
-                }
-                duckdb_bind_add_result_column(info, name, col_type);
-                duckdb_destroy_logical_type(&col_type);
-            }
-            duckdb_bind_set_cardinality(info, bind->row_count, true);
             break;
         }
-        case DUCKNNG_BODY_CODEC_FORM: {
-            if (ducknng_parse_form_urlencoded(body, body_len,
-                    &bind->form_keys, &bind->form_values, &bind->form_count, &errmsg) != 0) {
-                destroy_body_parse_bind_data(bind);
-                duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse form body");
-                if (errmsg) duckdb_free(errmsg);
-                return -1;
+        case DUCKNNG_BODY_CODEC_FORM:
+            if (ducknng_parse_form_urlencoded(body, body_len, &bind->form_keys,
+                    &bind->form_values, &bind->form_count, errmsg) != 0) {
+                fail_msg = "ducknng: failed to parse form body";
+                goto fail;
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_FORM;
-            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-            duckdb_bind_add_result_column(info, "name", type);
-            duckdb_destroy_logical_type(&type);
-            type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
-            duckdb_bind_add_result_column(info, "value", type);
-            duckdb_destroy_logical_type(&type);
-            duckdb_bind_set_cardinality(info, bind->form_count, true);
             break;
-        }
         default:
             bind->raw_len = (idx_t)body_len;
             if (body_len > 0) {
                 bind->raw = (uint8_t *)duckdb_malloc(body_len);
                 if (!bind->raw) {
-                    destroy_body_parse_bind_data(bind);
-                    duckdb_bind_set_error(info, "ducknng: out of memory copying raw body");
-                    return -1;
+                    fail_msg = "ducknng: out of memory copying raw body";
+                    goto fail;
                 }
                 memcpy(bind->raw, body, body_len);
             }
             bind->result_kind = DUCKNNG_BODY_RESULT_SINGLE;
-            type = duckdb_create_logical_type(DUCKDB_TYPE_BLOB);
-            duckdb_bind_add_result_column(info, "body", type);
-            duckdb_destroy_logical_type(&type);
-            duckdb_bind_set_cardinality(info, 1, true);
             break;
     }
-    duckdb_bind_set_bind_data(info, bind, destroy_body_parse_bind_data);
+    *out_bind = bind;
+    return 0;
+fail:
+    if (bind) destroy_body_parse_bind_data(bind);
+    if (!*errmsg) *errmsg = ducknng_strdup(fail_msg);
+    return -1;
+}
+
+/* Column layout of a SINGLE, FRAME, or FORM result. Returns the column count,
+ * or 0 for result kinds whose columns come from a decoded schema. */
+static idx_t ducknng_body_parse_fixed_layout(const ducknng_body_parse_bind_data *bind,
+    const char *const **names, const duckdb_type **types) {
+    switch (bind->result_kind) {
+        case DUCKNNG_BODY_RESULT_SINGLE:
+            if (bind->codec_kind == DUCKNNG_BODY_CODEC_USER) {
+                *names = ducknng_body_value_names;
+                *types = ducknng_body_varchar_types;
+            } else if (bind->codec_kind == DUCKNNG_BODY_CODEC_TEXT) {
+                *names = ducknng_body_text_names;
+                *types = ducknng_body_varchar_types;
+            } else {
+                *names = ducknng_body_raw_names;
+                *types = ducknng_body_blob_types;
+            }
+            return 1;
+        case DUCKNNG_BODY_RESULT_FRAME:
+            *names = ducknng_body_frame_names;
+            *types = ducknng_body_frame_types;
+            return DUCKNNG_BODY_FRAME_NCOLS;
+        case DUCKNNG_BODY_RESULT_FORM:
+            *names = ducknng_body_form_names;
+            *types = ducknng_body_varchar_types;
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+/* Require a completed parse result to match a declared column list exactly:
+ * same count, same names in order, and deep-equal DuckDB types. Runs before
+ * scan writes any output vector. */
+static int ducknng_body_parse_validate_declared(const ducknng_body_parse_bind_data *bind,
+    const ducknng_sql_declared_schema *declared, char **errmsg) {
+    const char *const *dnames = (const char *const *)declared->names;
+    const char *const *names = NULL;
+    const duckdb_type *types = NULL;
+    idx_t ncols, i;
+    char msg[256];
+    *errmsg = NULL;
+    if (bind->result_kind == DUCKNNG_BODY_RESULT_ARROW)
+        return ducknng_sql_arrow_schema_validate_declared(&bind->schema,
+            declared->ncols, dnames, declared->types, errmsg);
+    if (bind->result_kind == DUCKNNG_BODY_RESULT_QUACK_BATCH)
+        return ducknng_quack_schema_validate_declared(&bind->quack_schema,
+            declared->ncols, dnames, declared->types, errmsg);
+    ncols = ducknng_body_parse_fixed_layout(bind, &names, &types);
+    if (ncols == 0) {
+        *errmsg = ducknng_strdup("ducknng: invalid body parse result kind");
+        return -1;
+    }
+    if (declared->ncols != ncols) {
+        snprintf(msg, sizeof(msg),
+            "ducknng: declared schema has %llu columns but the %s body has %llu",
+            (unsigned long long)declared->ncols, bind->provider ? bind->provider : "decoded",
+            (unsigned long long)ncols);
+        *errmsg = ducknng_strdup(msg);
+        return -1;
+    }
+    for (i = 0; i < ncols; i++) {
+        duckdb_logical_type t;
+        int eq;
+        if (!dnames[i] || strcmp(dnames[i], names[i]) != 0) {
+            snprintf(msg, sizeof(msg),
+                "ducknng: declared column %llu is named '%s' but the body column is '%s'",
+                (unsigned long long)(i + 1), dnames[i] ? dnames[i] : "", names[i]);
+            *errmsg = ducknng_strdup(msg);
+            return -1;
+        }
+        t = duckdb_create_logical_type(types[i]);
+        if (!t) {
+            *errmsg = ducknng_strdup("ducknng: out of memory validating body schema");
+            return -1;
+        }
+        eq = ducknng_quack_logical_type_equal(t, declared->types[i]);
+        duckdb_destroy_logical_type(&t);
+        if (!eq) {
+            snprintf(msg, sizeof(msg),
+                "ducknng: declared type of column '%s' does not match the body column type",
+                names[i]);
+            *errmsg = ducknng_strdup(msg);
+            return -1;
+        }
+    }
     return 0;
 }
 
-static void ducknng_body_parse_bind(duckdb_bind_info info) {
-    duckdb_value body_val;
-    duckdb_value content_type_val;
-    duckdb_blob body_blob;
-    char *content_type;
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    body_val = duckdb_bind_get_parameter(info, 0);
-    content_type_val = duckdb_bind_get_parameter(info, 1);
-    if (duckdb_is_null_value(body_val)) memset(&body_blob, 0, sizeof(body_blob));
-    else body_blob = duckdb_get_blob(body_val);
-    content_type = duckdb_is_null_value(content_type_val) ? NULL : duckdb_get_varchar(content_type_val);
-    duckdb_destroy_value(&body_val);
-    duckdb_destroy_value(&content_type_val);
-    (void)ducknng_body_parse_prepare(info, ctx, (const uint8_t *)body_blob.data, (size_t)body_blob.size, content_type);
-    if (content_type) duckdb_free(content_type);
-    if (body_blob.data) duckdb_free(body_blob.data);
+/* Declare result columns and cardinality from a completed parse result. */
+static int ducknng_body_parse_bind_result(duckdb_bind_info info,
+    const ducknng_body_parse_bind_data *bind, char **errmsg) {
+    const char *fail_msg = "ducknng: out of memory declaring body columns";
+    idx_t cardinality = 1;
+    *errmsg = NULL;
+    switch (bind->result_kind) {
+        case DUCKNNG_BODY_RESULT_SINGLE:
+        case DUCKNNG_BODY_RESULT_FRAME:
+        case DUCKNNG_BODY_RESULT_FORM: {
+            const char *const *names = NULL;
+            const duckdb_type *types = NULL;
+            idx_t ncols = ducknng_body_parse_fixed_layout(bind, &names, &types);
+            if (ducknng_body_add_fixed_columns(info, ncols, names, types) != 0) goto fail;
+            if (bind->result_kind == DUCKNNG_BODY_RESULT_FORM) cardinality = bind->form_count;
+            break;
+        }
+        case DUCKNNG_BODY_RESULT_ARROW:
+            if (ducknng_sql_arrow_bind_result_columns(info, &bind->schema, errmsg) != 0) {
+                if (bind->codec_kind == DUCKNNG_BODY_CODEC_ARROW_IPC)
+                    fail_msg = "ducknng: unsupported Arrow IPC body type";
+                else if (bind->codec_kind == DUCKNNG_BODY_CODEC_CSV ||
+                    bind->codec_kind == DUCKNNG_BODY_CODEC_TSV)
+                    fail_msg = "ducknng: unsupported CSV/TSV body column type";
+                else
+                    fail_msg = "ducknng: unsupported parsed body type";
+                goto fail;
+            }
+            cardinality = bind->row_count;
+            break;
+        case DUCKNNG_BODY_RESULT_QUACK_BATCH:
+            if (ducknng_quack_schema_bind_columns(info, &bind->quack_schema, errmsg) != 0) {
+                fail_msg = "ducknng: failed to decode ducknng_quack_batch body";
+                goto fail;
+            }
+            cardinality = bind->row_count;
+            break;
+        default:
+            fail_msg = "ducknng: invalid body parse result kind";
+            goto fail;
+    }
+    duckdb_bind_set_cardinality(info, cardinality, true);
+    return 0;
+fail:
+    if (!*errmsg) *errmsg = ducknng_strdup(fail_msg);
+    return -1;
 }
 
+/* Codecs whose decoding runs DuckDB SQL or a DuckDB file reader. They never
+ * run at bind; JSON, NDJSON, and Parquet also need a declared schema because
+ * their columns are only known after decoding. */
+static int ducknng_body_codec_is_deferred(int codec_kind) {
+    return codec_kind == DUCKNNG_BODY_CODEC_USER || codec_kind == DUCKNNG_BODY_CODEC_JSON ||
+        codec_kind == DUCKNNG_BODY_CODEC_NDJSON || codec_kind == DUCKNNG_BODY_CODEC_PARQUET;
+}
+
+/* Read the named schema into plan->schema and declare its columns. When the
+ * argument is absent and not required, nothing is declared. Sets the bind error
+ * and returns -1 on failure. */
+static int ducknng_body_plan_bind_schema(duckdb_bind_info info,
+    ducknng_body_plan_bind_data *plan, int required) {
+    duckdb_value value = duckdb_bind_get_named_parameter(info, "schema");
+    if (!value && !required) return 0;
+    if (value) duckdb_destroy_value(&value);
+    if (ducknng_sql_bind_declared_schema(info, &plan->schema) != 0) return -1;
+    plan->has_schema = 1;
+    return 0;
+}
+
+static ducknng_body_plan_bind_data *ducknng_body_plan_new(duckdb_bind_info info) {
+    ducknng_body_plan_bind_data *plan =
+        (ducknng_body_plan_bind_data *)duckdb_malloc(sizeof(*plan));
+    if (!plan) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return NULL;
+    }
+    memset(plan, 0, sizeof(*plan));
+    return plan;
+}
+
+/* Take ownership of the BLOB parameter at index idx. */
+static void ducknng_body_plan_take_body(duckdb_bind_info info, idx_t idx,
+    ducknng_body_plan_bind_data *plan) {
+    duckdb_value body_val = duckdb_bind_get_parameter(info, idx);
+    if (!duckdb_is_null_value(body_val)) {
+        duckdb_blob blob = duckdb_get_blob(body_val);
+        plan->body = (uint8_t *)blob.data;
+        plan->body_len = (size_t)blob.size;
+    }
+    duckdb_destroy_value(&body_val);
+}
+
+static void ducknng_body_parse_bind(duckdb_bind_info info) {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
+    ducknng_body_plan_bind_data *plan;
+    duckdb_value content_type_val;
+    char *content_type;
+    char *errmsg = NULL;
+    plan = ducknng_body_plan_new(info);
+    if (!plan) return;
+    ducknng_body_plan_take_body(info, 0, plan);
+    content_type_val = duckdb_bind_get_parameter(info, 1);
+    content_type = duckdb_is_null_value(content_type_val) ? NULL : duckdb_get_varchar(content_type_val);
+    duckdb_destroy_value(&content_type_val);
+    plan->media_type = ducknng_normalize_media_type(content_type);
+    if (content_type) duckdb_free(content_type);
+    if (!plan->media_type) {
+        duckdb_bind_set_error(info, "ducknng: out of memory normalizing content type");
+        goto fail;
+    }
+    plan->codec_kind = ducknng_body_resolve_codec(ctx, plan->media_type, &plan->user_function_name);
+    duckdb_table_function_get_client_context(info, &plan->client_ctx);
+    if (plan->codec_kind == DUCKNNG_BODY_CODEC_USER) {
+        if (ducknng_body_plan_bind_schema(info, plan, 0) != 0) goto fail;
+        if (!plan->has_schema && ducknng_body_add_fixed_columns(info, 1,
+                ducknng_body_value_names, ducknng_body_varchar_types) != 0) {
+            duckdb_bind_set_error(info, "ducknng: out of memory declaring body columns");
+            goto fail;
+        }
+    } else if (ducknng_body_codec_is_deferred(plan->codec_kind)) {
+        if (ducknng_body_plan_bind_schema(info, plan, 1) != 0) goto fail;
+    } else {
+        if (ducknng_body_parse_build_codec(ctx, plan->client_ctx, plan->body, plan->body_len,
+                plan->media_type, plan->codec_kind, NULL, &plan->parsed, &errmsg) != 0) goto fail_msg;
+        if (ducknng_body_plan_bind_schema(info, plan, 0) != 0) goto fail;
+        if (plan->has_schema) {
+            if (ducknng_body_parse_validate_declared(plan->parsed, &plan->schema, &errmsg) != 0)
+                goto fail_msg;
+        } else if (ducknng_body_parse_bind_result(info, plan->parsed, &errmsg) != 0) {
+            goto fail_msg;
+        }
+        /* The parsed result is immutable; the copied inputs are not needed. */
+        duckdb_free(plan->body);
+        plan->body = NULL;
+        plan->body_len = 0;
+        duckdb_destroy_client_context(&plan->client_ctx);
+    }
+    duckdb_bind_set_bind_data(info, plan, destroy_body_plan_bind_data);
+    return;
+fail_msg:
+    duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body");
+    if (errmsg) duckdb_free(errmsg);
+fail:
+    destroy_body_plan_bind_data(plan);
+}
+
+static void ducknng_body_reader_bind(duckdb_bind_info info, int codec_kind) {
+    ducknng_body_plan_bind_data *plan = ducknng_body_plan_new(info);
+    if (!plan) return;
+    plan->reader = 1;
+    plan->codec_kind = codec_kind;
+    ducknng_body_plan_take_body(info, 0, plan);
+    if (!plan->body || plan->body_len == 0) {
+        duckdb_bind_set_error(info, "ducknng: body must not be null or empty");
+        goto fail;
+    }
+    if (ducknng_body_plan_bind_schema(info, plan, 1) != 0) goto fail;
+    duckdb_table_function_get_client_context(info, &plan->client_ctx);
+    duckdb_bind_set_bind_data(info, plan, destroy_body_plan_bind_data);
+    return;
+fail:
+    destroy_body_plan_bind_data(plan);
+}
+
+/* Decode a deferred plan once for this execution. Returns an owned result
+ * validated against the declared schema, or NULL with *errmsg set. */
+static ducknng_body_parse_bind_data *ducknng_body_plan_execute(ducknng_sql_context *ctx,
+    const ducknng_body_plan_bind_data *plan, char **errmsg) {
+    ducknng_body_parse_bind_data *parsed = NULL;
+    int rc;
+    *errmsg = NULL;
+    if (plan->reader) {
+        duckdb_file_system fs = NULL;
+        parsed = (ducknng_body_parse_bind_data *)duckdb_malloc(sizeof(*parsed));
+        if (!parsed) {
+            *errmsg = ducknng_strdup("ducknng: out of memory");
+            return NULL;
+        }
+        memset(parsed, 0, sizeof(*parsed));
+        parsed->codec_kind = plan->codec_kind;
+        if (plan->client_ctx) fs = duckdb_client_context_get_file_system(plan->client_ctx);
+        rc = ducknng_body_parse_run_tempfile_reader(ctx, plan->client_ctx, parsed,
+            plan->body, plan->body_len,
+            plan->codec_kind, fs, errmsg);
+        if (fs) duckdb_destroy_file_system(&fs);
+    } else {
+        rc = ducknng_body_parse_build_codec(ctx, plan->client_ctx, plan->body, plan->body_len,
+            plan->media_type, plan->codec_kind, plan->user_function_name, &parsed, errmsg);
+    }
+    if (rc == 0 && plan->has_schema)
+        rc = ducknng_body_parse_validate_declared(parsed, &plan->schema, errmsg);
+    if (rc != 0) {
+        if (parsed) destroy_body_parse_bind_data(parsed);
+        if (!*errmsg) *errmsg = ducknng_strdup("ducknng: failed to parse body");
+        return NULL;
+    }
+    return parsed;
+}
+
+/* Bind copies the request arguments and the declared schema only. The request,
+ * TLS and profile resolution, and decoding all run in init, once per
+ * execution. */
 static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     duckdb_value url_val;
     duckdb_value method_val;
@@ -1993,22 +2312,15 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     duckdb_value tls_val;
     duckdb_value profile_val = NULL;
     duckdb_blob body_blob;
-    char *url;
-    char *method;
-    char *headers_json;
-    char *profile_id = NULL;
-    char *effective_headers_json = NULL;
-    char *content_type = NULL;
-    int32_t timeout_ms;
-    uint64_t tls_config_id;
-    const ducknng_tls_opts *tls_opts = NULL;
+    ducknng_ncurl_table_bind_data *bd;
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
-    char *errmsg = NULL;
-    uint16_t status = 0;
-    char *resp_headers_json = NULL;
-    uint8_t *resp_body = NULL;
-    size_t resp_body_len = 0;
+    if (ducknng_reject_table_inside_authorizer(info, ctx, NULL)) return;
+    bd = (ducknng_ncurl_table_bind_data *)duckdb_malloc(sizeof(*bd));
+    if (!bd) {
+        duckdb_bind_set_error(info, "ducknng: out of memory");
+        return;
+    }
+    memset(bd, 0, sizeof(*bd));
     memset(&body_blob, 0, sizeof(body_blob));
     url_val = duckdb_bind_get_parameter(info, 0);
     method_val = duckdb_bind_get_parameter(info, 1);
@@ -2017,13 +2329,15 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     timeout_val = duckdb_bind_get_parameter(info, 4);
     tls_val = duckdb_bind_get_parameter(info, 5);
     if (duckdb_bind_get_parameter_count(info) > 6) profile_val = duckdb_bind_get_parameter(info, 6);
-    url = duckdb_is_null_value(url_val) ? NULL : duckdb_get_varchar(url_val);
-    method = duckdb_is_null_value(method_val) ? NULL : duckdb_get_varchar(method_val);
-    headers_json = duckdb_is_null_value(headers_val) ? NULL : duckdb_get_varchar(headers_val);
+    bd->url = duckdb_is_null_value(url_val) ? NULL : duckdb_get_varchar(url_val);
+    bd->method = duckdb_is_null_value(method_val) ? NULL : duckdb_get_varchar(method_val);
+    bd->headers_json = duckdb_is_null_value(headers_val) ? NULL : duckdb_get_varchar(headers_val);
     if (!duckdb_is_null_value(body_val)) body_blob = duckdb_get_blob(body_val);
-    timeout_ms = duckdb_get_int32(timeout_val);
-    tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
-    if (profile_val && !duckdb_is_null_value(profile_val)) profile_id = duckdb_get_varchar(profile_val);
+    bd->body = (uint8_t *)body_blob.data;
+    bd->body_len = (size_t)body_blob.size;
+    bd->timeout_ms = duckdb_get_int32(timeout_val);
+    bd->tls_config_id = (uint64_t)duckdb_get_uint64(tls_val);
+    if (profile_val && !duckdb_is_null_value(profile_val)) bd->profile_id = duckdb_get_varchar(profile_val);
     duckdb_destroy_value(&url_val);
     duckdb_destroy_value(&method_val);
     duckdb_destroy_value(&headers_val);
@@ -2031,70 +2345,144 @@ static void ducknng_ncurl_table_bind(duckdb_bind_info info) {
     duckdb_destroy_value(&timeout_val);
     duckdb_destroy_value(&tls_val);
     if (profile_val) duckdb_destroy_value(&profile_val);
-    if (!url || !url[0]) {
+    if (!bd->url || !bd->url[0]) {
         duckdb_bind_set_error(info, "ducknng: ducknng_ncurl_table URL must not be NULL or empty");
+        goto fail;
+    }
+    if (ducknng_sql_bind_declared_schema(info, &bd->schema) != 0) goto fail;
+    duckdb_table_function_get_client_context(info, &bd->client_ctx);
+    duckdb_bind_set_bind_data(info, bd, destroy_ncurl_table_bind_data);
+    return;
+fail:
+    destroy_ncurl_table_bind_data(bd);
+}
+
+/* Execution-time authorizer guard for plans that kept their binding client
+ * context. A plan without one cannot prove where it runs and is rejected. */
+static int ducknng_body_reject_init_inside_authorizer(duckdb_init_info info,
+    ducknng_sql_context *ctx, duckdb_client_context client_ctx) {
+    if (!client_ctx) {
+        duckdb_init_set_error(info,
+            "ducknng: missing DuckDB connection id for an authorizer-guarded function");
+        return 1;
+    }
+    return ducknng_reject_init_inside_authorizer(info, ctx,
+        (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
+}
+
+static void ducknng_ncurl_table_init(duckdb_init_info info) {
+    ducknng_ncurl_table_bind_data *bd = (ducknng_ncurl_table_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    ducknng_body_parse_init_data *init;
+    ducknng_body_parse_bind_data *parsed = NULL;
+    const ducknng_tls_opts *tls_opts = NULL;
+    char *effective_headers_json = NULL;
+    char *resp_headers_json = NULL;
+    char *content_type = NULL;
+    char *errmsg = NULL;
+    uint8_t *resp_body = NULL;
+    size_t resp_body_len = 0;
+    uint16_t status = 0;
+    char status_msg[128];
+    if (!bd) {
+        duckdb_init_set_error(info, "ducknng: missing ducknng_ncurl_table bind data");
+        return;
+    }
+    if (ducknng_body_reject_init_inside_authorizer(info, ctx, bd->client_ctx)) return;
+    if (ducknng_lookup_tls_opts(ctx, bd->tls_config_id, &tls_opts, &errmsg) != 0) {
+        duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
         goto cleanup;
     }
-    if (ducknng_lookup_tls_opts(ctx, tls_config_id, &tls_opts, &errmsg) != 0) {
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: tls config not found");
-        goto cleanup;
-    }
-    if (profile_id && profile_id[0]) {
-        duckdb_client_context client_ctx = NULL;
+    if (bd->profile_id && bd->profile_id[0]) {
         uint64_t connection_id = 0;
         int has_connection_id = 0;
-        duckdb_table_function_get_client_context(info, &client_ctx);
-        if (client_ctx) {
-            connection_id = (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+        if (bd->client_ctx) {
+            connection_id = (uint64_t)duckdb_client_context_get_connection_id(bd->client_ctx);
             has_connection_id = 1;
-            duckdb_destroy_client_context(&client_ctx);
         }
-        if (ducknng_runtime_resolve_http_profile_headers(ctx->rt,
-                profile_id, url, method, headers_json, has_connection_id, connection_id,
+        if (ducknng_runtime_resolve_http_profile_headers(ctx->rt, bd->profile_id, bd->url,
+                bd->method, bd->headers_json, has_connection_id, connection_id,
                 &effective_headers_json, &errmsg) != 0) {
-            duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile");
+            duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: failed to resolve HTTP profile");
             goto cleanup;
         }
     }
-    if (ducknng_http_transact(url, method, effective_headers_json ? effective_headers_json : headers_json,
-            (const uint8_t *)body_blob.data, (size_t)body_blob.size, timeout_ms, tls_opts,
+    if (ducknng_http_transact(bd->url, bd->method,
+            effective_headers_json ? effective_headers_json : bd->headers_json,
+            bd->body, bd->body_len, bd->timeout_ms, tls_opts,
             &status, &resp_headers_json, &resp_body, &resp_body_len, &errmsg) != 0) {
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: HTTP request failed");
+        duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: HTTP request failed");
         goto cleanup;
     }
     if (status < 200 || status >= 300) {
-        char status_msg[128];
-        snprintf(status_msg, sizeof(status_msg), "ducknng: HTTP status %u cannot be parsed as a table", (unsigned)status);
-        duckdb_bind_set_error(info, status_msg);
+        snprintf(status_msg, sizeof(status_msg),
+            "ducknng: HTTP status %u cannot be parsed as a table", (unsigned)status);
+        duckdb_init_set_error(info, status_msg);
         goto cleanup;
     }
-    if (ducknng_http_headers_json_get_header(resp_headers_json, "Content-Type", 0, &content_type, &errmsg) < 0) {
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: invalid response headers_json");
+    if (ducknng_http_headers_json_get_header(resp_headers_json, "Content-Type", 0,
+            &content_type, &errmsg) < 0) {
+        duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: invalid response headers_json");
         goto cleanup;
     }
-    (void)ducknng_body_parse_prepare(info, ctx, resp_body, resp_body_len, content_type);
+    if (ducknng_body_parse_build(ctx, bd->client_ctx, resp_body, resp_body_len,
+            content_type, &parsed, &errmsg) != 0 ||
+        ducknng_body_parse_validate_declared(parsed, &bd->schema, &errmsg) != 0) {
+        duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: failed to parse HTTP response body");
+        goto cleanup;
+    }
+    init = (ducknng_body_parse_init_data *)duckdb_malloc(sizeof(*init));
+    if (!init) {
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        goto cleanup;
+    }
+    memset(init, 0, sizeof(*init));
+    init->bind = parsed;
+    init->owns_bind = 1;
+    parsed = NULL;
+    duckdb_init_set_max_threads(info, 1);
+    duckdb_init_set_init_data(info, init, destroy_body_parse_init_data);
 cleanup:
-    if (url) duckdb_free(url);
-    if (method) duckdb_free(method);
-    if (headers_json) duckdb_free(headers_json);
-    if (profile_id) duckdb_free(profile_id);
+    if (parsed) destroy_body_parse_bind_data(parsed);
     if (effective_headers_json) duckdb_free(effective_headers_json);
-    if (body_blob.data) duckdb_free(body_blob.data);
     if (resp_headers_json) duckdb_free(resp_headers_json);
     if (resp_body) duckdb_free(resp_body);
     if (content_type) duckdb_free(content_type);
     if (errmsg) duckdb_free(errmsg);
 }
 
+/* Borrow the bind-time result of a pure plan, or decode a deferred plan afresh
+ * for this execution and own the result in the init data. */
 static void ducknng_body_parse_init(duckdb_init_info info) {
-    ducknng_body_parse_bind_data *bind = (ducknng_body_parse_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_body_parse_init_data *init = (ducknng_body_parse_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_body_plan_bind_data *plan = (ducknng_body_plan_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
+    ducknng_body_parse_bind_data *parsed;
+    ducknng_body_parse_init_data *init;
+    int owns = 0;
+    char *errmsg = NULL;
+    if (!plan) {
+        duckdb_init_set_error(info, "ducknng: missing body parse bind data");
+        return;
+    }
+    parsed = plan->parsed;
+    if (!parsed) {
+        parsed = ducknng_body_plan_execute(ctx, plan, &errmsg);
+        if (!parsed) {
+            duckdb_init_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body");
+            if (errmsg) duckdb_free(errmsg);
+            return;
+        }
+        owns = 1;
+    }
+    init = (ducknng_body_parse_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
+        if (owns) destroy_body_parse_bind_data(parsed);
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
     memset(init, 0, sizeof(*init));
-    init->bind = bind;
+    init->bind = parsed;
+    init->owns_bind = owns;
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_body_parse_init_data);
 }
@@ -2217,59 +2605,7 @@ static int ducknng_codec_dyn_row_set(ducknng_codec_dyn_row *row, const char *pro
 }
 
 static void ducknng_codecs_bind(duckdb_bind_info info) {
-    ducknng_codecs_bind_data *bind;
-    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
-    duckdb_logical_type type;
-    idx_t builtin_count = (idx_t)(sizeof(DUCKNNG_BUILTIN_CODECS) / sizeof(DUCKNNG_BUILTIN_CODECS[0]));
-    idx_t user_count = 0;
-    idx_t total;
-    idx_t i;
-    bind = (ducknng_codecs_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    if (ctx && ctx->rt) {
-        ducknng_mutex_lock(&ctx->rt->mu);
-        user_count = (idx_t)ctx->rt->user_codec_count;
-    }
-    total = builtin_count + user_count;
-    bind->rows = total ? (ducknng_codec_dyn_row *)duckdb_malloc(sizeof(*bind->rows) * total) : NULL;
-    if (total && !bind->rows) {
-        if (ctx && ctx->rt) ducknng_mutex_unlock(&ctx->rt->mu);
-        destroy_codecs_bind_data(bind);
-        duckdb_bind_set_error(info, "ducknng: out of memory listing codecs");
-        return;
-    }
-    if (bind->rows) memset(bind->rows, 0, sizeof(*bind->rows) * total);
-    for (i = 0; i < builtin_count; i++) {
-        const ducknng_codec_static_row *src = &DUCKNNG_BUILTIN_CODECS[i];
-        if (ducknng_codec_dyn_row_set(&bind->rows[bind->row_count], src->provider, src->media_types,
-                "builtin", NULL, src->output, src->notes) != 0) {
-            if (ctx && ctx->rt) ducknng_mutex_unlock(&ctx->rt->mu);
-            destroy_codecs_bind_data(bind);
-            duckdb_bind_set_error(info, "ducknng: out of memory copying builtin codec rows");
-            return;
-        }
-        bind->row_count++;
-    }
-    if (ctx && ctx->rt) {
-        for (i = 0; i < user_count; i++) {
-            const ducknng_user_codec *uc = &ctx->rt->user_codecs[i];
-            if (ducknng_codec_dyn_row_set(&bind->rows[bind->row_count], "user", uc->content_type,
-                    "user", uc->function_name, "value VARCHAR",
-                    "User codec: <function_name>(BLOB) -> VARCHAR. Takes precedence over built-in providers.") != 0) {
-                ducknng_mutex_unlock(&ctx->rt->mu);
-                destroy_codecs_bind_data(bind);
-                duckdb_bind_set_error(info, "ducknng: out of memory copying user codec rows");
-                return;
-            }
-            bind->row_count++;
-        }
-        ducknng_mutex_unlock(&ctx->rt->mu);
-    }
-    type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+    duckdb_logical_type type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "provider", type);
     duckdb_bind_add_result_column(info, "media_types", type);
     duckdb_bind_add_result_column(info, "kind", type);
@@ -2277,19 +2613,70 @@ static void ducknng_codecs_bind(duckdb_bind_info info) {
     duckdb_bind_add_result_column(info, "output", type);
     duckdb_bind_add_result_column(info, "notes", type);
     duckdb_destroy_logical_type(&type);
-    duckdb_bind_set_bind_data(info, bind, destroy_codecs_bind_data);
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
+}
+
+/* Copy builtin rows and the current user codec registry into init. Rows are
+ * zeroed before filling, and row_count counts only fully copied rows, so a
+ * partial copy is released by destroy_codecs_init_data. */
+static int ducknng_codecs_snapshot(ducknng_sql_context *ctx,
+    ducknng_codecs_init_data *init, const char **errmsg) {
+    idx_t builtin_count = (idx_t)(sizeof(DUCKNNG_BUILTIN_CODECS) / sizeof(DUCKNNG_BUILTIN_CODECS[0]));
+    idx_t user_count = 0;
+    idx_t total;
+    idx_t i;
+    int rc = -1;
+    if (ctx && ctx->rt) {
+        ducknng_mutex_lock(&ctx->rt->mu);
+        user_count = (idx_t)ctx->rt->user_codec_count;
+    }
+    total = builtin_count + user_count;
+    init->rows = (ducknng_codec_dyn_row *)duckdb_malloc(sizeof(*init->rows) * total);
+    if (!init->rows) {
+        *errmsg = "ducknng: out of memory listing codecs";
+        goto out;
+    }
+    memset(init->rows, 0, sizeof(*init->rows) * total);
+    for (i = 0; i < builtin_count; i++) {
+        const ducknng_codec_static_row *src = &DUCKNNG_BUILTIN_CODECS[i];
+        if (ducknng_codec_dyn_row_set(&init->rows[init->row_count], src->provider,
+                src->media_types, "builtin", NULL, src->output, src->notes) != 0) {
+            *errmsg = "ducknng: out of memory copying builtin codec rows";
+            init->row_count++;
+            goto out;
+        }
+        init->row_count++;
+    }
+    for (i = 0; i < user_count; i++) {
+        const ducknng_user_codec *uc = &ctx->rt->user_codecs[i];
+        if (ducknng_codec_dyn_row_set(&init->rows[init->row_count], "user", uc->content_type,
+                "user", uc->function_name, "value VARCHAR",
+                "User codec: <function_name>(BLOB) -> VARCHAR. Takes precedence over built-in providers.") != 0) {
+            *errmsg = "ducknng: out of memory copying user codec rows";
+            init->row_count++;
+            goto out;
+        }
+        init->row_count++;
+    }
+    rc = 0;
+out:
+    if (ctx && ctx->rt) ducknng_mutex_unlock(&ctx->rt->mu);
+    return rc;
 }
 
 static void ducknng_codecs_init(duckdb_init_info info) {
-    ducknng_codecs_bind_data *bind = (ducknng_codecs_bind_data *)duckdb_init_get_bind_data(info);
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
     ducknng_codecs_init_data *init = (ducknng_codecs_init_data *)duckdb_malloc(sizeof(*init));
+    const char *errmsg = NULL;
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+    if (ducknng_codecs_snapshot(ctx, init, &errmsg) != 0) {
+        destroy_codecs_init_data(init);
+        duckdb_init_set_error(info, errmsg);
+        return;
+    }
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_codecs_init_data);
 }
@@ -2300,14 +2687,14 @@ static void ducknng_codecs_scan(duckdb_function_info info, duckdb_data_chunk out
     idx_t chunk_size;
     idx_t i;
     (void)info;
-    if (!init || !init->bind || init->offset >= init->bind->row_count) {
+    if (!init || init->offset >= init->row_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    remaining = init->bind->row_count - init->offset;
+    remaining = init->row_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     for (i = 0; i < chunk_size; i++) {
-        const ducknng_codec_dyn_row *row = &init->bind->rows[init->offset + i];
+        const ducknng_codec_dyn_row *row = &init->rows[init->offset + i];
         duckdb_vector v0 = duckdb_data_chunk_get_vector(output, 0);
         duckdb_vector v1 = duckdb_data_chunk_get_vector(output, 1);
         duckdb_vector v2 = duckdb_data_chunk_get_vector(output, 2);
@@ -2328,7 +2715,7 @@ static void ducknng_codecs_scan(duckdb_function_info info, duckdb_data_chunk out
 static int register_body_parse_table_named(duckdb_connection con, ducknng_sql_context *ctx, const char *name) {
     duckdb_type param_types[2] = {DUCKDB_TYPE_BLOB, DUCKDB_TYPE_VARCHAR};
     if (!ctx || !ctx->rt) return 0;
-    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 2, param_types, ducknng_body_parse_bind,
+    return DUCKNNG_REGISTER_TABLE_WITH_SCHEMA(con, name, ctx, 2, param_types, ducknng_body_parse_bind,
         ducknng_body_parse_init, ducknng_body_parse_scan);
 }
 
@@ -2336,12 +2723,12 @@ static int register_ncurl_table_named(duckdb_connection con, ducknng_sql_context
     duckdb_type profile_param_types[7] = {DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_VARCHAR,
         DUCKDB_TYPE_BLOB, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_UBIGINT, DUCKDB_TYPE_VARCHAR};
     const char *sql =
-        "CREATE OR REPLACE MACRO ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id := NULL) AS TABLE "
-        "SELECT * FROM ducknng__ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id)";
+        "CREATE OR REPLACE MACRO ducknng_ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id := NULL, schema := NULL) AS TABLE "
+        "SELECT * FROM ducknng__ncurl_table(url, method, headers_json, body, timeout_ms, tls_config_id, profile_id, schema := schema)";
     (void)name;
     if (!ctx || !ctx->rt) return 0;
-    if (!DUCKNNG_REGISTER_TABLE(con, "ducknng__ncurl_table", ctx, 7, profile_param_types,
-            ducknng_ncurl_table_bind, ducknng_body_parse_init, ducknng_body_parse_scan)) return 0;
+    if (!DUCKNNG_REGISTER_TABLE_WITH_SCHEMA(con, "ducknng__ncurl_table", ctx, 7, profile_param_types,
+            ducknng_ncurl_table_bind, ducknng_ncurl_table_init, ducknng_body_parse_scan)) return 0;
     return execute_sql(con, sql);
 }
 
@@ -2356,75 +2743,22 @@ static int register_frame_decode_table_named(duckdb_connection con, const char *
         ducknng_single_row_init, ducknng_decode_frame_scan);
 }
 
-static void ducknng_body_parse_tempfile_bind(duckdb_bind_info info, ducknng_sql_context *ctx, int codec_kind) {
-    duckdb_value body_val = duckdb_bind_get_parameter(info, 0);
-    duckdb_blob body_blob;
-    duckdb_client_context client_ctx = NULL;
-    duckdb_file_system fs = NULL;
-    ducknng_body_parse_bind_data *bind;
-    char *errmsg = NULL;
-    int rc;
-    idx_t col;
-    memset(&body_blob, 0, sizeof(body_blob));
-    if (!duckdb_is_null_value(body_val)) body_blob = duckdb_get_blob(body_val);
-    duckdb_destroy_value(&body_val);
-    if (!body_blob.data || body_blob.size == 0) {
-        duckdb_bind_set_error(info, "ducknng: body must not be null or empty");
-        if (body_blob.data) duckdb_free(body_blob.data);
-        return;
-    }
-    bind = (ducknng_body_parse_bind_data *)duckdb_malloc(sizeof(*bind));
-    if (!bind) {
-        duckdb_bind_set_error(info, "ducknng: out of memory");
-        duckdb_free(body_blob.data);
-        return;
-    }
-    memset(bind, 0, sizeof(*bind));
-    bind->codec_kind = codec_kind;
-    duckdb_table_function_get_client_context(info, &client_ctx);
-    if (client_ctx) fs = duckdb_client_context_get_file_system(client_ctx);
-    rc = ducknng_body_parse_run_tempfile_reader(ctx, bind, (const uint8_t *)body_blob.data, (size_t)body_blob.size, codec_kind, fs, &errmsg);
-    if (fs) duckdb_destroy_file_system(&fs);
-    if (client_ctx) duckdb_destroy_client_context(&client_ctx);
-    duckdb_free(body_blob.data);
-    if (rc != 0) {
-        destroy_body_parse_bind_data(bind);
-        duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: failed to parse body");
-        if (errmsg) duckdb_free(errmsg);
-        return;
-    }
-    for (col = 0; col < (idx_t)bind->schema.n_children; col++) {
-        duckdb_logical_type col_type;
-        const char *name = bind->schema.children[col] && bind->schema.children[col]->name ? bind->schema.children[col]->name : "";
-        if (ducknng_sql_arrow_schema_to_logical_type(bind->schema.children[col], &col_type, &errmsg) != 0) {
-            destroy_body_parse_bind_data(bind);
-            duckdb_bind_set_error(info, errmsg ? errmsg : "ducknng: unsupported parsed body type");
-            if (errmsg) duckdb_free(errmsg);
-            return;
-        }
-        duckdb_bind_add_result_column(info, name, col_type);
-        duckdb_destroy_logical_type(&col_type);
-    }
-    duckdb_bind_set_cardinality(info, bind->row_count, true);
-    duckdb_bind_set_bind_data(info, bind, destroy_body_parse_bind_data);
-}
-
 static void ducknng_parse_csv_bind(duckdb_bind_info info) {
-    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_CSV);
+    ducknng_body_reader_bind(info, DUCKNNG_BODY_CODEC_CSV);
 }
 
 static void ducknng_parse_tsv_bind(duckdb_bind_info info) {
-    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_TSV);
+    ducknng_body_reader_bind(info, DUCKNNG_BODY_CODEC_TSV);
 }
 
 static void ducknng_parse_parquet_bind(duckdb_bind_info info) {
-    ducknng_body_parse_tempfile_bind(info, (ducknng_sql_context *)duckdb_bind_get_extra_info(info), DUCKNNG_BODY_CODEC_PARQUET);
+    ducknng_body_reader_bind(info, DUCKNNG_BODY_CODEC_PARQUET);
 }
 
 static int register_body_parse_format_table(duckdb_connection con, ducknng_sql_context *ctx, const char *name, duckdb_table_function_bind_t bind_fn) {
     duckdb_type param_types[1] = {DUCKDB_TYPE_BLOB};
     if (!ctx || !ctx->rt) return 0;
-    return DUCKNNG_REGISTER_TABLE(con, name, ctx, 1, param_types, bind_fn,
+    return DUCKNNG_REGISTER_TABLE_WITH_SCHEMA(con, name, ctx, 1, param_types, bind_fn,
         ducknng_body_parse_init, ducknng_body_parse_scan);
 }
 

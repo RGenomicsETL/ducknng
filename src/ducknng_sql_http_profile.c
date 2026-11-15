@@ -4,13 +4,17 @@
 
 DUCKDB_EXTENSION_EXTERN
 
+/* Bind keeps only the executing connection. A prepared plan may execute for
+ * a different caller, so visibility is resolved from that connection's
+ * context at init. */
 typedef struct ducknng_http_profiles_bind_data {
-    ducknng_http_profile_info *profiles;
-    idx_t profile_count;
+    uint64_t connection_id;
 } ducknng_http_profiles_bind_data;
 
 typedef struct ducknng_http_profiles_init_data {
-    ducknng_http_profiles_bind_data *bind;
+    ducknng_http_profile_info *profiles;
+    size_t snapshot_count;
+    idx_t profile_count;
     idx_t offset;
 } ducknng_http_profiles_init_data;
 
@@ -20,57 +24,46 @@ destroy_http_profiles_bind_data(void *ptr)
     ducknng_http_profiles_bind_data *data = (ducknng_http_profiles_bind_data *)ptr;
 
     if (!data) return;
-    if (data->profiles) {
-        ducknng_runtime_http_profiles_snapshot_free(data->profiles, (size_t)data->profile_count);
-    }
     duckdb_free(data);
 }
 
 static void
 destroy_http_profiles_init_data(void *ptr)
 {
-    if (ptr) duckdb_free(ptr);
+    ducknng_http_profiles_init_data *data = (ducknng_http_profiles_init_data *)ptr;
+
+    if (!data) return;
+    if (data->profiles) {
+        ducknng_runtime_http_profiles_snapshot_free(data->profiles, data->snapshot_count);
+    }
+    duckdb_free(data);
 }
 
 /* Inside service-handled SQL the listing is subject-scoped: only unrestricted
- * profiles and profiles admitted to the current execution subject are visible,
- * and the allowlist column is withheld. Host/local SQL keeps the full redacted
- * listing. Returns the number of visible profiles. */
-static idx_t
-ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt, duckdb_bind_info info,
-    ducknng_http_profile_info *profiles, idx_t count)
+ * profiles and profiles admitted to the execution subject are visible, and
+ * the allowlist column is withheld. The subject comes from the context bound
+ * to the executing connection at init time; an anonymous context sees only
+ * unrestricted profiles. No bound context means host/local SQL, which keeps
+ * the full redacted listing. Returns 0 with *out_kept set, or -1 on
+ * allocation failure (the caller fails the scan rather than widening it). */
+static int
+ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt,
+    uint64_t connection_id, ducknng_http_profile_info *profiles, idx_t count,
+    idx_t *out_kept)
 {
+    ducknng_connection_context_view view;
     char *subject = NULL;
-    const ducknng_execution_subject *subject_ctx;
-    int in_request;
     idx_t kept = 0;
     idx_t i;
 
-    if (!rt || !profiles || count == 0) return count;
-    in_request = ducknng_runtime_current_thread_request_service_get(rt) != NULL;
-    /* Connection binding first: a session connection carries its opener's
-     * subject, which governs visibility even when another caller's fetch
-     * request is driving execution on this thread. */
-    {
-        duckdb_client_context client_ctx = NULL;
-        duckdb_table_function_get_client_context(info, &client_ctx);
-        if (client_ctx) {
-            subject = ducknng_runtime_execution_subject_for_connection_dup(rt,
-                (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
-            duckdb_destroy_client_context(&client_ctx);
-            if (subject) in_request = 1;
-        }
-    }
-    if (!subject) {
-        subject_ctx = ducknng_runtime_current_thread_execution_subject_get(rt);
-        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
-            subject = ducknng_strdup(subject_ctx->subject);
-            in_request = 1;
-        }
-    }
-    if (!in_request) {
-        if (subject) duckdb_free(subject);
-        return count;
+    *out_kept = count;
+    if (!rt || !profiles || count == 0) return 0;
+    if (!ducknng_runtime_connection_context_view_get(rt, connection_id, &view))
+        return 0;
+    /* The view borrows record storage; copy the subject before filtering. */
+    if (view.has_subject && view.subject && view.subject[0]) {
+        subject = ducknng_strdup(view.subject);
+        if (!subject) return -1;
     }
     for (i = 0; i < count; i++) {
         ducknng_http_profile_info *row = &profiles[i];
@@ -92,7 +85,8 @@ ducknng_http_profiles_scope_to_subject(ducknng_runtime *rt, duckdb_bind_info inf
         kept++;
     }
     if (subject) duckdb_free(subject);
-    return kept;
+    *out_kept = kept;
+    return 0;
 }
 
 static void
@@ -192,30 +186,20 @@ ducknng_list_http_profiles_bind(duckdb_bind_info info)
     ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_bind_get_extra_info(info);
     ducknng_http_profiles_bind_data *bind;
     duckdb_logical_type type;
-    char *errmsg = NULL;
-    size_t count = 0;
+    uint64_t connection_id = 0;
 
     if (!ctx || !ctx->rt) {
         duckdb_bind_set_error(info, "ducknng: missing runtime");
         return;
     }
-    if (ducknng_reject_table_inside_authorizer(info, ctx)) return;
+    if (ducknng_reject_table_inside_authorizer(info, ctx, &connection_id)) return;
     bind = (ducknng_http_profiles_bind_data *)duckdb_malloc(sizeof(*bind));
     if (!bind) {
         duckdb_bind_set_error(info, "ducknng: out of memory");
         return;
     }
     memset(bind, 0, sizeof(*bind));
-    if (ducknng_runtime_http_profiles_snapshot(ctx->rt, &bind->profiles,
-            &count, &errmsg) != 0) {
-        destroy_http_profiles_bind_data(bind);
-        duckdb_bind_set_error(info,
-            errmsg ? errmsg : "ducknng: failed to list HTTP profiles");
-        if (errmsg) duckdb_free(errmsg);
-        return;
-    }
-    bind->profile_count = ducknng_http_profiles_scope_to_subject(ctx->rt, info,
-        bind->profiles, (idx_t)count);
+    bind->connection_id = connection_id;
 
     type = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
     duckdb_bind_add_result_column(info, "profile_id", type);
@@ -248,23 +232,43 @@ ducknng_list_http_profiles_bind(duckdb_bind_info info)
     duckdb_bind_add_result_column(info, "allow_subjects_json", type);
     duckdb_destroy_logical_type(&type);
     duckdb_bind_set_bind_data(info, bind, destroy_http_profiles_bind_data);
-    duckdb_bind_set_cardinality(info, bind->profile_count, true);
 }
 
 static void
 ducknng_list_http_profiles_init(duckdb_init_info info)
 {
+    ducknng_sql_context *ctx = (ducknng_sql_context *)duckdb_init_get_extra_info(info);
     ducknng_http_profiles_bind_data *bind =
         (ducknng_http_profiles_bind_data *)duckdb_init_get_bind_data(info);
-    ducknng_http_profiles_init_data *init =
-        (ducknng_http_profiles_init_data *)duckdb_malloc(sizeof(*init));
+    ducknng_http_profiles_init_data *init;
+    char *errmsg = NULL;
 
+    if (!ctx || !ctx->rt || !bind) {
+        duckdb_init_set_error(info, "ducknng: missing runtime");
+        return;
+    }
+    if (ducknng_reject_init_inside_authorizer(info, ctx, bind->connection_id)) return;
+    init = (ducknng_http_profiles_init_data *)duckdb_malloc(sizeof(*init));
     if (!init) {
         duckdb_init_set_error(info, "ducknng: out of memory");
         return;
     }
-    init->bind = bind;
-    init->offset = 0;
+    memset(init, 0, sizeof(*init));
+    if (ducknng_runtime_http_profiles_snapshot(ctx->rt, &init->profiles,
+            &init->snapshot_count, &errmsg) != 0) {
+        destroy_http_profiles_init_data(init);
+        duckdb_init_set_error(info,
+            errmsg ? errmsg : "ducknng: failed to list HTTP profiles");
+        if (errmsg) duckdb_free(errmsg);
+        return;
+    }
+    if (ducknng_http_profiles_scope_to_subject(ctx->rt, bind->connection_id,
+            init->profiles, (idx_t)init->snapshot_count,
+            &init->profile_count) != 0) {
+        destroy_http_profiles_init_data(init);
+        duckdb_init_set_error(info, "ducknng: out of memory");
+        return;
+    }
     duckdb_init_set_max_threads(info, 1);
     duckdb_init_set_init_data(info, init, destroy_http_profiles_init_data);
 }
@@ -274,7 +278,6 @@ ducknng_list_http_profiles_scan(duckdb_function_info info, duckdb_data_chunk out
 {
     ducknng_http_profiles_init_data *init =
         (ducknng_http_profiles_init_data *)duckdb_function_get_init_data(info);
-    ducknng_http_profiles_bind_data *bind = init ? init->bind : NULL;
     idx_t remaining;
     idx_t chunk_size;
     idx_t i;
@@ -287,11 +290,11 @@ ducknng_list_http_profiles_scan(duckdb_function_info info, duckdb_data_chunk out
     uint64_t *expires;
     (void)info;
 
-    if (!init || !bind || init->offset >= bind->profile_count) {
+    if (!init || init->offset >= init->profile_count) {
         duckdb_data_chunk_set_size(output, 0);
         return;
     }
-    remaining = bind->profile_count - init->offset;
+    remaining = init->profile_count - init->offset;
     chunk_size = remaining > duckdb_vector_size() ? duckdb_vector_size() : remaining;
     ports = (int32_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 3));
     has_ports = (bool *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 4));
@@ -301,7 +304,7 @@ ducknng_list_http_profiles_scan(duckdb_function_info info, duckdb_data_chunk out
     updated = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 11));
     expires = (uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(output, 12));
     for (i = 0; i < chunk_size; i++) {
-        ducknng_http_profile_info *row = &bind->profiles[init->offset + i];
+        ducknng_http_profile_info *row = &init->profiles[init->offset + i];
         if (row->profile_id) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 0), i, row->profile_id, (idx_t)strlen(row->profile_id));
         else set_null(duckdb_data_chunk_get_vector(output, 0), i);
         if (row->scheme) duckdb_unsafe_vector_assign_string_element_len(duckdb_data_chunk_get_vector(output, 1), i, row->scheme, (idx_t)strlen(row->scheme));

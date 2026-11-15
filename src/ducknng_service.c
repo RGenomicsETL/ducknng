@@ -253,7 +253,24 @@ static void ducknng_service_release_execution_connection(ducknng_service *svc, s
     ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
 }
 
-int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_scope *scope, char **errmsg) {
+static int ducknng_service_connection_id(duckdb_connection con, uint64_t *out) {
+    duckdb_client_context client_ctx = NULL;
+    if (!con || !out) return -1;
+    duckdb_connection_get_client_context(con, &client_ctx);
+    if (!client_ctx) return -1;
+    *out = (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
+    duckdb_destroy_client_context(&client_ctx);
+    return 0;
+}
+
+/* Acquires the service's execution connection and installs the complete
+ * connection record for kind before any SQL can run on it. The record copies
+ * the calling thread's execution subject; a request without one gets a present
+ * anonymous record. Any failure releases what was acquired and fails closed. */
+static int ducknng_service_enter_sql(ducknng_service *svc, ducknng_connection_scope kind,
+    const ducknng_authorizer_context *auth_ctx,
+    const ducknng_http_request_context *http_ctx,
+    ducknng_service_sql_scope *scope, char **errmsg) {
     int model;
     if (errmsg) *errmsg = NULL;
     if (!scope) {
@@ -298,38 +315,33 @@ int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_
         if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB execution connection");
         return -1;
     }
-    ducknng_runtime_current_request_service_set(svc->rt, svc);
-    /* Bind the current request's execution subject to the connection about to
-     * run its SQL, so profile admission still sees it when DuckDB executes
-     * pipelines on worker threads. */
-    {
-        const ducknng_execution_subject *subject_ctx =
-            ducknng_runtime_current_thread_execution_subject_get(svc->rt);
-        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0]) {
-            duckdb_client_context client_ctx = NULL;
-            duckdb_connection_get_client_context(scope->con, &client_ctx);
-            if (client_ctx) {
-                scope->subject_connection_id =
-                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
-                duckdb_destroy_client_context(&client_ctx);
-                if (ducknng_runtime_execution_subject_bind_connection(svc->rt,
-                        scope->subject_connection_id, subject_ctx->subject) == 0) {
-                    scope->subject_bound = 1;
-                }
-            }
-        }
+    if (ducknng_service_connection_id(scope->con, &scope->context_connection_id) != 0) {
+        ducknng_service_leave_request_sql(scope);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB client context for execution connection");
+        return -1;
     }
+    if (ducknng_runtime_connection_context_install(svc->rt, scope->context_connection_id, kind,
+            ducknng_runtime_current_thread_execution_subject_get(svc->rt),
+            auth_ctx, http_ctx, errmsg) != 0) {
+        ducknng_service_leave_request_sql(scope);
+        return -1;
+    }
+    scope->context_installed = 1;
+    ducknng_runtime_current_request_service_set(svc->rt, svc);
     return 0;
+}
+
+int ducknng_service_enter_request_sql(ducknng_service *svc, ducknng_service_sql_scope *scope, char **errmsg) {
+    return ducknng_service_enter_sql(svc, DUCKNNG_CONNECTION_SCOPE_REQUEST, NULL, NULL, scope, errmsg);
 }
 
 void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
     ducknng_service *svc;
     if (!scope || !scope->svc) return;
     svc = scope->svc;
-    if (scope->subject_bound && svc->rt) {
-        ducknng_runtime_execution_subject_unbind_connection(svc->rt,
-            scope->subject_connection_id);
-    }
+    /* Remove the record before the connection can be handed to another scope. */
+    if (scope->context_installed && svc->rt)
+        ducknng_runtime_connection_context_remove(svc->rt, scope->context_connection_id);
     if (svc->rt) ducknng_runtime_current_request_service_set(svc->rt, NULL);
     if (scope->owns_connection) ducknng_service_release_execution_connection(svc, scope->pool_index);
     if (scope->locked_service && svc->execution_mu_initialized) ducknng_mutex_unlock(&svc->execution_mu);
@@ -339,28 +351,29 @@ void ducknng_service_leave_request_sql(ducknng_service_sql_scope *scope) {
 
 int ducknng_service_acquire_session_connection(ducknng_service *svc,
     duckdb_connection *out_con, size_t *out_index, char **errmsg) {
+    uint64_t connection_id;
     if (ducknng_service_acquire_execution_connection(svc, out_con, out_index, errmsg) != 0) return -1;
-    /* Bind the opener's execution subject to the session connection so
-     * restricted HTTP profiles keep resolving during later fetches of this
-     * session, on whatever thread DuckDB executes them. Every release path
-     * funnels through ducknng_service_release_session_connection, which
-     * removes the binding before the pooled connection can be reused. */
-    {
-        const ducknng_execution_subject *subject_ctx =
-            ducknng_runtime_current_thread_execution_subject_get(svc->rt);
-        if (subject_ctx && subject_ctx->subject && subject_ctx->subject[0] && *out_con) {
-            duckdb_client_context client_ctx = NULL;
-            duckdb_connection_get_client_context(*out_con, &client_ctx);
-            if (client_ctx) {
-                uint64_t connection_id =
-                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx);
-                duckdb_destroy_client_context(&client_ctx);
-                (void)ducknng_runtime_execution_subject_bind_connection(svc->rt,
-                    connection_id, subject_ctx->subject);
-            }
-        }
+    /* Bind the opener's execution subject, or a present anonymous record, to
+     * the session connection so the session's SQL keeps the opener's
+     * authority on whatever thread and under whichever later caller DuckDB
+     * executes it. Every release path funnels through
+     * ducknng_service_release_session_connection, which removes the record
+     * before the pooled connection can be reused. */
+    if (ducknng_service_connection_id(*out_con, &connection_id) != 0) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing DuckDB client context for session connection");
+        goto fail;
     }
+    if (ducknng_runtime_connection_context_install(svc->rt, connection_id,
+            DUCKNNG_CONNECTION_SCOPE_SESSION,
+            ducknng_runtime_current_thread_execution_subject_get(svc->rt),
+            NULL, NULL, errmsg) != 0)
+        goto fail;
     return 0;
+fail:
+    ducknng_service_release_execution_connection(svc, *out_index);
+    *out_con = NULL;
+    *out_index = (size_t)-1;
+    return -1;
 }
 
 void ducknng_service_release_session_connection(ducknng_service *svc, size_t index) {
@@ -370,13 +383,9 @@ void ducknng_service_release_session_connection(ducknng_service *svc, size_t ind
         if (index < svc->rt->execution_pool_count) con = svc->rt->execution_pool[index];
         ducknng_mutex_unlock(&svc->rt->execution_pool_mu);
         if (con) {
-            duckdb_client_context client_ctx = NULL;
-            duckdb_connection_get_client_context(con, &client_ctx);
-            if (client_ctx) {
-                ducknng_runtime_execution_subject_unbind_connection(svc->rt,
-                    (uint64_t)duckdb_client_context_get_connection_id(client_ctx));
-                duckdb_destroy_client_context(&client_ctx);
-            }
+            uint64_t connection_id;
+            if (ducknng_service_connection_id(con, &connection_id) == 0)
+                ducknng_runtime_connection_context_remove(svc->rt, connection_id);
         }
     }
     ducknng_service_release_execution_connection(svc, index);
@@ -384,7 +393,8 @@ void ducknng_service_release_session_connection(ducknng_service *svc, size_t ind
 
 int ducknng_service_enter_http_route_sql(ducknng_service *svc,
     const ducknng_http_request_context *request_ctx, ducknng_service_sql_scope *scope, char **errmsg) {
-    if (ducknng_service_enter_request_sql(svc, scope, errmsg) != 0) return -1;
+    if (ducknng_service_enter_sql(svc, DUCKNNG_CONNECTION_SCOPE_HTTP_ROUTE, NULL, request_ctx,
+            scope, errmsg) != 0) return -1;
     ducknng_runtime_current_http_request_context_set(svc->rt, request_ctx);
     return 0;
 }
@@ -397,7 +407,8 @@ void ducknng_service_leave_http_route_sql(ducknng_service_sql_scope *scope) {
 
 int ducknng_service_enter_authorizer_sql(ducknng_service *svc,
     const ducknng_authorizer_context *auth_ctx, ducknng_service_sql_scope *scope, char **errmsg) {
-    if (ducknng_service_enter_request_sql(svc, scope, errmsg) != 0) return -1;
+    if (ducknng_service_enter_sql(svc, DUCKNNG_CONNECTION_SCOPE_AUTHORIZER, auth_ctx, NULL,
+            scope, errmsg) != 0) return -1;
     ducknng_runtime_current_authorizer_context_set(svc->rt, auth_ctx);
     return 0;
 }

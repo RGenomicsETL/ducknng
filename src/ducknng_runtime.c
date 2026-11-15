@@ -5,9 +5,12 @@
 #include "ducknng_nng_compat.h"
 #include "ducknng_util.h"
 #include <stdatomic.h>
+#include <stdint.h>
 #include <string.h>
 
 DUCKDB_EXTENSION_EXTERN
+
+static void ducknng_connection_context_reset(ducknng_connection_context *rec);
 
 #define DUCKNNG_EXECUTION_POOL_INITIAL 8
 #define DUCKNNG_EXECUTION_POOL_DEFAULT_MAX 64
@@ -507,14 +510,13 @@ void ducknng_runtime_destroy(ducknng_runtime *rt) {
         rt->user_codec_cap = 0;
     }
     ducknng_runtime_http_profiles_reset(rt);
-    if (rt->subject_bindings) {
-        for (i = 0; i < rt->subject_binding_count; i++) {
-            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
-        }
-        duckdb_free(rt->subject_bindings);
-        rt->subject_bindings = NULL;
-        rt->subject_binding_count = 0;
-        rt->subject_binding_cap = 0;
+    if (rt->context_bindings) {
+        for (i = 0; i < rt->context_binding_count; i++)
+            ducknng_connection_context_reset(&rt->context_bindings[i]);
+        duckdb_free(rt->context_bindings);
+        rt->context_bindings = NULL;
+        rt->context_binding_count = 0;
+        rt->context_binding_cap = 0;
     }
     ducknng_method_registry_destroy(&rt->registry);
     ducknng_runtime_sql_methods_destroy(rt);
@@ -611,6 +613,56 @@ void ducknng_runtime_codec_connection_unlock(ducknng_runtime *rt) {
     ducknng_mutex_unlock(&rt->codec_con_mu);
 }
 
+int ducknng_runtime_codec_enter(ducknng_runtime *rt, uint64_t parent_connection_id,
+    const char *recursion_error, ducknng_codec_scope *scope, char **errmsg) {
+    duckdb_client_context codec_ctx = NULL;
+    ducknng_connection_context_view view;
+    ducknng_execution_subject subject;
+    memset(scope, 0, sizeof(*scope));
+    if (!rt || !rt->codec_con) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: no local codec connection is available");
+        return -1;
+    }
+    duckdb_connection_get_client_context(rt->codec_con, &codec_ctx);
+    if (!codec_ctx) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: missing DuckDB client context for codec connection");
+        return -1;
+    }
+    scope->codec_connection_id = (uint64_t)duckdb_client_context_get_connection_id(codec_ctx);
+    duckdb_destroy_client_context(&codec_ctx);
+    if (parent_connection_id == scope->codec_connection_id) {
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(recursion_error ? recursion_error :
+            "ducknng: codec SQL cannot recursively use the codec connection");
+        return -1;
+    }
+    ducknng_runtime_codec_connection_lock(rt);
+    if (!ducknng_runtime_connection_context_view_get(rt, parent_connection_id, &view))
+        return 0;
+    subject.peer_identity = view.peer_identity;
+    subject.principal = view.principal;
+    subject.subject = view.subject;
+    subject.claims_json = view.claims_json;
+    if (ducknng_runtime_connection_context_install(rt, scope->codec_connection_id,
+            view.scope, view.has_subject ? &subject : NULL, view.auth_ctx,
+            view.http_ctx, errmsg) != 0) {
+        ducknng_runtime_codec_connection_unlock(rt);
+        if (errmsg && !*errmsg) *errmsg = ducknng_strdup(
+            "ducknng: failed to install codec execution context");
+        return -1;
+    }
+    scope->context_installed = 1;
+    return 0;
+}
+
+void ducknng_runtime_codec_leave(ducknng_runtime *rt, ducknng_codec_scope *scope) {
+    if (scope->context_installed)
+        ducknng_runtime_connection_context_remove(rt, scope->codec_connection_id);
+    scope->context_installed = 0;
+    ducknng_runtime_codec_connection_unlock(rt);
+}
+
 void ducknng_runtime_current_request_service_set(ducknng_runtime *rt, ducknng_service *svc) {
     if (!rt) return;
     atomic_store_explicit(&rt->current_request_service_ptr, (uintptr_t)svc, memory_order_release);
@@ -686,79 +738,175 @@ const ducknng_execution_subject *ducknng_runtime_current_thread_execution_subjec
     return g_thread_execution_subject;
 }
 
-int ducknng_runtime_execution_subject_bind_connection(ducknng_runtime *rt,
-    uint64_t connection_id, const char *subject) {
+static void ducknng_connection_context_reset(ducknng_connection_context *rec) {
+    if (!rec) return;
+    if (rec->peer_identity) duckdb_free(rec->peer_identity);
+    if (rec->principal) duckdb_free(rec->principal);
+    if (rec->subject) duckdb_free(rec->subject);
+    if (rec->claims_json) duckdb_free(rec->claims_json);
+    memset(rec, 0, sizeof(*rec));
+}
+
+/* Copies a non-empty string; empty and NULL both become NULL. Returns -1 only
+ * when a non-empty source could not be copied. */
+static int ducknng_context_strdup(const char *src, char **out) {
+    *out = NULL;
+    if (!src || !src[0]) return 0;
+    *out = ducknng_strdup(src);
+    return *out ? 0 : -1;
+}
+
+/* Caller holds rt->mu; the returned pointer is invalid once it is released. */
+static ducknng_connection_context *ducknng_connection_context_find_locked(
+    ducknng_runtime *rt, uint64_t connection_id) {
     size_t i;
-    char *subject_dup;
-    if (!rt || !subject || !subject[0]) return -1;
-    subject_dup = ducknng_strdup(subject);
-    if (!subject_dup) return -1;
+    for (i = 0; i < rt->context_binding_count; i++) {
+        if (rt->context_bindings[i].connection_id == connection_id)
+            return &rt->context_bindings[i];
+    }
+    return NULL;
+}
+
+int ducknng_runtime_connection_context_install(ducknng_runtime *rt,
+    uint64_t connection_id, ducknng_connection_scope scope,
+    const ducknng_execution_subject *subject,
+    const ducknng_authorizer_context *auth_ctx,
+    const ducknng_http_request_context *http_ctx, char **errmsg) {
+    ducknng_connection_context rec;
+    const char *err = NULL;
+
+    if (errmsg) *errmsg = NULL;
+    if (!rt) {
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: missing runtime for connection context");
+        return -1;
+    }
+    switch (scope) {
+    case DUCKNNG_CONNECTION_SCOPE_REQUEST:
+    case DUCKNNG_CONNECTION_SCOPE_SESSION:
+        if (auth_ctx || http_ctx) err = "ducknng: callback context on a plain connection scope";
+        break;
+    case DUCKNNG_CONNECTION_SCOPE_AUTHORIZER:
+        if (!auth_ctx || http_ctx) err = "ducknng: authorizer scope requires only an authorizer context";
+        break;
+    case DUCKNNG_CONNECTION_SCOPE_HTTP_ROUTE:
+        if (!http_ctx || auth_ctx) err = "ducknng: HTTP route scope requires only an HTTP request context";
+        break;
+    default:
+        err = "ducknng: invalid connection scope";
+        break;
+    }
+    if (err) {
+        if (errmsg) *errmsg = ducknng_strdup(err);
+        return -1;
+    }
+
+    memset(&rec, 0, sizeof(rec));
+    rec.connection_id = connection_id;
+    rec.scope = scope;
+    rec.has_subject = subject != NULL;
+    rec.auth_ctx = auth_ctx;
+    rec.http_ctx = http_ctx;
+    if (subject && (ducknng_context_strdup(subject->peer_identity, &rec.peer_identity) != 0 ||
+            ducknng_context_strdup(subject->principal, &rec.principal) != 0 ||
+            ducknng_context_strdup(subject->subject, &rec.subject) != 0 ||
+            ducknng_context_strdup(subject->claims_json, &rec.claims_json) != 0)) {
+        ducknng_connection_context_reset(&rec);
+        if (errmsg) *errmsg = ducknng_strdup("ducknng: out of memory copying connection context");
+        return -1;
+    }
+
     ducknng_mutex_lock(&rt->mu);
-    for (i = 0; i < rt->subject_binding_count; i++) {
-        if (rt->subject_bindings[i].connection_id == connection_id) {
-            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
-            rt->subject_bindings[i].subject = subject_dup;
-            ducknng_mutex_unlock(&rt->mu);
-            return 0;
-        }
-    }
-    if (rt->subject_binding_count >= rt->subject_binding_cap) {
-        size_t cap = rt->subject_binding_cap ? rt->subject_binding_cap * 2 : 4;
-        ducknng_subject_binding *next =
-            (ducknng_subject_binding *)duckdb_malloc(sizeof(*next) * cap);
+    if (ducknng_connection_context_find_locked(rt, connection_id)) {
+        err = "ducknng: connection already carries a ducknng execution context";
+    } else if (rt->context_binding_count >= rt->context_binding_cap) {
+        size_t cap = rt->context_binding_cap ? rt->context_binding_cap * 2 : 4;
+        ducknng_connection_context *next = NULL;
+        if (cap <= SIZE_MAX / sizeof(*next))
+            next = (ducknng_connection_context *)duckdb_malloc(sizeof(*next) * cap);
         if (!next) {
-            ducknng_mutex_unlock(&rt->mu);
-            duckdb_free(subject_dup);
-            return -1;
+            err = "ducknng: out of memory installing connection context";
+        } else {
+            memset(next, 0, sizeof(*next) * cap);
+            if (rt->context_binding_count > 0)
+                memcpy(next, rt->context_bindings, sizeof(*next) * rt->context_binding_count);
+            if (rt->context_bindings) duckdb_free(rt->context_bindings);
+            rt->context_bindings = next;
+            rt->context_binding_cap = cap;
         }
-        memset(next, 0, sizeof(*next) * cap);
-        if (rt->subject_bindings && rt->subject_binding_count > 0) {
-            memcpy(next, rt->subject_bindings, sizeof(*next) * rt->subject_binding_count);
-        }
-        if (rt->subject_bindings) duckdb_free(rt->subject_bindings);
-        rt->subject_bindings = next;
-        rt->subject_binding_cap = cap;
     }
-    rt->subject_bindings[rt->subject_binding_count].connection_id = connection_id;
-    rt->subject_bindings[rt->subject_binding_count].subject = subject_dup;
-    rt->subject_binding_count++;
+    if (!err) rt->context_bindings[rt->context_binding_count++] = rec;
     ducknng_mutex_unlock(&rt->mu);
+    if (err) {
+        ducknng_connection_context_reset(&rec);
+        if (errmsg) *errmsg = ducknng_strdup(err);
+        return -1;
+    }
     return 0;
 }
 
-void ducknng_runtime_execution_subject_unbind_connection(ducknng_runtime *rt,
+void ducknng_runtime_connection_context_remove(ducknng_runtime *rt,
     uint64_t connection_id) {
+    ducknng_connection_context rec;
+    ducknng_connection_context *at;
     size_t i;
     if (!rt) return;
+    memset(&rec, 0, sizeof(rec));
     ducknng_mutex_lock(&rt->mu);
-    for (i = 0; i < rt->subject_binding_count; i++) {
-        if (rt->subject_bindings[i].connection_id == connection_id) {
-            if (rt->subject_bindings[i].subject) duckdb_free(rt->subject_bindings[i].subject);
-            for (; i + 1 < rt->subject_binding_count; i++) {
-                rt->subject_bindings[i] = rt->subject_bindings[i + 1];
-            }
-            memset(&rt->subject_bindings[rt->subject_binding_count - 1], 0,
-                sizeof(rt->subject_bindings[0]));
-            rt->subject_binding_count--;
-            break;
-        }
+    at = ducknng_connection_context_find_locked(rt, connection_id);
+    if (at) {
+        rec = *at;
+        for (i = (size_t)(at - rt->context_bindings); i + 1 < rt->context_binding_count; i++)
+            rt->context_bindings[i] = rt->context_bindings[i + 1];
+        rt->context_binding_count--;
+        memset(&rt->context_bindings[rt->context_binding_count], 0,
+            sizeof(rt->context_bindings[0]));
     }
     ducknng_mutex_unlock(&rt->mu);
+    ducknng_connection_context_reset(&rec);
+}
+
+ducknng_connection_scope ducknng_runtime_connection_scope_get(ducknng_runtime *rt,
+    uint64_t connection_id) {
+    ducknng_connection_scope scope = DUCKNNG_CONNECTION_SCOPE_NONE;
+    const ducknng_connection_context *at;
+    if (!rt) return scope;
+    ducknng_mutex_lock(&rt->mu);
+    at = ducknng_connection_context_find_locked(rt, connection_id);
+    if (at) scope = at->scope;
+    ducknng_mutex_unlock(&rt->mu);
+    return scope;
+}
+
+int ducknng_runtime_connection_context_view_get(ducknng_runtime *rt,
+    uint64_t connection_id, ducknng_connection_context_view *out) {
+    const ducknng_connection_context *rec;
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!rt) return 0;
+    ducknng_mutex_lock(&rt->mu);
+    rec = ducknng_connection_context_find_locked(rt, connection_id);
+    if (rec) {
+        out->scope = rec->scope;
+        out->has_subject = rec->has_subject;
+        out->peer_identity = rec->peer_identity;
+        out->principal = rec->principal;
+        out->subject = rec->subject;
+        out->claims_json = rec->claims_json;
+        out->auth_ctx = rec->auth_ctx;
+        out->http_ctx = rec->http_ctx;
+    }
+    ducknng_mutex_unlock(&rt->mu);
+    return rec != NULL;
 }
 
 char *ducknng_runtime_execution_subject_for_connection_dup(ducknng_runtime *rt,
     uint64_t connection_id) {
-    size_t i;
+    const ducknng_connection_context *rec;
     char *out = NULL;
     if (!rt) return NULL;
     ducknng_mutex_lock(&rt->mu);
-    for (i = 0; i < rt->subject_binding_count; i++) {
-        if (rt->subject_bindings[i].connection_id == connection_id) {
-            out = rt->subject_bindings[i].subject ?
-                ducknng_strdup(rt->subject_bindings[i].subject) : NULL;
-            break;
-        }
-    }
+    rec = ducknng_connection_context_find_locked(rt, connection_id);
+    if (rec && rec->subject) out = ducknng_strdup(rec->subject);
     ducknng_mutex_unlock(&rt->mu);
     return out;
 }

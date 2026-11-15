@@ -121,8 +121,9 @@ SELECT *
 FROM ducknng_query_rpc(
   'ipc:///tmp/ducknng.ipc',
   'SELECT i, i > 10 AS gt_10
-     FROM rpc_demo_t ORDER BY i',
-  0::UBIGINT
+     FROM (VALUES (7), (11), (42)) t(i) ORDER BY i',
+  0::UBIGINT,
+  schema := NULL::STRUCT(i INTEGER, gt_10 BOOLEAN)
 );
 ```
 

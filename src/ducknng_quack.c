@@ -2598,14 +2598,13 @@ static int ducknng_quack_reader_validate_results(ducknng_quack_reader *r,
     return 0;
 }
 
-int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
-    const uint8_t *payload, size_t payload_len,
+int ducknng_quack_payload_parse_table(const uint8_t *payload, size_t payload_len,
     ducknng_quack_schema *out_schema, idx_t *out_row_count, char **errmsg) {
     ducknng_quack_reader r;
     uint64_t i;
     idx_t row_count = 0;
     if (out_row_count) *out_row_count = 0;
-    if (!info || !payload || payload_len == 0 || !out_schema) {
+    if (!payload || payload_len == 0 || !out_schema) {
         ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for bind");
         return -1;
     }
@@ -2614,10 +2613,9 @@ int ducknng_quack_payload_bind_columns(duckdb_bind_info info,
     r.len = payload_len;
     if (ducknng_quack_reader_parse_schema(&r, out_schema, errmsg) != 0) return -1;
     for (i = 0; i < (uint64_t)out_schema->ncols; i++) {
-        duckdb_logical_type bind_type = NULL;
-        if (ducknng_quack_node_to_duckdb(&out_schema->cols[i], 0, &bind_type, errmsg) != 0) goto fail;
-        duckdb_bind_add_result_column(info, out_schema->cols[i].name ? out_schema->cols[i].name : "", bind_type);
-        duckdb_destroy_logical_type(&bind_type);
+        duckdb_logical_type type = NULL;
+        if (ducknng_quack_node_to_duckdb(&out_schema->cols[i], 0, &type, errmsg) != 0) goto fail;
+        duckdb_destroy_logical_type(&type);
     }
     if (ducknng_quack_reader_validate_results(&r, out_schema, 0, &row_count, errmsg) != 0) goto fail;
     if (out_row_count) *out_row_count = row_count;
@@ -2627,13 +2625,29 @@ fail:
     return -1;
 }
 
+int ducknng_quack_schema_bind_columns(duckdb_bind_info info,
+    const ducknng_quack_schema *schema, char **errmsg) {
+    idx_t i;
+    if (!info || !schema) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack schema for bind");
+        return -1;
+    }
+    for (i = 0; i < schema->ncols; i++) {
+        duckdb_logical_type bind_type = NULL;
+        if (ducknng_quack_node_to_duckdb(&schema->cols[i], 0, &bind_type, errmsg) != 0) return -1;
+        duckdb_bind_add_result_column(info, schema->cols[i].name ? schema->cols[i].name : "", bind_type);
+        duckdb_destroy_logical_type(&bind_type);
+    }
+    return 0;
+}
+
 /* Deep structural equality of two DuckDB logical types: same type id plus, for
  * parameterized and nested types, matching decimal precision/scale, list/array
  * child, array size, struct/union child names and types, map key/value, and
  * enum labels. The upload append path requires this so a batch column is only
  * appended into a target column of exactly the same type, never silently cast
  * (e.g. BIGINT into INTEGER, or DECIMAL(9,2) into DECIMAL(18,4)). */
-static int ducknng_quack_logical_type_equal(duckdb_logical_type a, duckdb_logical_type b) {
+int ducknng_quack_logical_type_equal(duckdb_logical_type a, duckdb_logical_type b) {
     duckdb_type ta;
     duckdb_type tb;
     if (!a || !b) return 0;
@@ -2730,6 +2744,77 @@ static int ducknng_quack_logical_type_equal(duckdb_logical_type a, duckdb_logica
         /* Same top-level id and no parameters to compare. */
         return 1;
     }
+}
+
+int ducknng_quack_schema_validate_declared(const ducknng_quack_schema *schema,
+    idx_t ncols, const char *const *names, const duckdb_logical_type *types,
+    char **errmsg) {
+    char buf[256];
+    idx_t i;
+    if (!schema || (ncols > 0 && (!names || !types))) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing schema for quack validation");
+        return -1;
+    }
+    if (schema->ncols != ncols) {
+        snprintf(buf, sizeof(buf), "ducknng: quack payload has %llu columns but schema declares %llu",
+            (unsigned long long)schema->ncols, (unsigned long long)ncols);
+        ducknng_quack_set_error(errmsg, buf);
+        return -1;
+    }
+    for (i = 0; i < ncols; i++) {
+        const char *got = schema->cols[i].name ? schema->cols[i].name : "";
+        duckdb_logical_type t = NULL;
+        int eq;
+        if (!names[i] || strcmp(got, names[i]) != 0) {
+            snprintf(buf, sizeof(buf), "ducknng: quack column %llu is named '%.80s' but schema declares '%.80s'",
+                (unsigned long long)i + 1, got, names[i] ? names[i] : "");
+            ducknng_quack_set_error(errmsg, buf);
+            return -1;
+        }
+        if (ducknng_quack_node_to_duckdb(&schema->cols[i], 0, &t, errmsg) != 0) return -1;
+        eq = ducknng_quack_logical_type_equal(t, types[i]);
+        duckdb_destroy_logical_type(&t);
+        if (!eq) {
+            snprintf(buf, sizeof(buf), "ducknng: quack column %llu ('%.80s') type does not match the declared schema",
+                (unsigned long long)i + 1, got);
+            ducknng_quack_set_error(errmsg, buf);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int ducknng_quack_payload_validate_declared(const uint8_t *payload,
+    size_t payload_len, int require_header, idx_t ncols,
+    const char *const *names, const duckdb_logical_type *types,
+    ducknng_quack_schema *out_schema, char **errmsg) {
+    ducknng_quack_reader r;
+    ducknng_quack_schema schema;
+    uint16_t field_id = 0;
+    int rc;
+    if (!payload || payload_len == 0) {
+        ducknng_quack_set_error(errmsg, "ducknng: missing quack payload for schema validation");
+        return -1;
+    }
+    memset(&r, 0, sizeof(r));
+    r.data = payload;
+    r.len = payload_len;
+    if (ducknng_quack_peek_u16le(&r, &field_id, errmsg) != 0) return -1;
+    if (field_id != DUCKNNG_QUACK_OUTER_RESULT_TYPES) {
+        if (!require_header) return 0;
+        ducknng_quack_set_error(errmsg, "ducknng: first quack payload did not carry a result schema");
+        return -1;
+    }
+    if (ducknng_quack_reader_parse_schema(&r, &schema, errmsg) != 0) return -1;
+    rc = ducknng_quack_schema_validate_declared(&schema, ncols, names, types, errmsg);
+    if (rc == 0) rc = ducknng_quack_reader_validate_results(&r, &schema, 0, NULL, errmsg);
+    if (rc == 0 && out_schema) {
+        ducknng_quack_schema_reset(out_schema);
+        *out_schema = schema;
+    } else {
+        ducknng_quack_schema_reset(&schema);
+    }
+    return rc;
 }
 
 /* Record a duckdb_appender error into *errmsg via the non-deprecated

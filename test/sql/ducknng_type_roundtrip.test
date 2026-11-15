@@ -33,7 +33,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT true AS b, (-128)::TINYINT AS i8, (-32768)::SMALLINT AS i16,
           (-2147483648)::INTEGER AS i32, (-9223372036854775808)::BIGINT AS i64,
           (12345678901234567890123456789012345678)::HUGEINT AS i128',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(b BOOLEAN, i8 TINYINT, i16 SMALLINT, i32 INTEGER, i64 BIGINT,
+    i128 DECIMAL(38,0)))
 ----
 1	1	1	1	1	1
 
@@ -45,7 +47,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT true AS b, (-128)::TINYINT AS i8, (-32768)::SMALLINT AS i16,
           (-2147483648)::INTEGER AS i32, (-9223372036854775808)::BIGINT AS i64,
           (12345678901234567890123456789012345678)::HUGEINT AS i128',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(b BOOLEAN, i8 TINYINT, i16 SMALLINT, i32 INTEGER, i64 BIGINT,
+    i128 HUGEINT))
 ----
 1	1	1	1	1	1
 
@@ -61,7 +65,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT (255)::UTINYINT AS u8, (65535)::USMALLINT AS u16, (4294967295)::UINTEGER AS u32,
           (18446744073709551615)::UBIGINT AS u64,
           (98765432109876543210987654321098765432)::UHUGEINT AS u128',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(u8 UTINYINT, u16 USMALLINT, u32 UINTEGER, u64 UBIGINT,
+    u128 DECIMAL(38,0)))
 ----
 1	1	1	1	1
 
@@ -73,7 +79,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT (255)::UTINYINT AS u8, (65535)::USMALLINT AS u16, (4294967295)::UINTEGER AS u32,
           (18446744073709551615)::UBIGINT AS u64,
           (98765432109876543210987654321098765432)::UHUGEINT AS u128',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(u8 UTINYINT, u16 USMALLINT, u32 UINTEGER, u64 UBIGINT,
+    u128 UHUGEINT))
 ----
 1	1	1	1	1
 
@@ -90,7 +98,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT (1.5)::FLOAT AS f, (2.25)::DOUBLE AS d, (12.34)::DECIMAL(4,2) AS dec16,
           (1234.56)::DECIMAL(9,2) AS dec32, (12345678.9012)::DECIMAL(18,4) AS dec64,
           (1234567890123456.7890)::DECIMAL(38,10) AS dec128',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(f FLOAT, d DOUBLE, dec16 DECIMAL(4,2), dec32 DECIMAL(9,2),
+    dec64 DECIMAL(18,4), dec128 DECIMAL(38,10)))
 ----
 1	1	1	1	1	1
 
@@ -103,7 +113,9 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT (1.5)::FLOAT AS f, (2.25)::DOUBLE AS d, (12.34)::DECIMAL(4,2) AS dec16,
           (1234.56)::DECIMAL(9,2) AS dec32, (12345678.9012)::DECIMAL(18,4) AS dec64,
           (1234567890123456.7890)::DECIMAL(38,10) AS dec128',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(f FLOAT, d DOUBLE, dec16 DECIMAL(4,2), dec32 DECIMAL(9,2),
+    dec64 DECIMAL(18,4), dec128 DECIMAL(38,10)))
 ----
 1	1	1	1	1	1
 
@@ -117,7 +129,8 @@ SELECT (s = 'héllo → world')::INTEGER, (bl = '\xDE\xAD\xBE\xEF'::BLOB)::INTEG
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT ''héllo → world'' AS s, ''\xDE\xAD\xBE\xEF''::BLOB AS bl,
           ''12345678-1234-5678-1234-567812345678''::UUID AS uu',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(s VARCHAR, bl BLOB, uu VARCHAR))
 ----
 1	1	1
 
@@ -127,7 +140,8 @@ SELECT (s = 'héllo → world')::INTEGER, (bl = '\xDE\xAD\xBE\xEF'::BLOB)::INTEG
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT ''héllo → world'' AS s, ''\xDE\xAD\xBE\xEF''::BLOB AS bl,
           ''12345678-1234-5678-1234-567812345678''::UUID AS uu',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(s VARCHAR, bl BLOB, uu UUID))
 ----
 1	1	1
 
@@ -156,7 +170,10 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
           ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS tsns,
           ''2024-01-02 03:04:05.123456+00''::TIMESTAMPTZ AS tstz,
           INTERVAL ''1 year 2 months 3 days 04:05:06'' AS iv',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(dt DATE, tm TIME, tmns TIME_NS, tmtz TIME, ts TIMESTAMP,
+    tss TIMESTAMP_S, tsms TIMESTAMP_MS, tsns TIMESTAMP_NS, tstz TIMESTAMPTZ,
+    iv INTERVAL))
 ----
 1	1	1	1	1	1	1	1	1	1
 
@@ -180,7 +197,10 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
           ''2024-01-02 03:04:05.123456789''::TIMESTAMP_NS AS tsns,
           ''2024-01-02 03:04:05.123456+00''::TIMESTAMPTZ AS tstz,
           INTERVAL ''1 year 2 months 3 days 04:05:06'' AS iv',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(dt DATE, tm TIME, tmns TIME_NS, tmtz TIMETZ, ts TIMESTAMP,
+    tss TIMESTAMP_S, tsms TIMESTAMP_MS, tsns TIMESTAMP_NS, tstz TIMESTAMPTZ,
+    iv INTERVAL))
 ----
 1	1	1	1	1	1	1	1	1	1
 
@@ -194,7 +214,9 @@ SELECT (i IS NULL)::INTEGER, (s IS NULL)::INTEGER, (d IS NULL)::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT NULL::INTEGER AS i, NULL::VARCHAR AS s, NULL::DOUBLE AS d, NULL::TIMESTAMP AS ts,
           NULL::BLOB AS bl, NULL::UUID AS uu, NULL::DECIMAL(18,4) AS dec',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(i INTEGER, s VARCHAR, d DOUBLE, ts TIMESTAMP, bl BLOB, uu VARCHAR,
+    dec DECIMAL(18,4)))
 ----
 1	1	1	1	1	1	1
 
@@ -204,7 +226,9 @@ SELECT (i IS NULL)::INTEGER, (s IS NULL)::INTEGER, (d IS NULL)::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT NULL::INTEGER AS i, NULL::VARCHAR AS s, NULL::DOUBLE AS d, NULL::TIMESTAMP AS ts,
           NULL::BLOB AS bl, NULL::UUID AS uu, NULL::DECIMAL(18,4) AS dec',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(i INTEGER, s VARCHAR, d DOUBLE, ts TIMESTAMP, bl BLOB, uu UUID,
+    dec DECIMAL(18,4)))
 ----
 1	1	1	1	1	1	1
 
@@ -213,7 +237,8 @@ query III
 SELECT count(*)::INTEGER, count(i)::INTEGER, (sum(CASE WHEN i IS NULL THEN 1 ELSE 0 END))::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT * FROM (VALUES (1),(NULL),(3),(NULL),(5)) AS t(i)',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(i INTEGER))
 ----
 5	3	2
 
@@ -226,7 +251,8 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 query III
 SELECT (xs[1] = 1)::INTEGER, (xs[2] IS NULL)::INTEGER, (xs[3] = 3)::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
-  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'arrow_ipc_stream')
+  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(xs INTEGER[]))
 ----
 1	1	1
 
@@ -234,7 +260,8 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 query II
 SELECT (st.a = 7)::INTEGER, (st.b = 'bee')::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
-  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'arrow_ipc_stream')
+  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, b VARCHAR)))
 ----
 1	1
 
@@ -245,7 +272,8 @@ SELECT (st IS NULL)::INTEGER, (st.a IS NULL)::INTEGER, (xs[1] IS NULL)::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
           [NULL::STRUCT(a INTEGER, b VARCHAR), {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, b VARCHAR), xs STRUCT(a INTEGER, b VARCHAR)[]))
 ----
 1	1	1	1	1
 
@@ -257,7 +285,8 @@ SELECT (sl.xs = [1,2,3]::INTEGER[])::INTEGER, (sl.name = 'q')::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT {''xs'': [1,2,3]::INTEGER[], ''name'': ''q''} AS sl,
           [[1,2],[3]]::INTEGER[][] AS ll',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(sl STRUCT(xs INTEGER[], "name" VARCHAR), ll INTEGER[][]))
 ----
 1	1	1	1	1
 
@@ -267,7 +296,8 @@ SELECT (list_sort(map_keys(m)) = ['k1','k2'])::INTEGER,
        (list_sort(map_values(m)) = [1,2])::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT MAP {''k1'': 1, ''k2'': 2}::MAP(VARCHAR, INTEGER) AS m',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(m MAP(VARCHAR, INTEGER)))
 ----
 1	1
 
@@ -276,7 +306,8 @@ query II
 SELECT (union_extract(v, 'num') = 4)::INTEGER, (union_tag(v) = 'num')::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT union_value(num := 4::INTEGER)::UNION(num INTEGER, str VARCHAR) AS v',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(v UNION(num INTEGER, str VARCHAR)))
 ----
 1	1
 
@@ -290,7 +321,8 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 query III
 SELECT (xs[1] = 1)::INTEGER, (xs[2] IS NULL)::INTEGER, (xs[3] = 3)::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
-  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'ducknng_quack_batch')
+  'SELECT [1, NULL, 3]::INTEGER[] AS xs', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(xs INTEGER[]))
 ----
 1	1	1
 
@@ -298,7 +330,8 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 query II
 SELECT (st.a = 7)::INTEGER, (st.b = 'bee')::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
-  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'ducknng_quack_batch')
+  'SELECT {''a'': 7::INTEGER, ''b'': ''bee''} AS st', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, b VARCHAR)))
 ----
 1	1
 
@@ -309,7 +342,8 @@ SELECT (st IS NULL)::INTEGER, (st.a IS NULL)::INTEGER, (xs[1] IS NULL)::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT NULL::STRUCT(a INTEGER, b VARCHAR) AS st,
           [NULL::STRUCT(a INTEGER, b VARCHAR), {''a'': 2::INTEGER, ''b'': NULL}] AS xs',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(st STRUCT(a INTEGER, b VARCHAR), xs STRUCT(a INTEGER, b VARCHAR)[]))
 ----
 1	1	1	1	1
 
@@ -321,7 +355,8 @@ SELECT (sl.xs = [1,2,3]::INTEGER[])::INTEGER, (sl.name = 'q')::INTEGER,
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT {''xs'': [1,2,3]::INTEGER[], ''name'': ''q''} AS sl,
           [[1,2],[3]]::INTEGER[][] AS ll',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(sl STRUCT(xs INTEGER[], "name" VARCHAR), ll INTEGER[][]))
 ----
 1	1	1	1	1
 
@@ -331,7 +366,8 @@ SELECT (list_sort(map_keys(m)) = ['k1','k2'])::INTEGER,
        (list_sort(map_values(m)) = [1,2])::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT MAP {''k1'': 1, ''k2'': 2}::MAP(VARCHAR, INTEGER) AS m',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(m MAP(VARCHAR, INTEGER)))
 ----
 1	1
 
@@ -340,7 +376,8 @@ query II
 SELECT (union_extract(v, 'num') = 4)::INTEGER, (union_tag(v) = 'num')::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT union_value(num := 4::INTEGER)::UNION(num INTEGER, str VARCHAR) AS v',
-  0::UBIGINT, 'ducknng_quack_batch')
+  0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(v UNION(num INTEGER, str VARCHAR)))
 ----
 1	1
 
@@ -348,7 +385,8 @@ FROM ducknng_query_rpc_mode(getvariable('u'),
 query III
 SELECT (a[1] = 10)::INTEGER, (a[2] = 20)::INTEGER, (a[3] = 30)::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
-  'SELECT [10, 20, 30]::INTEGER[3] AS a', 0::UBIGINT, 'ducknng_quack_batch')
+  'SELECT [10, 20, 30]::INTEGER[3] AS a', 0::UBIGINT, 'ducknng_quack_batch',
+  schema := NULL::STRUCT(a INTEGER[3]))
 ----
 1	1	1
 
@@ -360,7 +398,8 @@ FROM ducknng_query_rpc_mode(
   getvariable('u'),
   'SELECT i FROM range(5000) t(i)',
   0::UBIGINT,
-  'ducknng_quack_batch'
+  'ducknng_quack_batch',
+  schema := NULL::STRUCT(i BIGINT)
 )
 ----
 5000	12497500
@@ -377,14 +416,16 @@ query I
 SELECT (xs[1][1][1][1][1][1][1][1][1][1][1][1] = 1)::INTEGER
 FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT [[[[[[[[[[[[1]]]]]]]]]]]]::INTEGER[][][][][][][][][][][][] AS xs',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(xs INTEGER[][][][][][][][][][][][]))
 ----
 1
 
 statement error
 SELECT * FROM ducknng_query_rpc_mode(getvariable('u'),
   'SELECT [[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]::INTEGER[][][][][][][][][][][][][][][][][][][][] AS xs',
-  0::UBIGINT, 'arrow_ipc_stream')
+  0::UBIGINT, 'arrow_ipc_stream',
+  schema := NULL::STRUCT(xs INTEGER[][][][][][][][][][][][][][][][][][][][]))
 ----
 nesting
 
